@@ -7,6 +7,7 @@
 
 #include <osg/Stats>
 
+#include <components/esm/luascripts.hpp>
 #include <components/lua/inputactions.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/scripttracker.hpp>
@@ -52,8 +53,9 @@ namespace MWLua
         void contentFilesLoaded() override;
         void initPostLoad();
 
-        // Translates ESM4 script records (SCPT) into Lua files in the given archive.
-        void compileObScripts(VFS::Manager& vfs, VFS::InMemoryArchive& out);
+        // Enables compilation of ESM4 script records (SCPT) to attached Lua
+        // scripts during contentFilesLoaded(). Call before content loading starts.
+        void enableObScriptCompilation(VFS::Manager& vfs, VFS::InMemoryArchive& out);
 
         void loadPermanentStorage(const std::filesystem::path& userConfigPath);
         void savePermanentStorage(const std::filesystem::path& userConfigPath) override;
@@ -212,6 +214,9 @@ namespace MWLua
         bool mReloadAllScriptsRequested = false;
         bool mRunningSynchronizedUpdates = false;
         LuaUtil::ScriptsConfiguration mConfiguration;
+        VFS::Manager* mObScriptVfs = nullptr;
+        VFS::InMemoryArchive* mObScriptArchive = nullptr;
+        ESM::LuaScriptsCfg mObScriptCfg;
         LuaUtil::LuaState mLua;
         LuaUi::ResourceManager mUiResourceManager;
         std::map<std::string, sol::object> mLocalPackages;

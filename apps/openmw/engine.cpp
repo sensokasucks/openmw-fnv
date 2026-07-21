@@ -772,6 +772,8 @@ void OMW::Engine::prepareEngine()
 
     mLuaManager = std::make_unique<MWLua::LuaManager>(mVFS.get(), mResDir / "lua_libs");
     mEnvironment.setLuaManager(*mLuaManager);
+    if (mGeneratedFiles != nullptr)
+        mLuaManager->enableObScriptCompilation(*mVFS, *mGeneratedFiles);
 
     // Create input and UI first to set up a bootstrapping environment for
     // showing a loading screen and keeping the window responsive while doing so
@@ -912,9 +914,6 @@ void OMW::Engine::prepareEngine()
     mWorld->setupPlayer();
     mWorld->setRandomSeed(mRandomSeed);
     mWindowManager->initUI();
-
-    if (mGeneratedFiles != nullptr)
-        mLuaManager->compileObScripts(*mVFS, *mGeneratedFiles);
 
     mLuaManager->initPostLoad();
 

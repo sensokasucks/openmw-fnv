@@ -97,7 +97,9 @@ namespace MWLua
 
     void LuaManager::initConfiguration(bool reload)
     {
-        mConfiguration.init(MWBase::Environment::get().getESMStore()->getLuaScriptsCfg(), reload);
+        ESM::LuaScriptsCfg cfg = MWBase::Environment::get().getESMStore()->getLuaScriptsCfg();
+        cfg.mScripts.insert(cfg.mScripts.end(), mObScriptCfg.mScripts.begin(), mObScriptCfg.mScripts.end());
+        mConfiguration.init(std::move(cfg), reload);
         Log(Debug::Verbose) << "Lua scripts configuration (" << mConfiguration.size() << " scripts):";
         for (size_t i = 0; i < mConfiguration.size(); ++i)
             Log(Debug::Verbose) << "#" << i << " " << LuaUtil::scriptCfgToString(mConfiguration[i]);
@@ -127,6 +129,8 @@ namespace MWLua
 
     void LuaManager::contentFilesLoaded()
     {
+        if (mObScriptVfs != nullptr)
+            mObScriptCfg = MWLua::compileObScripts(mLua, *mObScriptVfs, *mObScriptArchive);
         initConfiguration(false);
         mLoadScripts.setAutoStartConf(mConfiguration.getLoadConf());
         mLoadScripts.addAutoStartedScripts();
@@ -134,9 +138,10 @@ namespace MWLua
         mLoadScripts.removeAllScripts();
     }
 
-    void LuaManager::compileObScripts(VFS::Manager& vfs, VFS::InMemoryArchive& out)
+    void LuaManager::enableObScriptCompilation(VFS::Manager& vfs, VFS::InMemoryArchive& out)
     {
-        MWLua::compileObScripts(mLua, vfs, out);
+        mObScriptVfs = &vfs;
+        mObScriptArchive = &out;
     }
 
     void LuaManager::initPostLoad()
