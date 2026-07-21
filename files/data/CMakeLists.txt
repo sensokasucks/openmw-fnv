@@ -123,6 +123,7 @@ set(BUILTIN_DATA_FILES
     openmw_aux/ui.lua
     openmw_aux/lexer.lua
     openmw_aux/obscript/parser.lua
+    openmw_aux/obscript/runtime.lua
     openmw_aux/obscript/transpiler.lua
 
     builtin.omwscripts
