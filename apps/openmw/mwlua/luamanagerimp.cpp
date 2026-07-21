@@ -36,6 +36,7 @@
 #include "../mwworld/worldmodel.hpp"
 
 #include "luabindings.hpp"
+#include "obscriptcompiler.hpp"
 #include "playerscripts.hpp"
 #include "types/types.hpp"
 #include "userdataserializer.hpp"
@@ -131,6 +132,11 @@ namespace MWLua
         mLoadScripts.addAutoStartedScripts();
         mLoadScripts.contentFilesLoaded();
         mLoadScripts.removeAllScripts();
+    }
+
+    void LuaManager::compileObScripts(VFS::Manager& vfs, VFS::InMemoryArchive& out)
+    {
+        MWLua::compileObScripts(mLua, vfs, out);
     }
 
     void LuaManager::initPostLoad()

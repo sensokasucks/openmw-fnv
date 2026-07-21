@@ -738,6 +738,11 @@ void OMW::Engine::prepareEngine()
 
     VFS::registerArchives(mVFS.get(), mFileCollections, mArchives, true, &mEncoder.get()->getStatelessEncoder());
 
+    auto generatedFiles = std::make_unique<VFS::InMemoryArchive>("engine-generated files");
+    mGeneratedFiles = generatedFiles.get();
+    mVFS->addArchive(std::move(generatedFiles));
+    mVFS->buildIndex();
+
     mResourceSystem = std::make_unique<Resource::ResourceSystem>(
         mVFS.get(), Settings::cells().mCacheExpiryDelay, &mEncoder.get()->getStatelessEncoder());
     mResourceSystem->getSceneManager()->getShaderManager().setMaxTextureUnits(mGlMaxTextureImageUnits);
@@ -907,6 +912,10 @@ void OMW::Engine::prepareEngine()
     mWorld->setupPlayer();
     mWorld->setRandomSeed(mRandomSeed);
     mWindowManager->initUI();
+
+    if (mGeneratedFiles != nullptr)
+        mLuaManager->compileObScripts(*mVFS, *mGeneratedFiles);
+
     mLuaManager->initPostLoad();
 
     // scripts

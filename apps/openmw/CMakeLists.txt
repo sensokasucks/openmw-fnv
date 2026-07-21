@@ -63,9 +63,9 @@ add_openmw_dir (mwlua
     context menuscripts globalscripts localscripts playerscripts luabindings objectbindings cellbindings coremwscriptbindings
     mwscriptbindings camerabindings vfsbindings uibindings soundbindings inputbindings nearbybindings dialoguebindings
     postprocessingbindings stats recordstore debugbindings corebindings worldbindings worker landbindings magicbindings factionbindings
-    classbindings itemdata inputprocessor animationbindings birthsignbindings racebindings markupbindings weatherbindings regionbindings obscriptbindings
-    types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc types/bodypart
-    types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
+    classbindings itemdata inputprocessor animationbindings birthsignbindings racebindings markupbindings weatherbindings regionbindings 
+    obscriptbindings obscriptcompiler types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
+    types/bodypart types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
     types/potion types/ingredient types/misc types/repair types/armor types/light types/static
     types/clothing types/levelledlist types/terminal magictypebindings
     )

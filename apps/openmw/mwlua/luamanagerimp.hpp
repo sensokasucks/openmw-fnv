@@ -26,6 +26,12 @@
 #include "object.hpp"
 #include "objectlists.hpp"
 
+namespace VFS
+{
+    class Manager;
+    class InMemoryArchive;
+}
+
 namespace MWLua
 {
     // \brief LuaManager is the central interface through which the engine invokes lua scripts.
@@ -45,6 +51,9 @@ namespace MWLua
         void initPreLoad();
         void contentFilesLoaded() override;
         void initPostLoad();
+
+        // Translates ESM4 script records (SCPT) into Lua files in the given archive.
+        void compileObScripts(VFS::Manager& vfs, VFS::InMemoryArchive& out);
 
         void loadPermanentStorage(const std::filesystem::path& userConfigPath);
         void savePermanentStorage(const std::filesystem::path& userConfigPath) override;
