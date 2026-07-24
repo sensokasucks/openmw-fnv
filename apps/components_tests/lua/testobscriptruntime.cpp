@@ -134,6 +134,25 @@ namespace
                 return #log, log[1], log[2], dtSeen, type(save.locals)
             end,
 
+            getActionRef = function()
+                -- mirror the bindings.lua definitions
+                local playerObj = {}
+                local npc = {}
+                obs.bind('GetActionRef', function() return obs._actionRef end)
+                obs.bind('player', function() return playerObj end)
+                obs.locals('ActionRefScript')
+                local results = {}
+                obs.on('OnActivate', function()
+                    -- emitted form of "GetActionRef == player"
+                    results[#results + 1] = (obs.v('GetActionRef') == obs.v('player'))
+                end)
+                local h = obs.makeLocalScript().engineHandlers
+                h.onActivated(playerObj)
+                h.onActivated(npc)
+                return results[1], results[2], obs.v('GetActionRef'),
+                    (obs.v('GetActionRef') == obs.v('player'))
+            end,
+
             makeLocalScriptEmpty = function()
                 -- fresh runtime per sandbox in the engine; here simulate by
                 -- checking a script with no blocks yields usable handlers
@@ -256,6 +275,16 @@ namespace
         sol::table s = script();
         auto r = LuaUtil::call(s["makeLocalScriptEmpty"]).get<int>();
         EXPECT_EQ(r, 1);
+    }
+
+    TEST_F(ObScriptRuntimeTest, GetActionRef)
+    {
+        sol::table s = script();
+        auto r = LuaUtil::call(s["getActionRef"]).get<std::tuple<bool, bool, int, bool>>();
+        EXPECT_TRUE(std::get<0>(r)); // player activated: identical object
+        EXPECT_FALSE(std::get<1>(r)); // other actor activated
+        EXPECT_EQ(std::get<2>(r), 0); // outside activation context
+        EXPECT_FALSE(std::get<3>(r)); // 0 does not equal the player object
     }
 
 }

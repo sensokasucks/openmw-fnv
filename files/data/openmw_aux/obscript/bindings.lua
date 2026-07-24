@@ -6,6 +6,7 @@
 -- @context local
 
 local core = require('openmw.core')
+local nearby = require('openmw.nearby')
 local self = require('openmw.self')
 local types = require('openmw.types')
 
@@ -32,6 +33,16 @@ end)
 
 obs.bind('Disable', function(ref)
     return setEnabled(ref, false)
+end)
+
+-- The activating reference while handling OnActivate/OnOpen; 0 otherwise.
+-- `player` resolves to the player object so `GetActionRef == player` compares by identity.
+obs.bind('GetActionRef', function()
+    return obs._actionRef
+end)
+
+obs.bind('player', function()
+    return nearby.players[1]
 end)
 
 -- True while handling OnActivate triggered by the given reference.
