@@ -238,6 +238,7 @@ namespace NifOsg
         KeyframeController();
         KeyframeController(const KeyframeController& copy, const osg::CopyOp& copyop);
         KeyframeController(const Nif::NiKeyframeController* keyctrl);
+        explicit KeyframeController(const Nif::NiTransformInterpolator* interp);
 
         META_Object(NifOsg, KeyframeController)
 
@@ -246,9 +247,13 @@ namespace NifOsg
 
         KfTransform getCurrentTransformation(osg::NodeVisitor* nv) override;
 
+        KfTransform getTransformation(float time) const;
+
         void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
 
     private:
+        void initFromInterpolator(const Nif::NiTransformInterpolator* interp);
+
         QuaternionInterpolator mRotations;
 
         FloatInterpolator mXRotations;
@@ -261,6 +266,42 @@ namespace NifOsg
         Nif::NiKeyframeData::AxisOrder mAxisOrder{ Nif::NiKeyframeData::AxisOrder::Order_XYZ };
 
         osg::Quat getXYZRotation(float time) const;
+    };
+
+    // Plays the NiControllerSequences embedded in a Gamebryo NIF (e.g. the "Open" and "Close" sequences of an ESM4
+    // door) for one node. The sequences are laid out one after another on a single timeline, each one shifted by its
+    // own offset.
+    class SequenceKeyframeController
+        : public SceneUtil::KeyframeController,
+          public SceneUtil::NodeCallback<SequenceKeyframeController, NifOsg::MatrixTransform*>
+    {
+    public:
+        struct Segment
+        {
+            float mStart; // Timeline time where the sequence starts
+            float mStop; // Timeline time where the sequence stops
+            float mOffset; // Timeline time minus sequence time
+            osg::ref_ptr<NifOsg::KeyframeController> mController;
+        };
+
+        SequenceKeyframeController() = default;
+        SequenceKeyframeController(const SequenceKeyframeController& copy, const osg::CopyOp& copyop);
+
+        META_Object(NifOsg, SequenceKeyframeController)
+
+        void addSegment(const Segment& segment) { mSegments.push_back(segment); }
+
+        osg::Vec3f getTranslation(float time) const override;
+        osg::Callback* getAsCallback() override { return this; }
+
+        KfTransform getCurrentTransformation(osg::NodeVisitor* nv) override;
+
+        void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
+
+    private:
+        const Segment* findSegment(float time) const;
+
+        std::vector<Segment> mSegments;
     };
 #ifdef _MSC_VER
 #pragma warning(pop)

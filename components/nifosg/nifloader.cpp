@@ -2985,4 +2985,69 @@ namespace NifOsg
         impl.loadKf(kf, target);
     }
 
+    void Loader::loadEmbeddedSequences(Nif::FileView nif, SceneUtil::KeyframeHolder& target)
+    {
+        const Nif::NiControllerManager* manager = nullptr;
+        for (size_t i = 0; i < nif.numRoots() && manager == nullptr; ++i)
+        {
+            const auto* root = dynamic_cast<const Nif::NiObjectNET*>(nif.getRoot(i));
+            if (root == nullptr)
+                continue;
+            for (Nif::NiTimeControllerPtr ctrl = root->mController; !ctrl.empty(); ctrl = ctrl->mNext)
+            {
+                if (ctrl->mRecordType == Nif::RC_NiControllerManager)
+                {
+                    manager = static_cast<const Nif::NiControllerManager*>(ctrl.getPtr());
+                    break;
+                }
+            }
+        }
+
+        if (manager == nullptr)
+            return;
+
+        // Every sequence has its own time range (usually starting at 0), but an animation source has one timeline.
+        // Lay the sequences out one after another with a gap between them.
+        constexpr float sequenceGap = 1.f;
+        float timelineTime = 0.f;
+        std::map<std::string, osg::ref_ptr<SequenceKeyframeController>> controllers;
+        for (const auto& sequencePtr : manager->mSequences)
+        {
+            if (sequencePtr.empty())
+                continue;
+            const Nif::NiControllerSequence& sequence = sequencePtr.get();
+            const std::string name = Misc::StringUtils::lowerCase(sequence.mName);
+            if (name.empty())
+                continue;
+
+            const float length = std::max(sequence.mStopTime - sequence.mStartTime, 0.f);
+            const float offset = timelineTime - sequence.mStartTime;
+            target.mTextKeys.emplace(timelineTime, name + ": start");
+            target.mTextKeys.emplace(timelineTime + length, name + ": stop");
+
+            for (const Nif::ControlledBlock& block : sequence.mControlledBlocks)
+            {
+                if (block.mInterpolator.empty() || block.mInterpolator->mRecordType != Nif::RC_NiTransformInterpolator)
+                    continue;
+                const std::string& nodeName = block.mNodeName.empty() ? block.mTargetName : block.mNodeName;
+                if (nodeName.empty())
+                    continue;
+
+                osg::ref_ptr<SequenceKeyframeController>& controller = controllers[nodeName];
+                if (controller == nullptr)
+                    controller = new SequenceKeyframeController;
+                controller->addSegment({ .mStart = timelineTime,
+                    .mStop = timelineTime + length,
+                    .mOffset = offset,
+                    .mController = new KeyframeController(
+                        static_cast<const Nif::NiTransformInterpolator*>(block.mInterpolator.getPtr())) });
+            }
+
+            timelineTime += length + sequenceGap;
+        }
+
+        for (const auto& [nodeName, controller] : controllers)
+            target.mKeyframeControllers.emplace(nodeName, controller);
+    }
+
 }

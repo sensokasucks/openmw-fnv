@@ -367,6 +367,10 @@ namespace MWRender
 
         virtual void updatePtr(const MWWorld::Ptr& ptr);
 
+        /// Adds the animation sequences embedded in a Gamebryo model (e.g. "open" and "close" of an ESM4 door) as a
+        /// new animation source. Returns false if the model has none.
+        bool addEmbeddedAnimSource(const std::string& model);
+
         bool hasAnimation(std::string_view anim) const;
 
         bool isLoopingAnimation(std::string_view group) const;

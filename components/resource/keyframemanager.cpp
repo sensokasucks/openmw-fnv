@@ -223,6 +223,14 @@ namespace Resource
             reader.parse(mVFS->get(name));
             NifOsg::Loader::loadKf(*file, *loaded.get());
         }
+        else if (constexpr VFS::Path::ExtensionView nif("nif"); name.extension() == nif)
+        {
+            // Gamebryo models can carry their own animations, e.g. the "Open" and "Close" sequences of ESM4 doors.
+            auto file = std::make_shared<Nif::NIFFile>(name);
+            Nif::Reader reader(*file, mEncoder);
+            reader.parse(mVFS->get(name));
+            NifOsg::Loader::loadEmbeddedSequences(*file, *loaded.get());
+        }
         else
         {
             osg::ref_ptr<osg::Node> scene = const_cast<osg::Node*>(mSceneManager->getTemplate(name).get());

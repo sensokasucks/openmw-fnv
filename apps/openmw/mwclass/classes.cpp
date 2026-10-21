@@ -47,6 +47,7 @@
 
 #include "esm4base.hpp"
 #include "esm4container.hpp"
+#include "esm4door.hpp"
 #include "esm4item.hpp"
 #include "esm4npc.hpp"
 #include "light4.hpp"
@@ -84,7 +85,7 @@ namespace MWClass
         ESM4Item<ESM4::Clothing>::registerSelf();
         ESM4Named<ESM4::Creature>::registerSelf();
         ESM4Container::registerSelf();
-        ESM4Named<ESM4::Door>::registerSelf();
+        ESM4Door::registerSelf();
         ESM4Named<ESM4::Flora>::registerSelf();
         ESM4Named<ESM4::Furniture>::registerSelf();
         ESM4Item<ESM4::Ingredient>::registerSelf();
