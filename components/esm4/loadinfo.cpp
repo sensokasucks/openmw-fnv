@@ -27,12 +27,37 @@
 #include "loadinfo.hpp"
 
 #include <cstring>
+#include <cstring>
 #include <stdexcept>
 
 #include <components/esm/refid.hpp>
 
+#include "grouptype.hpp"
 #include "reader.hpp"
 //#include "writer.hpp"
+
+namespace
+{
+    void addCondition(ESM4::Reader& reader, std::vector<ESM4::DialogCondition>& conditions,
+        const ESM4::TargetCondition& data, bool hasReference)
+    {
+        ESM4::DialogCondition& cond = conditions.emplace_back();
+        cond.mData = data;
+        cond.mParam1 = ESM::FormId::fromUint32(data.param1);
+        reader.adjustFormId(cond.mParam1);
+        cond.mParam2 = ESM::FormId::fromUint32(data.param2);
+        reader.adjustFormId(cond.mParam2);
+        if (hasReference && data.reference)
+            cond.mReference = ESM::FormId::fromUint32(data.reference); // already adjusted in place
+        if (data.condition & ESM4::CTF_UseGlobal)
+        {
+            std::uint32_t global;
+            std::memcpy(&global, &data.comparison, sizeof(global));
+            cond.mGlobal = ESM::FormId::fromUint32(global);
+            reader.adjustFormId(cond.mGlobal);
+        }
+    }
+}
 
 void ESM4::DialogInfo::load(ESM4::Reader& reader)
 {
@@ -41,7 +66,14 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
 
     mEditorId = ESM::RefId(mId).serializeText(); // FIXME: quick workaround to use existing code
 
-    bool ignore = false;
+    static std::uint32_t sLoadIndex = 0;
+    mLoadIndex = ++sLoadIndex;
+
+    // INFO records live in the topic children group of their DIAL
+    if (reader.stackSize() > 0 && reader.grp().type == ESM4::Grp_TopicChild)
+        mTopic = ESM::FormId::fromUint32(reader.grp().label.value);
+
+    ScriptDefinition* script = &mScript; // switches to mScriptEnd after NEXT
 
     while (reader.getSubRecordHeader())
     {
@@ -66,14 +98,20 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                     if (mResponseData.sound)
                         reader.adjustFormId(mResponseData.sound);
                 }
+                mResponses.emplace_back().mData = mResponseData;
 
                 break;
             }
             case ESM::fourCC("NAM1"):
                 reader.getLocalizedString(mResponse);
+                if (mResponses.empty())
+                    mResponses.emplace_back();
+                mResponses.back().mText = mResponse;
                 break; // response text
             case ESM::fourCC("NAM2"):
                 reader.getZString(mNotes);
+                if (!mResponses.empty())
+                    mResponses.back().mNotes = mNotes;
                 break; // actor notes
             case ESM::fourCC("NAM3"):
                 reader.getZString(mEdits);
@@ -81,14 +119,23 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             case ESM::fourCC("CTDA"): // FIXME: how to detect if 1st/2nd param is a formid?
             {
                 if (subHdr.dataSize == 24) // TES4
+                {
+                    mTargetCondition = {};
                     reader.get(&mTargetCondition, 24);
+                    addCondition(reader, mConditions, mTargetCondition, false);
+                }
                 else if (subHdr.dataSize == 20) // FO3
+                {
+                    mTargetCondition = {};
                     reader.get(&mTargetCondition, 20);
+                    addCondition(reader, mConditions, mTargetCondition, false);
+                }
                 else if (subHdr.dataSize == 28)
                 {
                     reader.get(mTargetCondition); // FO3/FONV
                     if (mTargetCondition.reference)
                         reader.adjustFormId(mTargetCondition.reference);
+                    addCondition(reader, mConditions, mTargetCondition, true);
                 }
                 else // TES5
                 {
@@ -106,21 +153,17 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             }
             case ESM::fourCC("SCHR"):
             {
-                if (!ignore)
-                    reader.get(mScript.scriptHeader);
-                else
-                    reader.skipSubRecordData(); // TODO: does the second one ever used?
-
+                reader.get(script->scriptHeader);
                 break;
             }
             case ESM::fourCC("SCDA"):
                 reader.skipSubRecordData();
                 break; // compiled script data
             case ESM::fourCC("SCTX"):
-                reader.getString(mScript.scriptSource);
+                reader.getString(script->scriptSource);
                 break;
             case ESM::fourCC("SCRO"):
-                reader.getFormId(mScript.globReference);
+                reader.getFormId(script->globReference);
                 break;
             case ESM::fourCC("SLSD"):
             {
@@ -131,15 +174,15 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 reader.get(localVar.unknown3);
                 reader.get(localVar.type);
                 reader.get(localVar.unknown4);
-                mScript.localVarData.push_back(std::move(localVar));
+                script->localVarData.push_back(std::move(localVar));
                 // WARN: assumes SCVR will follow immediately
 
                 break;
             }
             case ESM::fourCC("SCVR"): // assumed always pair with SLSD
             {
-                if (!mScript.localVarData.empty())
-                    reader.getZString(mScript.localVarData.back().variableName);
+                if (!script->localVarData.empty())
+                    reader.getZString(script->localVarData.back().variableName);
                 else
                     reader.skipSubRecordData();
 
@@ -150,13 +193,13 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 std::uint32_t index;
                 reader.get(index);
 
-                mScript.localRefVarIndex.push_back(index);
+                script->localRefVarIndex.push_back(index);
 
                 break;
             }
             case ESM::fourCC("NEXT"): // FO3/FONV marker for next script header
             {
-                ignore = true;
+                script = &mScriptEnd;
 
                 break;
             }
@@ -173,13 +216,41 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 break;
             }
             case ESM::fourCC("NAME"): // FormId add topic (not always present)
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mAddTopics.emplace_back());
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("TCLT"): // FormId choice
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mChoices.emplace_back());
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("TCLF"): // FormId
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mLinkFrom.emplace_back());
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("PNAM"): // FO3/FONV previous INFO (TES4 DLC: unknown)
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mPrevInfo);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("ANAM"): // FO3 speaker formid
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mSpeaker);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("RNAM"): // FONV/TES5 prompt
+                reader.getLocalizedString(mPrompt);
+                break;
             case ESM::fourCC("CTDT"): // older version of CTDA? 20 bytes
             case ESM::fourCC("SCHD"): // 28 bytes
-            case ESM::fourCC("TCLT"): // FormId choice
-            case ESM::fourCC("TCLF"): // FormId
-            case ESM::fourCC("PNAM"): // TES4 DLC
             case ESM::fourCC("TPIC"): // TES4 DLC
-            case ESM::fourCC("ANAM"): // FO3 speaker formid
             case ESM::fourCC("DNAM"): // FO3 speech challenge
             case ESM::fourCC("KNAM"): // FO3 formid
             case ESM::fourCC("LNAM"): // FONV
@@ -196,7 +267,6 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             case ESM::fourCC("SNAM"): // TES5
             case ESM::fourCC("ONAM"): // TES5
             case ESM::fourCC("QNAM"): // TES5 for mScript
-            case ESM::fourCC("RNAM"): // TES5
             case ESM::fourCC("ALFA"): // FO4
             case ESM::fourCC("GNAM"): // FO4
             case ESM::fourCC("GREE"): // FO4

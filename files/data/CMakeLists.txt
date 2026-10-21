@@ -172,6 +172,9 @@ set(BUILTIN_DATA_FILES
     scripts/omw/input/gamepadcontrols.lua
     scripts/omw/obscript.lua
     scripts/omw/obscript_player.lua
+    scripts/omw/fnvdialogue/conditions.lua
+    scripts/omw/fnvdialogue/global.lua
+    scripts/omw/fnvdialogue/player.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx

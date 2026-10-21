@@ -50,6 +50,21 @@ namespace ESM4
     };
 #pragma pack(pop)
 
+    // One log entry of a quest stage (QSDT + CTDA* + CNAM + result script).
+    struct QuestLogEntry
+    {
+        std::uint8_t mFlags = 0; // 0x01 complete quest, 0x02 fail quest (FO3/FONV)
+        std::vector<TargetCondition> mConditions;
+        std::string mLogText;
+        ScriptDefinition mScript; // stage result script
+    };
+
+    struct QuestStage
+    {
+        std::int32_t mIndex = 0;
+        std::vector<QuestLogEntry> mEntries;
+    };
+
     struct Quest
     {
         // NOTE: these values are for TES4
@@ -73,6 +88,8 @@ namespace ESM4
         std::vector<TargetCondition> mTargetConditions;
 
         ScriptDefinition mScript;
+
+        std::vector<QuestStage> mStages;
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

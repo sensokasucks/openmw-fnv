@@ -31,6 +31,7 @@
 
 #include "context.hpp"
 #include "object.hpp"
+#include "obscriptdialoguebindings.hpp"
 
 namespace sol
 {
@@ -179,6 +180,8 @@ namespace MWLua
             const char* value = std::getenv("OPENMW_OBSCRIPT_TRACE");
             return value != nullptr && *value != '\0' && std::string_view(value) != "0";
         }();
+
+        api["dialogue"] = initObScriptDialogueBindings(context);
 
         return LuaUtil::makeReadOnly(api);
     }
