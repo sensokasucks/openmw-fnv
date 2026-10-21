@@ -10,7 +10,6 @@ GLOBAL: scripts/omw/settings/global.lua
 GLOBAL: scripts/omw/activationhandlers.lua
 GLOBAL: scripts/omw/obscript.lua
 PLAYER: scripts/omw/obscript_player.lua
-PLAYER: scripts/omw/furniture_player.lua
 PLAYER: scripts/omw/esm4terminal.lua
 GLOBAL: scripts/omw/fnvdialogue/global.lua
 PLAYER: scripts/omw/fnvdialogue/player.lua
@@ -23,6 +22,7 @@ PLAYER: scripts/omw/mechanics/playercontroller.lua
 MENU: scripts/omw/camera/settings.lua
 MENU: scripts/omw/input/settings.lua
 PLAYER: scripts/omw/input/playercontrols.lua
+PLAYER: scripts/omw/furniture_player.lua
 PLAYER: scripts/omw/camera/camera.lua
 PLAYER: scripts/omw/input/actionbindings.lua
 PLAYER: scripts/omw/input/smoothmovement.lua
