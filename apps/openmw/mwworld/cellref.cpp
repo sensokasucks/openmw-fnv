@@ -341,6 +341,8 @@ namespace MWWorld
 
     void CellRef::setLocked(bool locked)
     {
+        if (locked != isLocked())
+            mChanged = true;
         std::visit(ESM::VisitOverload{
                        [&](ESM4::Reference& ref) { ref.mIsLocked = locked; },
                        [&](ESM4::ActorCharacter&) {},
@@ -395,10 +397,48 @@ namespace MWWorld
 
     void CellRef::writeState(ESM::ObjectState& state) const
     {
+        // ESM4 references are saved as an ESM3 CellRef holding only what can change during play.
+        // loadState() puts those fields back onto the reference loaded from the content file.
+        auto writeESM4 = [&](const auto& ref) {
+            state.mRef.blank();
+            state.mRef.mRefNum = ref.mId;
+            state.mRef.mRefID = ref.mBaseObj;
+            state.mRef.mPos = ref.mPos;
+            state.mRef.mCount = ref.mCount;
+        };
         std::visit(ESM::VisitOverload{
-                       [&](const ESM4::Reference& /*ref*/) {},
-                       [&](const ESM4::ActorCharacter&) {},
+                       [&](const ESM4::Reference& ref) {
+                           writeESM4(ref);
+                           state.mRef.mIsLocked = ref.mIsLocked;
+                           state.mRef.mLockLevel = ref.mLockLevel;
+                       },
+                       [&](const ESM4::ActorCharacter& ref) { writeESM4(ref); },
                        [&](const ESM::CellRef& ref) { state.mRef = ref; },
+                   },
+            mCellRef.mVariant);
+    }
+
+    void CellRef::loadState(const ESM::ObjectState& state)
+    {
+        if (std::holds_alternative<ESM::CellRef>(mCellRef.mVariant))
+        {
+            *this = CellRef(state.mRef);
+            return;
+        }
+        std::visit(ESM::VisitOverload{
+                       [&](ESM4::Reference& ref) {
+                           ref.mCount = state.mRef.mCount;
+                           ref.mIsLocked = state.mRef.mIsLocked;
+                           // An unlocked ESM3 CellRef does not store its lock level, so keep the original one.
+                           if (state.mRef.mIsLocked)
+                               ref.mLockLevel = static_cast<std::int8_t>(state.mRef.mLockLevel);
+                           mChanged = true;
+                       },
+                       [&](ESM4::ActorCharacter& ref) {
+                           ref.mCount = state.mRef.mCount;
+                           mChanged = true;
+                       },
+                       [&](ESM::CellRef&) {},
                    },
             mCellRef.mVariant);
     }

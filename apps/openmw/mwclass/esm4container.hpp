@@ -15,8 +15,10 @@ namespace MWClass
     public:
         MWWorld::ContainerStore mStore;
 
-        // ESM4 references are not saved yet, so the inventory is always rebuilt from the base record.
         explicit ESM4ContainerCustomData(const ESM4::Container& container);
+
+        // Inventory restored from a saved game.
+        explicit ESM4ContainerCustomData(const ESM::InventoryState& inventory);
     };
 
     class ESM4Container final : public MWWorld::RegisteredClass<ESM4Container, ESM4Base<ESM4::Container>>
@@ -45,6 +47,10 @@ namespace MWClass
         float getEncumbrance(const MWWorld::Ptr& ptr) const override;
 
         bool canLock(const MWWorld::ConstPtr& ptr) const override { return true; }
+
+        void readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const override;
+
+        void writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const override;
     };
 }
 
