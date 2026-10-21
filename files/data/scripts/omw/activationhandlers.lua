@@ -28,7 +28,7 @@ local function ESM4BookActivation(book, actor)
 end
 
 -- FO3/FNV locks: open with a carried key, or pick the lock (see MWClass::ESM4Lock).
--- Registered last so it runs before the other handlers for the type.
+-- Appended to the ESM4Door handlers so it runs before them.
 local function ESM4LockActivation(obj, actor)
     if not types.Lockable._esm4TryOpen(obj, actor) then
         return false
@@ -40,7 +40,6 @@ local handlersPerType = {}
 
 handlersPerType[types.ESM4Book] = { ESM4BookActivation }
 handlersPerType[types.ESM4Door] = { ESM4DoorActivation }
-table.insert(handlersPerType[types.ESM4Door], ESM4LockActivation)
 
 local function runDefaultActivation(obj, actor)
     local handled = auxUtil.callMultipleEventHandlers({ handlersPerType[obj.type] }, obj, actor)
@@ -50,6 +49,8 @@ local function runDefaultActivation(obj, actor)
     types.Actor.activeEffects(actor):remove('invisibility')
     world._runStandardActivationAction(obj, actor)
 end
+
+table.insert(handlersPerType[types.ESM4Door], ESM4LockActivation)
 
 local function onActivate(obj, actor)
     if world.isWorldPaused() then
