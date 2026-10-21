@@ -34,6 +34,9 @@ obs._unknown = {}      -- command name (lower) -> call count (coverage telemetry
 obs._log = nil         -- optional function(msg) for stub logging
 obs._current = nil     -- script currently registering/executing
 obs._block = nil       -- block currently executing (lowercase event name)
+obs._actionRef = nil   -- activating/triggering reference while handling OnActivate/OnTrigger*
+obs._triggerProbe = nil        -- function() -> list of actors inside this trigger volume (set by bindings.lua)
+obs._onLocalScriptReady = nil  -- function(entry) called once from makeLocalScript (set by bindings.lua)
 
 -- --------------------------- tracing
 -- Opt-in via OPENMW_OBSCRIPT_TRACE=1 (exposed by the engine as core.obscript.traceEnabled).
@@ -263,7 +266,46 @@ end
 -- --------------------------- local-script interface
 
 -- blocks makeLocalScript dispatches; any other block a script declares is reported as missing
-local dispatchedBlocks = { gamemode = true, onactivate = true, onopen = true }
+local dispatchedBlocks = {
+    gamemode = true, onactivate = true, onopen = true, onload = true,
+    ontriggerenter = true, ontrigger = true, ontriggerleave = true,
+}
+
+-- Fires a block with obs._actionRef set to the reference that caused it.
+local function runBlockFor(entry, event, actor)
+    local h = entry.handlers[event]
+    if not h then return end
+    obs._actionRef = actor
+    runBlock(entry, event, h)
+    obs._actionRef = nil
+end
+
+-- Trigger volumes have no physics callback in OpenMW, so every frame the
+-- local script asks bindings.lua which actors are inside its primitive
+-- (REFR XPRM bounds) and diffs that against the previous frame:
+--   OnTriggerEnter  first frame an actor is inside
+--   OnTrigger       every frame an actor is inside
+--   OnTriggerLeave  first frame it is no longer inside
+local function pollTriggers(entry, state)
+    local inside = obs._triggerProbe()
+    local now = {}
+    for _, actor in ipairs(inside) do
+        now[actor.id] = actor
+    end
+    for id, actor in pairs(now) do
+        if not state[id] then
+            runBlockFor(entry, 'ontriggerenter', actor)
+        end
+        runBlockFor(entry, 'ontrigger', actor)
+    end
+    for id, actor in pairs(state) do
+        if not now[id] then
+            runBlockFor(entry, 'ontriggerleave', actor)
+        end
+    end
+    for id in pairs(state) do state[id] = nil end
+    for id, actor in pairs(now) do state[id] = actor end
+end
 
 --- Builds the local-script table (`engineHandlers`) for the script loaded in
 -- this sandbox. Each attached object gets its own sandbox and therefore its
@@ -299,22 +341,34 @@ function obs.makeLocalScript()
         obs._current = nil
     end
 
+    if obs._onLocalScriptReady then
+        obs._onLocalScriptReady(entry)
+    end
+
+    local hasTriggerBlocks = entry.handlers['ontriggerenter'] ~= nil
+        or entry.handlers['ontrigger'] ~= nil
+        or entry.handlers['ontriggerleave'] ~= nil
+    local triggerState = {}  -- actor id -> actor, for actors inside last frame
+
     return {
         engineHandlers = {
             onUpdate = function(dt)
                 obs._dt = dt
                 local h = entry.handlers["gamemode"]
                 if h then runBlock(entry, "gamemode", h) end
+                if hasTriggerBlocks and obs._triggerProbe then
+                    pollTriggers(entry, triggerState)
+                end
+            end,
+            onActive = function()
+                -- OnLoad: the object's 3D is loaded, i.e. it became active in the scene.
+                runBlockFor(entry, "onload", nil)
             end,
             onActivated = function(actor)
                 -- Opening a container counts as activation, so OnOpen blocks
                 -- are dispatched from here as well.
-                obs._actionRef = actor
-                local h = entry.handlers["onactivate"]
-                if h then runBlock(entry, "onactivate", h) end
-                h = entry.handlers["onopen"]
-                if h then runBlock(entry, "onopen", h) end
-                obs._actionRef = nil
+                runBlockFor(entry, "onactivate", actor)
+                runBlockFor(entry, "onopen", actor)
             end,
             onSave = function()
                 local locals = {}

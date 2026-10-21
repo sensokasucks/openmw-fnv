@@ -3,6 +3,8 @@
 
 #include <string_view>
 
+#include <osg/Vec3f>
+
 #include <components/esm/esmbridge.hpp>
 #include <components/esm3/cellref.hpp>
 #include <components/esm4/loadrefr.hpp>
@@ -40,6 +42,21 @@ namespace MWWorld
 
         /// Does the RefNum have a content file?
         bool hasContentFile() const { return getRefNum().hasContentFile(); }
+
+        // Half extents of a trigger volume primitive (ESM4 REFR XPRM); all zero if none.
+        osg::Vec3f getPrimitiveBounds() const
+        {
+            struct Visitor
+            {
+                osg::Vec3f operator()(const ESM::CellRef&) { return osg::Vec3f(); }
+                osg::Vec3f operator()(const ESM4::Reference& ref)
+                {
+                    return osg::Vec3f(ref.mPrimitiveBounds[0], ref.mPrimitiveBounds[1], ref.mPrimitiveBounds[2]);
+                }
+                osg::Vec3f operator()(const ESM4::ActorCharacter&) { return osg::Vec3f(); }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
 
         // Id of object being referenced
         ESM::RefId getRefId() const

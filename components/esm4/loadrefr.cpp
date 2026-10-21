@@ -65,6 +65,32 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XSCL"):
                 reader.get(mScale);
                 break;
+            case ESM::fourCC("XPRM"):
+            {
+                // FO3/FNV: 3 floats bounds, 3 floats colour, float unknown, uint32 type (32 bytes)
+                if (subHdr.dataSize >= 12)
+                {
+                    reader.get(mPrimitiveBounds[0]);
+                    reader.get(mPrimitiveBounds[1]);
+                    reader.get(mPrimitiveBounds[2]);
+                    if (subHdr.dataSize >= 32)
+                    {
+                        float dummy;
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(mPrimitiveType);
+                        if (subHdr.dataSize > 32)
+                            reader.skipSubRecordData(subHdr.dataSize - 32);
+                    }
+                    else if (subHdr.dataSize > 12)
+                        reader.skipSubRecordData(subHdr.dataSize - 12);
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            }
             case ESM::fourCC("XOWN"):
             {
                 switch (subHdr.dataSize)
@@ -286,7 +312,6 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XLCM"):
             case ESM::fourCC("ONAM"):
             case ESM::fourCC("VMAD"):
-            case ESM::fourCC("XPRM"):
             case ESM::fourCC("INAM"):
             case ESM::fourCC("PDTO"):
             case ESM::fourCC("SCHR"):

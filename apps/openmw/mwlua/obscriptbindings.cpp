@@ -16,6 +16,7 @@
 #include <components/esm4/loadbook.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscpt.hpp>
@@ -29,6 +30,7 @@
 #include "../mwworld/store.hpp"
 
 #include "context.hpp"
+#include "object.hpp"
 
 namespace sol
 {
@@ -129,6 +131,47 @@ namespace MWLua
                 return res;
             }();
             return resolve(index, editorId);
+        };
+
+        // Message boxes (MESG) for `ShowMessage <EditorId> [args...]`.
+        // Returns { title=, text=, buttons={...}, messageBox=bool, displayTime=n } or nil.
+        api["getMessage"] = [lua](std::string_view editorId) -> sol::object {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+                const MWWorld::Store<ESM4::Message>& msgs = store.get<ESM4::Message>();
+                for (size_t i = 0; i < msgs.getSize(); ++i)
+                {
+                    const ESM4::Message& msg = *msgs.at(i);
+                    if (!msg.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(msg.mEditorId), ESM::RefId(msg.mId));
+                }
+                return res;
+            }();
+            auto it = index.find(Misc::StringUtils::lowerCase(editorId));
+            if (it == index.end())
+                return sol::nil;
+            const ESM4::Message* msg = MWBase::Environment::get().getESMStore()->get<ESM4::Message>().search(it->second);
+            if (msg == nullptr)
+                return sol::nil;
+            sol::table res(lua, sol::create);
+            res["title"] = msg->mFullName;
+            res["text"] = msg->mText;
+            res["messageBox"] = (msg->mMessageFlags & ESM4::Message::Flag_MessageBox) != 0;
+            res["displayTime"] = msg->mDisplayTime;
+            sol::table buttons(lua, sol::create);
+            for (size_t i = 0; i < msg->mButtons.size(); ++i)
+                buttons[LuaUtil::toLuaIndex(i)] = msg->mButtons[i];
+            res["buttons"] = buttons;
+            return res;
+        };
+
+        // Half extents of a placed trigger volume (REFR XPRM), nil when the reference has none.
+        api["getPrimitiveBounds"] = [](const Object& object) -> sol::optional<osg::Vec3f> {
+            const osg::Vec3f bounds = object.ptr().getCellRef().getPrimitiveBounds();
+            if (bounds.x() <= 0.f && bounds.y() <= 0.f && bounds.z() <= 0.f)
+                return sol::nullopt;
+            return bounds;
         };
 
         // Opt-in runtime tracing (OPENMW_OBSCRIPT_TRACE=1); the Lua sandbox has no os.getenv.

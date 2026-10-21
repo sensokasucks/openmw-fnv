@@ -4,25 +4,59 @@
 local core = require('openmw.core')
 local types = require('openmw.types')
 local world = require('openmw.world')
+local I = require('openmw.interfaces')
+
+local function resolveRef(editorId, what)
+    local formId = core.obscript.resolveRefEditorId(editorId)
+    if formId == nil then
+        print('[obscript] ' .. what .. ': unknown reference editor id: ' .. tostring(editorId))
+        return nil
+    end
+    local obj = world.getObjectByFormId(formId)
+    if obj == nil or not obj:isValid() then
+        print('[obscript] ' .. what .. ': no valid object for ' .. tostring(editorId)
+            .. ' (' .. tostring(formId) .. ')')
+        return nil
+    end
+    return obj
+end
+
+local suppressed = {}  -- object id -> true once default activation is blocked
+
+local function suppressDefaultActivation(obj)
+    if suppressed[obj.id] then return end
+    suppressed[obj.id] = true
+    I.Activation.addHandlerForObject(obj, function() return false end)
+end
+
+local function activate(obj, actor, runOnActivateBlock)
+    if obj == nil or actor == nil then return end
+    if runOnActivateBlock then
+        obj:activateBy(actor)
+    else
+        I.Activation.runDefaultActivation(obj, actor)
+    end
+end
 
 return {
     eventHandlers = {
+        ObScriptHasOnActivate = function(data)
+            suppressDefaultActivation(data.object)
+        end,
+        ObScriptActivate = function(data)
+            activate(data.object, data.actor, data.runOnActivateBlock)
+        end,
+        ObScriptActivateByRef = function(data)
+            activate(resolveRef(data.editorId, 'Activate'), data.actor, data.runOnActivateBlock)
+        end,
         ObScriptSetEnabled = function(data)
             data.object.enabled = data.enabled
         end,
         ObScriptSetEnabledByRef = function(data)
-            local formId = core.obscript.resolveRefEditorId(data.editorId)
-            if formId == nil then
-                print('[obscript] SetEnabled: unknown reference editor id: ' .. tostring(data.editorId))
-                return
+            local obj = resolveRef(data.editorId, 'SetEnabled')
+            if obj then
+                obj.enabled = data.enabled
             end
-            local obj = world.getObjectByFormId(formId)
-            if obj == nil or not obj:isValid() then
-                print('[obscript] SetEnabled: no valid object for ' .. tostring(data.editorId)
-                    .. ' (' .. tostring(formId) .. ')')
-                return
-            end
-            obj.enabled = data.enabled
         end,
         ObScriptAddItem = function(data)
             local recordId = core.obscript.resolveItemEditorId(data.item)

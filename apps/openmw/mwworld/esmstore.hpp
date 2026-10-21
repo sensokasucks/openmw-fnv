@@ -98,6 +98,7 @@ namespace ESM4
     struct LevelledItem;
     struct LevelledNpc;
     struct Light;
+    struct Message;
     struct MiscItem;
     struct MovableStatic;
     struct Npc;
@@ -148,7 +149,7 @@ namespace MWWorld
             Store<ESM4::Container>, Store<ESM4::Creature>, Store<ESM4::Door>, Store<ESM4::Furniture>,
             Store<ESM4::Flora>, Store<ESM4::Hair>, Store<ESM4::HeadPart>, Store<ESM4::Ingredient>, Store<ESM4::ItemMod>,
             Store<ESM4::Land>, Store<ESM4::LandTexture>, Store<ESM4::LevelledCreature>, Store<ESM4::LevelledItem>,
-            Store<ESM4::LevelledNpc>, Store<ESM4::Light>, Store<ESM4::MiscItem>, Store<ESM4::MovableStatic>,
+            Store<ESM4::LevelledNpc>, Store<ESM4::Light>, Store<ESM4::Message>, Store<ESM4::MiscItem>, Store<ESM4::MovableStatic>,
             Store<ESM4::Npc>, Store<ESM4::Outfit>, Store<ESM4::Potion>, Store<ESM4::Race>, Store<ESM4::Reference>,
             Store<ESM4::Script>, Store<ESM4::Sound>, Store<ESM4::SoundReference>, Store<ESM4::Static>,
             Store<ESM4::StaticCollection>, Store<ESM4::Terminal>, Store<ESM4::TextureSet>, Store<ESM4::Tree>,

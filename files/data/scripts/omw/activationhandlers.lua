@@ -32,6 +32,15 @@ local handlersPerType = {}
 handlersPerType[types.ESM4Book] = { ESM4BookActivation }
 handlersPerType[types.ESM4Door] = { ESM4DoorActivation }
 
+local function runDefaultActivation(obj, actor)
+    local handled = auxUtil.callMultipleEventHandlers({ handlersPerType[obj.type] }, obj, actor)
+    if handled then
+        return
+    end
+    types.Actor.activeEffects(actor):remove('invisibility')
+    world._runStandardActivationAction(obj, actor)
+end
+
 local function onActivate(obj, actor)
     if world.isWorldPaused() then
         return
@@ -39,12 +48,11 @@ local function onActivate(obj, actor)
     if obj.parentContainer then
         return
     end
-    local handled = auxUtil.callMultipleEventHandlers({ handlersPerObject[obj.id], handlersPerType[obj.type] }, obj, actor)
+    local handled = auxUtil.callMultipleEventHandlers({ handlersPerObject[obj.id] }, obj, actor)
     if handled then
         return
     end
-    types.Actor.activeEffects(actor):remove('invisibility')
-    world._runStandardActivationAction(obj, actor)
+    runDefaultActivation(obj, actor)
 end
 
 return {
@@ -87,6 +95,15 @@ return {
             end
             handlers[#handlers + 1] = handler
         end,
+
+        --- Run the default activation of an object (type handlers and the
+        -- engine's standard action), skipping per-object handlers. Used by the
+        -- ObScript `Activate` command, whose OnActivate block replaces the
+        -- default activation and must be able to invoke it explicitly.
+        -- @function [parent=#Activation] runDefaultActivation
+        -- @param openmw.core#GameObject obj The object.
+        -- @param openmw.core#GameObject actor The activating actor.
+        runDefaultActivation = runDefaultActivation,
     },
     engineHandlers = { onActivate = onActivate },
 }

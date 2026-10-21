@@ -111,6 +111,10 @@ namespace ESM4
 
         ESM::FormId mTargetRef;
 
+        // XPRM (FO3/FNV): primitive half extents of a trigger volume, zero if none
+        float mPrimitiveBounds[3] = { 0.f, 0.f, 0.f };
+        std::uint32_t mPrimitiveType = 0; // 1 box, 2 sphere, 3 portal box
+
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;
 
