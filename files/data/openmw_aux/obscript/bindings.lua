@@ -198,4 +198,12 @@ obs.bind('AddItem', function(ref, item, count)
     return 0
 end)
 
+-- `AddNote NoteEditorId`: the player script keeps the notes list.
+obs.bind('AddNote', function(a, b)
+    local note = b or a  -- member form `player.AddNote X` arrives as ('player', 'X')
+    if type(note) ~= 'string' then return 0 end
+    player():sendEvent('ESM4AddNote', { editorId = note })
+    return 0
+end)
+
 return obs

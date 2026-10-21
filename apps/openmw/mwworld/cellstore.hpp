@@ -75,6 +75,7 @@ namespace ESM4
     struct ItemMod;
     struct MiscItem;
     struct MovableStatic;
+    struct Note;
     struct StaticCollection;
     struct Terminal;
     struct Tree;
@@ -100,7 +101,8 @@ namespace MWWorld
         CellRefList<ESM4::Container>, CellRefList<ESM4::Door>, CellRefList<ESM4::Flora>, CellRefList<ESM4::Ingredient>,
         CellRefList<ESM4::ItemMod>, CellRefList<ESM4::Terminal>, CellRefList<ESM4::Tree>, CellRefList<ESM4::MiscItem>,
         CellRefList<ESM4::MovableStatic>, CellRefList<ESM4::Weapon>, CellRefList<ESM4::Furniture>,
-        CellRefList<ESM4::Creature>, CellRefList<ESM4::Npc>, CellRefList<ESM4::StaticCollection>>;
+        CellRefList<ESM4::Creature>, CellRefList<ESM4::Npc>, CellRefList<ESM4::StaticCollection>,
+        CellRefList<ESM4::Note>>;
 
     /// \brief Mutable state of a cell
     class CellStore

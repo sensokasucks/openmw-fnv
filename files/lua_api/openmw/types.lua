@@ -2603,6 +2603,9 @@
 --- Functions for @{#ESM4Weapon} objects
 -- @field [parent=#types] #ESM4Weapon ESM4Weapon
 
+--- Functions for @{#ESM4Note} objects
+-- @field [parent=#types] #ESM4Note ESM4Note
+
 ---
 -- @type ESM4Terminal
 
@@ -2631,8 +2634,55 @@
 -- @field #string editorId Human-readable ID
 -- @field #string name Human-readable name
 -- @field #string model VFS path to the model
--- @field #string text Text body of the terminal record
--- @field #string resultText Result text of the terminal record
+-- @field #string text Welcome text of the terminal
+-- @field #number difficulty Base hacking difficulty (0 very easy .. 4 very hard, 5 requires key)
+-- @field #number flags Terminal flags (DNAM)
+-- @field #string passwordNote Record id of the password note, or nil
+-- @field #list<#ESM4TerminalItem> items Menu entries, in order
+
+---
+-- @type ESM4TerminalItem
+-- @field #string text Menu entry text
+-- @field #string resultText Text shown when the entry is picked
+-- @field #number flags Entry flags (1 add note, 2 force redraw)
+-- @field #boolean addNote The displayed note is added to the player's notes
+-- @field #boolean forceRedraw
+-- @field #string note Record id of the note to display, or nil
+-- @field #string subMenu Record id of the terminal opened as a sub-menu, or nil
+-- @field #string script Source of the embedded result script (empty if none)
+-- @field #boolean hasConditions The entry has conditions (not evaluated yet)
+
+---
+-- @type ESM4Note
+
+---
+-- A read-only list of all @{#ESM4NoteRecord}s in the world database.
+-- @field [parent=#ESM4Note] #list<#ESM4NoteRecord> records
+
+---
+-- Whether the object is a ESM4Note.
+-- @function [parent=#ESM4Note] objectIsInstance
+-- @param openmw.core#GameObject object
+-- @return #boolean
+
+---
+-- Returns the read-only @{#ESM4NoteRecord} of a note
+-- @function [parent=#ESM4Note] record
+-- @param #any objectOrRecordId
+-- @return #ESM4NoteRecord
+
+---
+-- @type ESM4NoteRecord
+-- @field #string id Record id (Form ID)
+-- @field #string editorId Human-readable ID
+-- @field #string name Human-readable name
+-- @field #string model VFS path to the model
+-- @field #string noteType "Sound", "Text", "Image" or "Voice"
+-- @field #string text Text of a text note
+-- @field #string texture Texture of an image note, relative to textures/
+-- @field #string sound Sound record id of a sound note (speaker NPC of a voice note), or nil
+-- @field #string topic Dialogue topic id of a voice note, or nil
+-- @field #string pickUpSound Pick-up sound record id, or nil
 
 ---
 -- @type ESM4Door

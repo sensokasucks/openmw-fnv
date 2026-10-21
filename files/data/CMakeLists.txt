@@ -172,6 +172,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/input/gamepadcontrols.lua
     scripts/omw/obscript.lua
     scripts/omw/obscript_player.lua
+    scripts/omw/esm4terminal.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx

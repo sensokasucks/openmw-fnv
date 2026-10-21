@@ -63,14 +63,33 @@ void ESM4::Note::load(ESM4::Reader& reader)
                 reader.getFormId(mDropSound);
                 break;
             case ESM::fourCC("DATA"):
+                if (subHdr.dataSize == 1)
+                    reader.get(mNoteType);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("TNAM"):
+                // DATA precedes TNAM: a voice note stores a dialogue topic here, the others text.
+                if (mNoteType == Type_Voice && subHdr.dataSize == 4)
+                    reader.getFormId(mTopic);
+                else
+                    reader.getLocalizedString(mText);
+                break;
+            case ESM::fourCC("XNAM"):
+                reader.getZString(mTexture);
+                break;
+            case ESM::fourCC("SNAM"):
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mSound);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("MODT"): // Model data
             case ESM::fourCC("MODC"):
             case ESM::fourCC("MODS"):
             case ESM::fourCC("MODF"): // Model data end
-            case ESM::fourCC("ONAM"):
-            case ESM::fourCC("SNAM"):
-            case ESM::fourCC("TNAM"):
-            case ESM::fourCC("XNAM"):
+            case ESM::fourCC("ONAM"): // quests
+            case ESM::fourCC("MICO"):
             case ESM::fourCC("OBND"):
             case ESM::fourCC("VMAD"):
             case ESM::fourCC("DNAM"): // FO4
