@@ -8,6 +8,9 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrace.hpp>
 
+#include <osg/Material>
+#include <osg/Transform>
+
 #include <components/misc/resourcehelpers.hpp>
 #include <components/misc/strings/algorithm.hpp>
 #include <components/resource/resourcesystem.hpp>
@@ -102,13 +105,34 @@ namespace MWRender
         osg::ref_ptr<const osg::Node> templateNode
             = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
 
-        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) are modelled relative to the
-        // head bone, which is their "Prn" parent in FO3/FONV.
+        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) hang off the head bone, which
+        // is their "Prn" parent in FO3/FONV, but are modelled upright in skeleton axes like the skinned head.
         constexpr std::string_view headBone = "Bip01 Head";
         const NodeMap& nodeMap = getNodeMap();
         auto found = nodeMap.find(headBone);
-        osg::Group* attachNode = found != nodeMap.end() ? found->second.get() : mObjectRoot.get();
-        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, attachNode, sceneManager);
+        if (found == nodeMap.end())
+            return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
+        if (!mHeadAttitude)
+        {
+            // The skeleton is still in its bind pose here.
+            const osg::NodePathList paths = found->second->getParentalNodePaths(mObjectRoot);
+            mHeadAttitude = paths.empty() ? osg::Quat() : osg::computeLocalToWorld(paths.front()).getRotate().inverse();
+        }
+        return SceneUtil::attach(
+            std::move(templateNode), mObjectRoot, {}, found->second, sceneManager, &*mHeadAttitude);
+    }
+
+    static void tintHair(osg::Node& node, const ESM4::Npc::HairColour& colour)
+    {
+        // FO3/FONV hair textures are grey; the game colours them with the NPC's hair colour.
+        const osg::Vec4f tint(colour.red / 255.f, colour.green / 255.f, colour.blue / 255.f, 1.f);
+        osg::ref_ptr<osg::Material> material = new osg::Material;
+        material->setColorMode(osg::Material::OFF);
+        material->setDiffuse(osg::Material::FRONT_AND_BACK, tint);
+        material->setAmbient(osg::Material::FRONT_AND_BACK, tint);
+        osg::StateSet* stateset = node.getOrCreateStateSet();
+        stateset->setAttributeAndModes(material, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+        stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
     void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
@@ -157,10 +181,16 @@ namespace MWRender
         {
             if (partId.isZeroOrUnset())
                 continue;
-            if (const ESM4::HeadPart* part = store->get<ESM4::HeadPart>().search(partId))
-                attachPart(part->mModel.getOriginal());
-            else
+            const ESM4::HeadPart* part = store->get<ESM4::HeadPart>().search(partId);
+            if (part == nullptr)
+            {
                 Log(Debug::Error) << "Head part not found: " << ESM::RefId(partId);
+                continue;
+            }
+            osg::ref_ptr<osg::Node> node = attachPart(part->mModel.getOriginal());
+            // Eyebrows and beards live next to the hair meshes and take the hair colour too.
+            if (node && part->mModel.getNormalized().value().starts_with("characters/hair/"))
+                tintHair(*node, traits.mHairColour);
         }
 
         if (!traits.mHair.isZeroOrUnset() && !(usedSlots & ESM4::Armor::FO3_Hair))
@@ -176,6 +206,7 @@ namespace MWRender
                 node->accept(findHidden);
                 if (findHidden.mFoundNode)
                     findHidden.mFoundNode->setNodeMask(0);
+                tintHair(*node, traits.mHairColour);
             }
         }
     }

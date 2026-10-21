@@ -3,6 +3,10 @@
 
 #include "animation.hpp"
 
+#include <optional>
+
+#include <osg/Quat>
+
 namespace ESM4
 {
     struct Npc;
@@ -17,6 +21,9 @@ namespace MWRender
             const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem);
 
     private:
+        // FO3/FONV: rotation that puts rigid head parts upright under the head bone
+        std::optional<osg::Quat> mHeadAttitude;
+
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
 
