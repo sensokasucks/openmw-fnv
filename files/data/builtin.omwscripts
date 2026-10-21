@@ -12,6 +12,8 @@ GLOBAL: scripts/omw/obscript.lua
 PLAYER: scripts/omw/obscript_player.lua
 PLAYER: scripts/omw/furniture_player.lua
 PLAYER: scripts/omw/esm4terminal.lua
+GLOBAL: scripts/omw/fnvdialogue/global.lua
+PLAYER: scripts/omw/fnvdialogue/player.lua
 GLOBAL: scripts/omw/usehandlers.lua
 GLOBAL: scripts/omw/worldeventhandlers.lua
 GLOBAL: scripts/omw/crimes.lua

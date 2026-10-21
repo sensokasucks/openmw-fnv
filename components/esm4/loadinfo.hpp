@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "script.hpp" // TargetCondition
 #include <components/esm/defs.hpp>
@@ -53,6 +54,26 @@ namespace ESM4
         INFO_AlwaysDarken = 0x0200
     };
 
+    // One CTDA condition with its form arguments resolved for the load order.
+    // Whether a parameter is a form depends on the function, so both the raw
+    // value (in mData) and the adjusted form id are kept.
+    struct DialogCondition
+    {
+        TargetCondition mData;
+        ESM::FormId mParam1;
+        ESM::FormId mParam2;
+        ESM::FormId mReference;
+        ESM::FormId mGlobal; // comparison value when CTF_UseGlobal is set
+    };
+
+    // One spoken line (TRDT + NAM1 + NAM2) of an INFO; an INFO can have several.
+    struct DialogResponse
+    {
+        TargetResponseData mData;
+        std::string mText;
+        std::string mNotes;
+    };
+
     struct DialogInfo
     {
         ESM::FormId mId; // from the header
@@ -75,7 +96,19 @@ namespace ESM4
         TargetCondition mTargetCondition;
         ESM::FormId mParam3; // TES5 only
 
-        ScriptDefinition mScript; // FIXME: ignoring the second one after the NEXT sub-record
+        ScriptDefinition mScript; // result script (begin)
+        ScriptDefinition mScriptEnd; // FO3/FONV: result script (end), after the NEXT sub-record
+
+        ESM::FormId mTopic; // parent DIAL, from the enclosing topic children group
+        ESM::FormId mPrevInfo; // FO3/FONV PNAM: previous INFO in the topic
+        ESM::FormId mSpeaker; // FO3/FONV ANAM
+        std::string mPrompt; // FONV RNAM: text shown for this INFO's topic in the choice list
+        std::vector<DialogCondition> mConditions; // all CTDA, in order
+        std::vector<DialogResponse> mResponses; // all responses, in order
+        std::vector<ESM::FormId> mChoices; // FO3/FONV TCLT: topics offered after this INFO
+        std::vector<ESM::FormId> mLinkFrom; // FO3/FONV TCLF
+        std::vector<ESM::FormId> mAddTopics; // NAME
+        std::uint32_t mLoadIndex = 0; // order in which INFO records were read (file order)
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

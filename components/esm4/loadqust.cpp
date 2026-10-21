@@ -30,12 +30,15 @@
 #include <stdexcept>
 
 #include "reader.hpp"
-//#include "writer.hpp"
+// #include "writer.hpp"
 
 void ESM4::Quest::load(ESM4::Reader& reader)
 {
     mId = reader.getFormIdFromHeader();
     mFlags = reader.hdr().record.flags;
+
+    QuestLogEntry* entry = nullptr; // log entry the stage sub-records belong to, if any
+    auto currentScript = [&]() -> ScriptDefinition& { return entry ? entry->mScript : mScript; };
 
     while (reader.getSubRecordHeader())
     {
@@ -76,7 +79,7 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     TargetCondition cond;
                     reader.get(&cond, 24);
                     cond.reference = 0; // unused in TES4 but keep it clean
-                    mTargetConditions.push_back(cond);
+                    (entry ? entry->mConditions : mTargetConditions).push_back(cond);
                 }
                 else if (subHdr.dataSize == 28)
                 {
@@ -84,7 +87,7 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     reader.get(cond); // FO3/FONV
                     if (cond.reference)
                         reader.adjustFormId(cond.reference);
-                    mTargetConditions.push_back(cond);
+                    (entry ? entry->mConditions : mTargetConditions).push_back(cond);
                 }
                 else
                 {
@@ -96,23 +99,61 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                 break;
             }
             case ESM::fourCC("SCHR"):
-                reader.get(mScript.scriptHeader);
+                reader.get(currentScript().scriptHeader);
                 break;
             case ESM::fourCC("SCDA"):
                 reader.skipSubRecordData();
                 break; // compiled script data
             case ESM::fourCC("SCTX"):
-                reader.getString(mScript.scriptSource);
+                reader.getString(currentScript().scriptSource);
                 break;
             case ESM::fourCC("SCRO"):
-                reader.getFormId(mScript.globReference);
+                reader.getFormId(currentScript().globReference);
                 break;
             case ESM::fourCC("INDX"):
+            {
+                if (subHdr.dataSize == 2) // TES4/FO3/FONV
+                {
+                    std::int16_t index;
+                    reader.get(index);
+                    mStages.emplace_back().mIndex = index;
+                }
+                else
+                {
+                    reader.skipSubRecordData(); // TES5: handled elsewhere
+                    mStages.emplace_back();
+                }
+                entry = nullptr;
+                break;
+            }
             case ESM::fourCC("QSDT"):
+            {
+                if (mStages.empty())
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                entry = &mStages.back().mEntries.emplace_back();
+                if (subHdr.dataSize >= 1)
+                {
+                    reader.get(entry->mFlags);
+                    if (subHdr.dataSize > 1)
+                        reader.skipSubRecordData(subHdr.dataSize - 1);
+                }
+                break;
+            }
             case ESM::fourCC("CNAM"):
+                if (entry != nullptr)
+                    reader.getZString(entry->mLogText);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("QOBJ"): // FO3
+                entry = nullptr; // objectives follow the stages
+                reader.skipSubRecordData();
+                break;
             case ESM::fourCC("QSTA"):
             case ESM::fourCC("NNAM"): // FO3
-            case ESM::fourCC("QOBJ"): // FO3
             case ESM::fourCC("NAM0"): // FO3
             case ESM::fourCC("SLSD"): // FO3
             case ESM::fourCC("SCVR"): // FO3

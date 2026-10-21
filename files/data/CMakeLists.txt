@@ -174,6 +174,9 @@ set(BUILTIN_DATA_FILES
     scripts/omw/obscript_player.lua
     scripts/omw/furniture_player.lua
     scripts/omw/esm4terminal.lua
+    scripts/omw/fnvdialogue/conditions.lua
+    scripts/omw/fnvdialogue/global.lua
+    scripts/omw/fnvdialogue/player.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
