@@ -8,9 +8,12 @@
 #include <components/esm4/loadsndr.hpp>
 #include <components/esm4/loadsoun.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/rng.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/settings/values.hpp>
+#include <components/vfs/manager.hpp>
 #include <components/vfs/pathutil.hpp>
+#include <components/vfs/recursivedirectoryiterator.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +41,24 @@ namespace MWSound
             params.mAudioMinDistanceMult = settings.find("fAudioMinDistanceMult")->mValue.getFloat();
             params.mAudioMaxDistanceMult = settings.find("fAudioMaxDistanceMult")->mValue.getFloat();
             return params;
+        }
+
+        // ESM4 sound files may name a directory ("...\open\"); the game picks one file from it.
+        VFS::Path::Normalized getESM4SoundPath(std::string_view soundFile)
+        {
+            const VFS::Manager& vfs = *MWBase::Environment::get().getResourceSystem()->getVFS();
+            if (!soundFile.empty() && (soundFile.back() == '\\' || soundFile.back() == '/'))
+            {
+                const VFS::Path::Normalized dir = soundDir / VFS::Path::toNormalized(soundFile);
+                std::vector<VFS::Path::Normalized> files;
+                for (const VFS::Path::Normalized& file : vfs.getRecursiveDirectoryIterator(VFS::Path::NormalizedView(dir)))
+                    if (file.view().ends_with(".wav") || file.view().ends_with(".mp3") || file.view().ends_with(".ogg"))
+                        files.push_back(file);
+                if (!files.empty())
+                    return files[Misc::Rng::rollDice(static_cast<int>(files.size()))];
+            }
+            return Misc::ResourceHelpers::correctResourcePath(
+                { { soundDir } }, VFS::Path::toNormalized(soundFile), vfs, mp3);
         }
     }
 
@@ -201,8 +222,7 @@ namespace MWSound
 
     SoundBuffer* SoundBufferPool::insertSound(const ESM::RefId& soundId, const ESM4::Sound& sound)
     {
-        VFS::Path::Normalized path = Misc::ResourceHelpers::correctResourcePath({ { soundDir } },
-            VFS::Path::toNormalized(sound.mSoundFile), *MWBase::Environment::get().getResourceSystem()->getVFS(), mp3);
+        VFS::Path::Normalized path = getESM4SoundPath(sound.mSoundFile);
         float volume = 1, min = 1, max = 255; // TODO: needs research
         SoundBuffer& sfx = mSoundBuffers.emplace_back(std::move(path), volume, min, max);
         mBufferNameMap.emplace(soundId, &sfx);
@@ -211,8 +231,7 @@ namespace MWSound
 
     SoundBuffer* SoundBufferPool::insertSound(const ESM::RefId& soundId, const ESM4::SoundReference& sound)
     {
-        VFS::Path::Normalized path = Misc::ResourceHelpers::correctResourcePath({ { soundDir } },
-            VFS::Path::toNormalized(sound.mSoundFile), *MWBase::Environment::get().getResourceSystem()->getVFS(), mp3);
+        VFS::Path::Normalized path = getESM4SoundPath(sound.mSoundFile);
         float volume = 1, min = 1, max = 255; // TODO: needs research
         // TODO: sound.mSoundId can link to another SoundReference, probably we will need to add additional lookups to
         // ESMStore.
