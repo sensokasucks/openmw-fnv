@@ -112,8 +112,8 @@ namespace MWLua
                 };
                 for (auto& [topicId, list] : mInfosByTopic)
                 {
-                    std::stable_sort(list.begin(), list.end(),
-                        [&](const ESM4::DialogInfo* a, const ESM4::DialogInfo* b) {
+                    std::stable_sort(
+                        list.begin(), list.end(), [&](const ESM4::DialogInfo* a, const ESM4::DialogInfo* b) {
                             const int pa = questPriority(a->mQuest);
                             const int pb = questPriority(b->mQuest);
                             if (pa != pb)
@@ -334,8 +334,8 @@ namespace MWLua
 
         // INFOs of a topic in evaluation order. With a speaker record id, INFOs
         // that require another actor (GetIsID) are left out.
-        api["getTopicInfos"] = [](std::string_view topicId, sol::optional<std::string_view> speaker,
-                                   sol::this_state s) -> sol::table {
+        api["getTopicInfos"]
+            = [](std::string_view topicId, sol::optional<std::string_view> speaker, sol::this_state s) -> sol::table {
             sol::state_view lua(s);
             sol::table res(lua, sol::create);
             const DialogueIndex& index = getIndex();
@@ -441,9 +441,8 @@ namespace MWLua
         };
 
         // Form id of a placed reference (REFR/ACHR), for GetIsReference.
-        api["getReferenceId"] = [](const Object& object) -> std::string {
-            return formIdText(object.ptr().getCellRef().getRefNum());
-        };
+        api["getReferenceId"]
+            = [](const Object& object) -> std::string { return formIdText(object.ptr().getCellRef().getRefNum()); };
 
         // Variable index -> name for a SCPT record (GetQuestVariable/GetScriptVariable).
         api["getScriptVariables"] = [](std::string_view scriptId, sol::this_state s) -> sol::table {

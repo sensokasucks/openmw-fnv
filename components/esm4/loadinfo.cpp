@@ -27,14 +27,13 @@
 #include "loadinfo.hpp"
 
 #include <cstring>
-#include <cstring>
 #include <stdexcept>
 
 #include <components/esm/refid.hpp>
 
 #include "grouptype.hpp"
 #include "reader.hpp"
-//#include "writer.hpp"
+// #include "writer.hpp"
 
 namespace
 {
