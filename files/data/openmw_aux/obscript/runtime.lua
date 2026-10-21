@@ -40,8 +40,8 @@ obs._onLocalScriptReady = nil  -- function(entry) called once from makeLocalScri
 
 -- --------------------------- tracing
 -- Opt-in via OPENMW_OBSCRIPT_TRACE=1 (exposed by the engine as core.obscript.traceEnabled).
--- [obscript-trace]   block entries and command calls; inside GameMode each
---                    distinct line is logged once per script, since it runs every frame
+-- [obscript-trace]   block entries and command calls; inside GameMode and OnTrigger each
+--                    distinct line is logged once per script, since they run every frame
 -- [obscript-missing] stubbed commands, unknown names and undispatched blocks, once per script
 
 -- core.obscript is absent outside the engine (e.g. unit tests), hence the pcall
@@ -77,7 +77,7 @@ local function traceCall(name, implemented)
         traceOnce('[obscript-missing]', 'cmd:' .. name:lower(), 'command ' .. name)
     end
     local msg = (obs._block or '?') .. ' -> ' .. name .. (implemented and '' or ' (stub)')
-    if obs._block == 'gamemode' then
+    if obs._block == 'gamemode' or obs._block == 'ontrigger' then
         traceOnce('[obscript-trace]', 'call:' .. msg:lower(), msg)
     else
         print('[obscript-trace] ' .. currentScriptName() .. ': ' .. msg)
@@ -86,8 +86,8 @@ end
 
 local function traceBlock(event)
     if not obs._trace then return end
-    if event == 'gamemode' then
-        traceOnce('[obscript-trace]', 'block:gamemode', 'enter GameMode (first frame)')
+    if event == 'gamemode' or event == 'ontrigger' then
+        traceOnce('[obscript-trace]', 'block:' .. event, 'enter ' .. event .. ' (first frame)')
     else
         print('[obscript-trace] ' .. currentScriptName() .. ': enter ' .. event)
     end
