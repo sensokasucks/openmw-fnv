@@ -32,6 +32,7 @@
 #include <components/esm4/loadfurn.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
@@ -266,6 +267,9 @@ namespace MWLua
                             break;
                         case ESM::REC_INGR4:
                             cell.mStore->template forEachType<ESM4::Ingredient>(visitor);
+                            break;
+                        case ESM::REC_KEYM4:
+                            cell.mStore->template forEachType<ESM4::Key>(visitor);
                             break;
                         case ESM::REC_LIGH4:
                             cell.mStore->template forEachType<ESM4::Light>(visitor);

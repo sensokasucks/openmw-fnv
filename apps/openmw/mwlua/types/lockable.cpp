@@ -5,6 +5,7 @@
 #include <components/misc/resourcehelpers.hpp>
 #include <components/resource/resourcesystem.hpp>
 
+#include "apps/openmw/mwclass/esm4lock.hpp"
 #include "apps/openmw/mwworld/esmstore.hpp"
 
 namespace MWLua
@@ -41,6 +42,11 @@ namespace MWLua
             object.ptr().getCellRef().setLocked(false);
 
             object.ptr().getCellRef().setLockLevel(-object.ptr().getCellRef().getLockLevel());
+        };
+        // Opens a FO3/FNV lock with a carried key or by picking it; false if it stays locked.
+        // Used by the ESM4 door activation handler.
+        lockable["_esm4TryOpen"] = [](const GObject& object, const GObject& actor) {
+            return MWClass::ESM4Lock::tryOpen(object.ptr(), actor.ptr());
         };
         lockable["setTrapSpell"] = [](const GObject& object, const sol::object& spellOrId) {
             if (spellOrId == sol::nil)

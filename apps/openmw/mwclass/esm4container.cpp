@@ -1,4 +1,5 @@
 #include "esm4container.hpp"
+#include "esm4lock.hpp"
 
 #include <MyGUI_TextIterator.h>
 #include <MyGUI_UString.h>
@@ -62,8 +63,9 @@ namespace MWClass
     MWGui::ToolTipInfo ESM4Container::getToolTipInfo(const MWWorld::ConstPtr& ptr, int count) const
     {
         MWGui::ToolTipInfo info = ESM4Impl::getToolTipInfo(getName(ptr), count);
-        if (ptr.getCellRef().isLocked())
-            info.text = "\n#{sLockLevel}: " + MWGui::ToolTips::toString(ptr.getCellRef().getLockLevel());
+        const std::string lock = ESM4Lock::describe(ptr);
+        if (!lock.empty())
+            info.text = "\n" + lock;
         return info;
     }
 
@@ -72,9 +74,8 @@ namespace MWClass
         if (!MWBase::Environment::get().getWindowManager()->isAllowed(MWGui::GW_Inventory))
             return std::make_unique<MWWorld::NullAction>();
 
-        // TODO: keys and lockpicking for ESM4 locks
-        if (ptr.getCellRef().isLocked())
-            return std::make_unique<MWWorld::FailedAction>("Locked", ptr);
+        if (!ESM4Lock::tryOpen(ptr, actor))
+            return std::make_unique<MWWorld::FailedAction>(std::string_view{}, ptr);
 
         std::unique_ptr<MWWorld::Action> action = std::make_unique<MWWorld::ActionOpen>(ptr);
         action->setSound(ptr.get<ESM4::Container>()->mBase->mOpenSound);
