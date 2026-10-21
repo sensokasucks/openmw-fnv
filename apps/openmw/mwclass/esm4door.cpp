@@ -1,5 +1,6 @@
 #include "esm4door.hpp"
 
+#include <components/esm3/doorstate.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -93,6 +94,27 @@ namespace MWClass
         if (anim->hasAnimation(restGroup))
             anim->play(restGroup, MWMechanics::Priority_Scripted, MWRender::BlendMask_All, false, 1.f, "start", "stop",
                 1.f, 0);
+    }
+
+    void ESM4Door::readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const
+    {
+        if (!state.mHasCustomState)
+            return;
+
+        // Read before the door is drawn, so insertObjectRendering rests it open.
+        getCustomData(ptr).mOpen = state.asDoorState().mDoorState != 0;
+    }
+
+    void ESM4Door::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
+    {
+        if (!ptr.getRefData().getCustomData())
+        {
+            state.mHasCustomState = false;
+            return;
+        }
+
+        // 1 is MWWorld::DoorState::Opening; ESM4 doors have no moving state worth keeping.
+        state.asDoorState().mDoorState = isOpen(ptr) ? 1 : 0;
     }
 
     std::unique_ptr<MWWorld::Action> ESM4Door::activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const

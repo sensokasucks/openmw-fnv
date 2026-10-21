@@ -12,7 +12,6 @@ namespace MWClass
     class ESM4DoorCustomData : public MWWorld::TypedCustomData<ESM4DoorCustomData>
     {
     public:
-        // ESM4 references are not saved yet, so a door is closed again after loading a game.
         bool mOpen = false;
     };
 
@@ -44,6 +43,10 @@ namespace MWClass
         std::unique_ptr<MWWorld::Action> activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const override;
 
         bool canLock(const MWWorld::ConstPtr& ptr) const override { return true; }
+
+        void readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const override;
+
+        void writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const override;
 
         static bool isOpen(const MWWorld::ConstPtr& ptr);
 
