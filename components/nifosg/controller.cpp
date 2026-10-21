@@ -95,28 +95,7 @@ namespace NifOsg
         if (!keyctrl->mInterpolator.empty())
         {
             if (keyctrl->mInterpolator->mRecordType == Nif::RC_NiTransformInterpolator)
-            {
-                const Nif::NiTransformInterpolator* interp
-                    = static_cast<const Nif::NiTransformInterpolator*>(keyctrl->mInterpolator.getPtr());
-                const Nif::NiQuatTransform& defaultTransform = interp->mDefaultValue;
-                if (!interp->mData.empty())
-                {
-                    mRotations = QuaternionInterpolator(interp->mData->mRotations, defaultTransform.mRotation);
-                    mXRotations = FloatInterpolator(interp->mData->mXRotations);
-                    mYRotations = FloatInterpolator(interp->mData->mYRotations);
-                    mZRotations = FloatInterpolator(interp->mData->mZRotations);
-                    mTranslations = Vec3Interpolator(interp->mData->mTranslations, defaultTransform.mTranslation);
-                    mScales = FloatInterpolator(interp->mData->mScales, defaultTransform.mScale);
-
-                    mAxisOrder = interp->mData->mAxisOrder;
-                }
-                else
-                {
-                    mRotations = QuaternionInterpolator(Nif::QuaternionKeyMapPtr(), defaultTransform.mRotation);
-                    mTranslations = Vec3Interpolator(Nif::Vector3KeyMapPtr(), defaultTransform.mTranslation);
-                    mScales = FloatInterpolator(Nif::FloatKeyMapPtr(), defaultTransform.mScale);
-                }
-            }
+                initFromInterpolator(static_cast<const Nif::NiTransformInterpolator*>(keyctrl->mInterpolator.getPtr()));
         }
         else if (!keyctrl->mData.empty())
         {
@@ -129,6 +108,33 @@ namespace NifOsg
             mScales = FloatInterpolator(keydata->mScales, 1.f);
 
             mAxisOrder = keydata->mAxisOrder;
+        }
+    }
+
+    KeyframeController::KeyframeController(const Nif::NiTransformInterpolator* interp)
+    {
+        initFromInterpolator(interp);
+    }
+
+    void KeyframeController::initFromInterpolator(const Nif::NiTransformInterpolator* interp)
+    {
+        const Nif::NiQuatTransform& defaultTransform = interp->mDefaultValue;
+        if (!interp->mData.empty())
+        {
+            mRotations = QuaternionInterpolator(interp->mData->mRotations, defaultTransform.mRotation);
+            mXRotations = FloatInterpolator(interp->mData->mXRotations);
+            mYRotations = FloatInterpolator(interp->mData->mYRotations);
+            mZRotations = FloatInterpolator(interp->mData->mZRotations);
+            mTranslations = Vec3Interpolator(interp->mData->mTranslations, defaultTransform.mTranslation);
+            mScales = FloatInterpolator(interp->mData->mScales, defaultTransform.mScale);
+
+            mAxisOrder = interp->mData->mAxisOrder;
+        }
+        else
+        {
+            mRotations = QuaternionInterpolator(Nif::QuaternionKeyMapPtr(), defaultTransform.mRotation);
+            mTranslations = Vec3Interpolator(Nif::Vector3KeyMapPtr(), defaultTransform.mTranslation);
+            mScales = FloatInterpolator(Nif::FloatKeyMapPtr(), defaultTransform.mScale);
         }
     }
 
@@ -200,25 +206,92 @@ namespace NifOsg
 
     KeyframeController::KfTransform KeyframeController::getCurrentTransformation(osg::NodeVisitor* nv)
     {
+        if (hasInput())
+            return getTransformation(getInputValue(nv));
+
+        return KfTransform();
+    }
+
+    KeyframeController::KfTransform KeyframeController::getTransformation(float time) const
+    {
         KfTransform out;
 
-        if (hasInput())
-        {
-            float time = getInputValue(nv);
+        if (!mRotations.empty())
+            out.mRotation = mRotations.interpKey(time);
+        else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
+            out.mRotation = getXYZRotation(time);
 
-            if (!mRotations.empty())
-                out.mRotation = mRotations.interpKey(time);
-            else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
-                out.mRotation = getXYZRotation(time);
+        if (!mTranslations.empty())
+            out.mTranslation = mTranslations.interpKey(time);
 
-            if (!mTranslations.empty())
-                out.mTranslation = mTranslations.interpKey(time);
-
-            if (!mScales.empty())
-                out.mScale = mScales.interpKey(time);
-        }
+        if (!mScales.empty())
+            out.mScale = mScales.interpKey(time);
 
         return out;
+    }
+
+    SequenceKeyframeController::SequenceKeyframeController(
+        const SequenceKeyframeController& copy, const osg::CopyOp& copyop)
+        : osg::Object(copy, copyop)
+        , SceneUtil::KeyframeController(copy)
+        , SceneUtil::NodeCallback<SequenceKeyframeController, NifOsg::MatrixTransform*>(copy, copyop)
+        , mSegments(copy.mSegments)
+    {
+        // Interpolators cache their last key, so each copy gets its own.
+        for (Segment& segment : mSegments)
+            segment.mController = new NifOsg::KeyframeController(*segment.mController, copyop);
+    }
+
+    const SequenceKeyframeController::Segment* SequenceKeyframeController::findSegment(float time) const
+    {
+        // Animation time can overshoot the stop key slightly, so fall back to the closest segment that started.
+        const Segment* found = nullptr;
+        for (const Segment& segment : mSegments)
+        {
+            if (time < segment.mStart)
+                continue;
+            if (time <= segment.mStop)
+                return &segment;
+            if (found == nullptr || segment.mStart > found->mStart)
+                found = &segment;
+        }
+        return found;
+    }
+
+    osg::Vec3f SequenceKeyframeController::getTranslation(float time) const
+    {
+        const Segment* segment = findSegment(time);
+        if (segment == nullptr)
+            return osg::Vec3f();
+        return segment->mController->getTranslation(time - segment->mOffset);
+    }
+
+    SequenceKeyframeController::KfTransform SequenceKeyframeController::getCurrentTransformation(osg::NodeVisitor* nv)
+    {
+        if (!hasInput())
+            return KfTransform();
+
+        const float time = getInputValue(nv);
+        const Segment* segment = findSegment(time);
+        if (segment == nullptr)
+            return KfTransform();
+        return segment->mController->getTransformation(time - segment->mOffset);
+    }
+
+    void SequenceKeyframeController::operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+    {
+        auto [translation, rotation, scale] = getCurrentTransformation(nv);
+
+        if (rotation)
+            node->setRotation(*rotation);
+
+        if (translation)
+            node->setTranslation(*translation);
+
+        if (scale)
+            node->setScale(*scale);
+
+        traverse(node, nv);
     }
 
     GeomMorpherController::GeomMorpherController() {}

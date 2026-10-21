@@ -775,6 +775,13 @@ namespace MWRender
         return animsrc;
     }
 
+    bool Animation::addEmbeddedAnimSource(const std::string& model)
+    {
+        if (!mObjectRoot || model.empty())
+            return false;
+        return addSingleAnimSource(VFS::Path::toNormalized(model), model) != nullptr;
+    }
+
     void Animation::clearAnimSources()
     {
         mStates.clear();

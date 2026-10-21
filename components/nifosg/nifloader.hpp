@@ -37,6 +37,11 @@ namespace NifOsg
         /// Load keyframe controllers from the given kf file.
         static void loadKf(Nif::FileView kf, SceneUtil::KeyframeHolder& target);
 
+        /// Load the NiControllerSequences embedded in a Gamebryo NIF (NiControllerManager on the root node, used by
+        /// ESM4 doors and other animated objects). Each sequence becomes a group named after the sequence in lower
+        /// case, with "<name>: start" and "<name>: stop" text keys.
+        static void loadEmbeddedSequences(Nif::FileView nif, SceneUtil::KeyframeHolder& target);
+
         /// Set whether or not nodes marked as "MRK" should be shown.
         /// These should be hidden ingame, but visible in the editor.
         /// Default: false.
