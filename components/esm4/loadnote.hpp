@@ -49,6 +49,19 @@ namespace ESM4
         ESM::Path mModel;
         std::string mIcon;
 
+        enum NoteType : std::uint8_t
+        {
+            Type_Sound = 0,
+            Type_Text = 1,
+            Type_Image = 2,
+            Type_Voice = 3,
+        };
+        std::uint8_t mNoteType = Type_Text;
+        std::string mText; // TNAM of a text note
+        std::string mTexture; // XNAM of an image note
+        ESM::FormId mTopic; // TNAM of a voice note (DIAL)
+        ESM::FormId mSound; // SNAM: SOUN of a sound note, speaker NPC_ of a voice note
+
         float mBoundRadius;
 
         ESM::FormId mPickUpSound;

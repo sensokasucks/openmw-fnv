@@ -18,6 +18,7 @@
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
+#include <components/esm4/loadnote.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscpt.hpp>
 #include <components/esm4/loadweap.hpp>
@@ -117,6 +118,22 @@ namespace MWLua
         };
 
         // Persistent placed references (e.g. `GSSchoolTerminal01Ref.Disable`).
+        // Notes, for `AddNote <EditorId>`.
+        api["resolveNoteEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::Note>& notes = MWBase::Environment::get().getESMStore()->get<ESM4::Note>();
+                for (size_t i = 0; i < notes.getSize(); ++i)
+                {
+                    const ESM4::Note& note = *notes.at(i);
+                    if (!note.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(note.mEditorId), ESM::RefId(note.mId));
+                }
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
         api["resolveRefEditorId"] = [resolve](std::string_view editorId) {
             static const EditorIdIndex index = [] {
                 EditorIdIndex res;

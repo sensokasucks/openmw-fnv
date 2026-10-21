@@ -102,6 +102,8 @@ namespace
                 return func(store.get<ESM4::Ingredient>());
             case ESM::REC_MISC4:
                 return func(store.get<ESM4::MiscItem>());
+            case ESM::REC_NOTE4:
+                return func(store.get<ESM4::Note>());
             case ESM::REC_STAT4:
                 return func(store.get<ESM4::Static>());
             case ESM::REC_TERM4:

@@ -113,12 +113,30 @@ local function ESM4BookActivation(book, actor)
     return false -- read in place; C++ would otherwise pick the book up
 end
 
+local function ESM4NoteActivation(note, actor)
+    if actor.type == types.Player then
+        -- Notes go to the player's notes list (the Pip-Boy data tab), not the inventory.
+        actor:sendEvent('ESM4PickUpNote', { note = note.recordId })
+        note:remove()
+    end
+    return false
+end
+
+local function ESM4TerminalActivation(terminal, actor)
+    if actor.type == types.Player then
+        actor:sendEvent('ESM4OpenTerminal', { terminal = terminal })
+    end
+    return false
+end
+
 local handlersPerObject = {}
 local handlersPerType = {}
 
 handlersPerType[types.ESM4Book] = { ESM4BookActivation }
 handlersPerType[types.ESM4Door] = { ESM4DoorActivation }
 handlersPerType[types.ESM4Furniture] = { ESM4FurnitureActivation }
+handlersPerType[types.ESM4Note] = { ESM4NoteActivation }
+handlersPerType[types.ESM4Terminal] = { ESM4TerminalActivation }
 
 local function runDefaultActivation(obj, actor)
     local handled = auxUtil.callMultipleEventHandlers({ handlersPerType[obj.type] }, obj, actor)

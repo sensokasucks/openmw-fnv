@@ -35,6 +35,8 @@
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
+#include <components/esm4/loadnote.hpp>
+#include <components/esm4/loadterm.hpp>
 #include <components/esm4/loadscol.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadtree.hpp>
@@ -276,6 +278,9 @@ namespace MWLua
                         case ESM::REC_MSTT4:
                             cell.mStore->template forEachType<ESM4::MovableStatic>(visitor);
                             break;
+                        case ESM::REC_NOTE4:
+                            cell.mStore->template forEachType<ESM4::Note>(visitor);
+                            break;
                         case ESM::REC_ALCH4:
                             cell.mStore->template forEachType<ESM4::Potion>(visitor);
                             break;
@@ -284,6 +289,9 @@ namespace MWLua
                             break;
                         case ESM::REC_STAT4:
                             cell.mStore->template forEachType<ESM4::Static>(visitor);
+                            break;
+                        case ESM::REC_TERM4:
+                            cell.mStore->template forEachType<ESM4::Terminal>(visitor);
                             break;
                         case ESM::REC_TREE4:
                             cell.mStore->template forEachType<ESM4::Tree>(visitor);

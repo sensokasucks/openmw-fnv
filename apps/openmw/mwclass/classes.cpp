@@ -16,6 +16,7 @@
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
+#include <components/esm4/loadnote.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadscol.hpp>
 #include <components/esm4/loadstat.hpp>
@@ -92,6 +93,7 @@ namespace MWClass
         ESM4Light::registerSelf();
         ESM4Item<ESM4::MiscItem>::registerSelf();
         ESM4Named<ESM4::MovableStatic>::registerSelf();
+        ESM4Named<ESM4::Note>::registerSelf();
         ESM4Npc::registerSelf();
         ESM4Item<ESM4::Potion>::registerSelf();
         ESM4Static::registerSelf();

@@ -173,6 +173,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/obscript.lua
     scripts/omw/obscript_player.lua
     scripts/omw/furniture_player.lua
+    scripts/omw/esm4terminal.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
