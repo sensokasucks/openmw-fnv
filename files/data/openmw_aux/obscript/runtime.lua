@@ -33,6 +33,62 @@ obs._bindings = {}     -- command name (lower) -> function
 obs._unknown = {}      -- command name (lower) -> call count (coverage telemetry)
 obs._log = nil         -- optional function(msg) for stub logging
 obs._current = nil     -- script currently registering/executing
+obs._block = nil       -- block currently executing (lowercase event name)
+
+-- --------------------------- tracing
+-- Opt-in via OPENMW_OBSCRIPT_TRACE=1 (exposed by the engine as core.obscript.traceEnabled).
+-- [obscript-trace]   block entries and command calls; inside GameMode each
+--                    distinct line is logged once per script, since it runs every frame
+-- [obscript-missing] stubbed commands, unknown names and undispatched blocks, once per script
+
+-- core.obscript is absent outside the engine (e.g. unit tests), hence the pcall
+obs._trace = false
+do
+    local ok, enabled = pcall(function()
+        return require('openmw.core').obscript.traceEnabled
+    end)
+    obs._trace = ok and enabled == true
+end
+
+local traceSeen = {}  -- script (lower) -> set of already-logged keys
+
+local function currentScriptName()
+    return obs._current and obs._current.name or "?"
+end
+
+local function traceOnce(prefix, key, msg)
+    local script = currentScriptName()
+    local seen = traceSeen[script:lower()]
+    if not seen then
+        seen = {}
+        traceSeen[script:lower()] = seen
+    end
+    if seen[prefix .. key] then return end
+    seen[prefix .. key] = true
+    print(prefix .. ' ' .. script .. ': ' .. msg)
+end
+
+local function traceCall(name, implemented)
+    if not obs._trace then return end
+    if not implemented then
+        traceOnce('[obscript-missing]', 'cmd:' .. name:lower(), 'command ' .. name)
+    end
+    local msg = (obs._block or '?') .. ' -> ' .. name .. (implemented and '' or ' (stub)')
+    if obs._block == 'gamemode' then
+        traceOnce('[obscript-trace]', 'call:' .. msg:lower(), msg)
+    else
+        print('[obscript-trace] ' .. currentScriptName() .. ': ' .. msg)
+    end
+end
+
+local function traceBlock(event)
+    if not obs._trace then return end
+    if event == 'gamemode' then
+        traceOnce('[obscript-trace]', 'block:gamemode', 'enter GameMode (first frame)')
+    else
+        print('[obscript-trace] ' .. currentScriptName() .. ': enter ' .. event)
+    end
+end
 
 local function scriptEntry(name)
     local key = name:lower()
@@ -80,6 +136,7 @@ end
 local function dispatch(name, ...)
     local key = name:lower()
     local fn = obs._bindings[key]
+    traceCall(name, fn ~= nil)
     if fn then
         return fn(...) or 0
     end
@@ -112,6 +169,10 @@ function obs.v(name)
     end
     -- unknown: report once as coverage telemetry, evaluate as 0 (vanilla-ish)
     obs._unknown[key] = (obs._unknown[key] or 0) + 1
+    if obs._trace then
+        traceOnce('[obscript-missing]', 'name:' .. key,
+            'name ' .. name .. ' (global, zero-arg command or editor id; evaluated as 0)')
+    end
     return 0
 end
 
@@ -150,35 +211,38 @@ end
 -- engine installs the real resolver; default is identity
 obs.resolveRef = function(x) return x end
 
--- run one frame: fire every loaded script's GameMode handlers
-function obs.frame()
-    for _, entry in pairs(obs._scripts) do
-        local h = entry.handlers["gamemode"]
-        if h then
-            obs._current = entry
-            if type(h) == "table" then
-                for _, fn in ipairs(h) do fn() end
-            else
-                h()
-            end
-        end
-    end
-    obs._current = nil
-end
-
--- fire a specific event on a specific script (OnActivate, OnDeath, ...)
-function obs.fire(scriptName, event)
-    local entry = obs._scripts[scriptName:lower()]
-    if not entry then return false end
-    local h = entry.handlers[event:lower()]
-    if not h then return false end
+-- run one block's handler(s) for a script; event is lowercase
+local function runBlock(entry, event, h)
     obs._current = entry
+    obs._block = event
+    traceBlock(event)
     if type(h) == "table" then
         for _, fn in ipairs(h) do fn() end
     else
         h()
     end
     obs._current = nil
+    obs._block = nil
+end
+
+-- run one frame: fire every loaded script's GameMode handlers
+function obs.frame()
+    for _, entry in pairs(obs._scripts) do
+        local h = entry.handlers["gamemode"]
+        if h then
+            runBlock(entry, "gamemode", h)
+        end
+    end
+end
+
+-- fire a specific event on a specific script (OnActivate, OnDeath, ...)
+function obs.fire(scriptName, event)
+    local entry = obs._scripts[scriptName:lower()]
+    if not entry then return false end
+    local key = event:lower()
+    local h = entry.handlers[key]
+    if not h then return false end
+    runBlock(entry, key, h)
     return true
 end
 
@@ -198,15 +262,8 @@ end
 
 -- --------------------------- local-script interface
 
-local function fireAll(entry, h)
-    obs._current = entry
-    if type(h) == "table" then
-        for _, fn in ipairs(h) do fn() end
-    else
-        h()
-    end
-    obs._current = nil
-end
+-- blocks makeLocalScript dispatches; any other block a script declares is reported as missing
+local dispatchedBlocks = { gamemode = true, onactivate = true, onopen = true }
 
 --- Builds the local-script table (`engineHandlers`) for the script loaded in
 -- this sandbox. Each attached object gets its own sandbox and therefore its
@@ -226,21 +283,37 @@ function obs.makeLocalScript()
         return {} -- script registered no blocks
     end
 
+    if obs._trace then
+        local blocks = {}
+        for event in pairs(entry.handlers) do
+            blocks[#blocks + 1] = event
+        end
+        table.sort(blocks)
+        obs._current = entry
+        print('[obscript-trace] ' .. entry.name .. ': attached; blocks: ' .. table.concat(blocks, ', '))
+        for _, event in ipairs(blocks) do
+            if not dispatchedBlocks[event] then
+                traceOnce('[obscript-missing]', 'block:' .. event, 'block ' .. event .. ' (never dispatched)')
+            end
+        end
+        obs._current = nil
+    end
+
     return {
         engineHandlers = {
             onUpdate = function(dt)
                 obs._dt = dt
                 local h = entry.handlers["gamemode"]
-                if h then fireAll(entry, h) end
+                if h then runBlock(entry, "gamemode", h) end
             end,
             onActivated = function(actor)
                 -- Opening a container counts as activation, so OnOpen blocks
                 -- are dispatched from here as well.
                 obs._actionRef = actor
                 local h = entry.handlers["onactivate"]
-                if h then fireAll(entry, h) end
+                if h then runBlock(entry, "onactivate", h) end
                 h = entry.handlers["onopen"]
-                if h then fireAll(entry, h) end
+                if h then runBlock(entry, "onopen", h) end
                 obs._actionRef = nil
             end,
             onSave = function()

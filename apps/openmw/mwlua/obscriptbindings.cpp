@@ -1,5 +1,6 @@
 #include "obscriptbindings.hpp"
 
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <string_view>
@@ -129,6 +130,12 @@ namespace MWLua
             }();
             return resolve(index, editorId);
         };
+
+        // Opt-in runtime tracing (OPENMW_OBSCRIPT_TRACE=1); the Lua sandbox has no os.getenv.
+        api["traceEnabled"] = [] {
+            const char* value = std::getenv("OPENMW_OBSCRIPT_TRACE");
+            return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+        }();
 
         return LuaUtil::makeReadOnly(api);
     }
