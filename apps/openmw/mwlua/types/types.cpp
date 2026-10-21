@@ -241,7 +241,7 @@ namespace MWLua
         addType(ObjectTypeName::ESM4Container, { ESM::REC_CONT4 });
         addESM4DoorBindings(addType(ObjectTypeName::ESM4Door, { ESM::REC_DOOR4 }, ObjectTypeName::Lockable), context);
         addType(ObjectTypeName::ESM4Flora, { ESM::REC_FLOR4 });
-        addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 });
+        addESM4FurnitureBindings(addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 }), context);
         addType(ObjectTypeName::ESM4Ingredient, { ESM::REC_INGR4 });
         addType(ObjectTypeName::ESM4ItemMod, { ESM::REC_IMOD4 });
         addType(ObjectTypeName::ESM4Light, { ESM::REC_LIGH4 });

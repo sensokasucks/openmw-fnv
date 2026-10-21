@@ -78,6 +78,7 @@ namespace MWLua
 
     void addESM4DoorBindings(sol::table door, const Context& context);
     void addESM4TerminalBindings(sol::table term, const Context& context);
+    void addESM4FurnitureBindings(sol::table furn, const Context& context);
 }
 
 #endif // MWLUA_TYPES_H
