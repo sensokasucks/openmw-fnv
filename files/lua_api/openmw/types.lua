@@ -2582,6 +2582,9 @@
 --- Functions for @{#ESM4ItemMod} objects
 -- @field [parent=#types] #ESM4ItemMod ESM4ItemMod
 
+--- Functions for @{#ESM4Key} objects
+-- @field [parent=#types] #ESM4Key ESM4Key
+
 --- Functions for @{#ESM4Light} objects
 -- @field [parent=#types] #ESM4Light ESM4Light
 

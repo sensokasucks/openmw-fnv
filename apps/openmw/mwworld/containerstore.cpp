@@ -623,6 +623,10 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::addNewStack(const Const
             mLists.mESM4MiscItems.mList.push_back(*ptr.get<ESM4::MiscItem>());
             it = ContainerStoreIterator(this, --mLists.mESM4MiscItems.mList.end());
             break;
+        case Type_ESM4Key:
+            mLists.mESM4Keys.mList.push_back(*ptr.get<ESM4::Key>());
+            it = ContainerStoreIterator(this, --mLists.mESM4Keys.mList.end());
+            break;
         case Type_ESM4Weapon:
             mLists.mESM4Weapons.mList.push_back(*ptr.get<ESM4::Weapon>());
             it = ContainerStoreIterator(this, --mLists.mESM4Weapons.mList.end());
@@ -1006,6 +1010,7 @@ float MWWorld::ContainerStore::getWeight() const
         mCachedWeight += getTotalWeight(mLists.mESM4Ingreds);
         mCachedWeight += getTotalWeight(mLists.mESM4ItemMods);
         mCachedWeight += getTotalWeight(mLists.mESM4MiscItems);
+        mCachedWeight += getTotalWeight(mLists.mESM4Keys);
         mCachedWeight += getTotalWeight(mLists.mESM4Weapons);
 
         mWeightUpToDate = true;
@@ -1078,6 +1083,9 @@ int MWWorld::ContainerStore::getType(const ConstPtr& ptr)
 
     if (ptr.getType() == ESM4::MiscItem::sRecordId)
         return Type_ESM4MiscItem;
+
+    if (ptr.getType() == ESM4::Key::sRecordId)
+        return Type_ESM4Key;
 
     if (ptr.getType() == ESM4::Weapon::sRecordId)
         return Type_ESM4Weapon;
@@ -1232,6 +1240,12 @@ MWWorld::Ptr MWWorld::ContainerStore::search(const ESM::RefId& id)
     }
 
     {
+        Ptr ptr = searchId(mLists.mESM4Keys, id, this);
+        if (!ptr.isEmpty())
+            return ptr;
+    }
+
+    {
         Ptr ptr = searchId(mLists.mESM4Weapons, id, this);
         if (!ptr.isEmpty())
             return ptr;
@@ -1281,6 +1295,7 @@ void MWWorld::ContainerStore::writeState(ESM::InventoryState& state) const
     storeStates(mLists.mESM4Ingreds, state, index);
     storeStates(mLists.mESM4ItemMods, state, index);
     storeStates(mLists.mESM4MiscItems, state, index);
+    storeStates(mLists.mESM4Keys, state, index);
     storeStates(mLists.mESM4Weapons, state, index);
 }
 
@@ -1358,6 +1373,9 @@ void MWWorld::ContainerStore::readState(const ESM::InventoryState& inventory)
                 break;
             case ESM::REC_MISC4:
                 getState(mLists.mESM4MiscItems, state);
+                break;
+            case ESM::REC_KEYM4:
+                getState(mLists.mESM4Keys, state);
                 break;
             case ESM::REC_WEAP4:
                 getState(mLists.mESM4Weapons, state);
@@ -1443,6 +1461,9 @@ void MWWorld::ContainerStoreIteratorBase<PtrType>::copy(const ContainerStoreIter
             break;
         case MWWorld::ContainerStore::Type_ESM4MiscItem:
             mESM4MiscItem = src.mESM4MiscItem;
+            break;
+        case MWWorld::ContainerStore::Type_ESM4Key:
+            mESM4Key = src.mESM4Key;
             break;
         case MWWorld::ContainerStore::Type_ESM4Weapon:
             mESM4Weapon = src.mESM4Weapon;
@@ -1586,6 +1607,11 @@ bool MWWorld::ContainerStoreIteratorBase<PtrType>::resetIterator()
             mESM4MiscItem = mContainer->mLists.mESM4MiscItems.mList.begin();
             return mESM4MiscItem != mContainer->mLists.mESM4MiscItems.mList.end();
 
+        case ContainerStore::Type_ESM4Key:
+
+            mESM4Key = mContainer->mLists.mESM4Keys.mList.begin();
+            return mESM4Key != mContainer->mLists.mESM4Keys.mList.end();
+
         case ContainerStore::Type_ESM4Weapon:
 
             mESM4Weapon = mContainer->mLists.mESM4Weapons.mList.begin();
@@ -1700,6 +1726,11 @@ bool MWWorld::ContainerStoreIteratorBase<PtrType>::incIterator()
             ++mESM4MiscItem;
             return mESM4MiscItem == mContainer->mLists.mESM4MiscItems.mList.end();
 
+        case ContainerStore::Type_ESM4Key:
+
+            ++mESM4Key;
+            return mESM4Key == mContainer->mLists.mESM4Keys.mList.end();
+
         case ContainerStore::Type_ESM4Weapon:
 
             ++mESM4Weapon;
@@ -1761,6 +1792,8 @@ bool MWWorld::ContainerStoreIteratorBase<PtrType>::isEqual(const ContainerStoreI
             return mESM4ItemMod == other.mESM4ItemMod;
         case ContainerStore::Type_ESM4MiscItem:
             return mESM4MiscItem == other.mESM4MiscItem;
+        case ContainerStore::Type_ESM4Key:
+            return mESM4Key == other.mESM4Key;
         case ContainerStore::Type_ESM4Weapon:
             return mESM4Weapon == other.mESM4Weapon;
         case -1:
@@ -1843,6 +1876,9 @@ PtrType MWWorld::ContainerStoreIteratorBase<PtrType>::operator*() const
             break;
         case ContainerStore::Type_ESM4MiscItem:
             ptr = PtrType(&*mESM4MiscItem, nullptr);
+            break;
+        case ContainerStore::Type_ESM4Key:
+            ptr = PtrType(&*mESM4Key, nullptr);
             break;
         case ContainerStore::Type_ESM4Weapon:
             ptr = PtrType(&*mESM4Weapon, nullptr);
@@ -2119,6 +2155,16 @@ MWWorld::ContainerStoreIteratorBase<PtrType>::ContainerStoreIteratorBase(
     , mMask(MWWorld::ContainerStore::Type_All)
     , mContainer(container)
     , mESM4MiscItem(iterator)
+{
+}
+
+template <class PtrType>
+MWWorld::ContainerStoreIteratorBase<PtrType>::ContainerStoreIteratorBase(
+    ContainerStoreType container, typename Iterator<ESM4::Key>::type iterator)
+    : mType(MWWorld::ContainerStore::Type_ESM4Key)
+    , mMask(MWWorld::ContainerStore::Type_All)
+    , mContainer(container)
+    , mESM4Key(iterator)
 {
 }
 

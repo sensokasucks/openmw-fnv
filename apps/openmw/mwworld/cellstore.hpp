@@ -73,6 +73,7 @@ namespace ESM4
     struct Flora;
     struct Ingredient;
     struct ItemMod;
+    struct Key;
     struct MiscItem;
     struct MovableStatic;
     struct Note;
@@ -100,7 +101,7 @@ namespace MWWorld
         CellRefList<ESM4::Ammunition>, CellRefList<ESM4::Armor>, CellRefList<ESM4::Book>, CellRefList<ESM4::Clothing>,
         CellRefList<ESM4::Container>, CellRefList<ESM4::Door>, CellRefList<ESM4::Flora>, CellRefList<ESM4::Ingredient>,
         CellRefList<ESM4::ItemMod>, CellRefList<ESM4::Terminal>, CellRefList<ESM4::Tree>, CellRefList<ESM4::MiscItem>,
-        CellRefList<ESM4::MovableStatic>, CellRefList<ESM4::Weapon>, CellRefList<ESM4::Furniture>,
+        CellRefList<ESM4::Key>, CellRefList<ESM4::MovableStatic>, CellRefList<ESM4::Weapon>, CellRefList<ESM4::Furniture>,
         CellRefList<ESM4::Creature>, CellRefList<ESM4::Npc>, CellRefList<ESM4::StaticCollection>,
         CellRefList<ESM4::Note>>;
 

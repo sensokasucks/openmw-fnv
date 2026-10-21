@@ -368,6 +368,7 @@ namespace MWWorld
             case ESM::REC_FURN4:
             case ESM::REC_IMOD4:
             case ESM::REC_INGR4:
+            case ESM::REC_KEYM4:
             case ESM::REC_LIGH4:
             case ESM::REC_LVLI4:
             case ESM::REC_LVLC4:

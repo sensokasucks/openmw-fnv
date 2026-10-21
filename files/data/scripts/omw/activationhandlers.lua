@@ -126,6 +126,14 @@ local function ESM4TerminalActivation(terminal, actor)
     return false
 end
 
+-- FO3/FNV locks: open with a carried key, or pick the lock (see MWClass::ESM4Lock).
+-- Appended to the ESM4Door handlers so it runs before them.
+local function ESM4LockActivation(obj, actor)
+    if not types.Lockable._esm4TryOpen(obj, actor) then
+        return false
+    end
+end
+
 local handlersPerObject = {}
 local handlersPerType = {}
 
@@ -143,6 +151,8 @@ local function runDefaultActivation(obj, actor)
     types.Actor.activeEffects(actor):remove('invisibility')
     world._runStandardActivationAction(obj, actor)
 end
+
+table.insert(handlersPerType[types.ESM4Door], ESM4LockActivation)
 
 local function onActivate(obj, actor)
     if world.isWorldPaused() then

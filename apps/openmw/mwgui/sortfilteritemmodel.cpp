@@ -22,6 +22,7 @@
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/misc/utf8stream.hpp>
@@ -84,6 +85,8 @@ namespace
                 return 19;
             case ESM4::MiscItem::sRecordId:
                 return 20;
+            case ESM4::Key::sRecordId:
+                return 21;
         }
         assert(false && "Invalid type value");
         return std::numeric_limits<unsigned int>::max();
@@ -254,6 +257,7 @@ namespace MWGui
                 break;
             case ESM4::Book::sRecordId:
             case ESM4::MiscItem::sRecordId:
+            case ESM4::Key::sRecordId:
                 category = Category_Misc;
                 break;
             case ESM::Miscellaneous::sRecordId:

@@ -10,6 +10,7 @@
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/vfs/pathutil.hpp>

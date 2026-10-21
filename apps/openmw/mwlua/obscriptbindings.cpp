@@ -16,6 +16,7 @@
 #include <components/esm4/loadbook.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadnote.hpp>
@@ -109,6 +110,7 @@ namespace MWLua
                 addAll(store.get<ESM4::Book>());
                 addAll(store.get<ESM4::Clothing>());
                 addAll(store.get<ESM4::Ingredient>());
+                addAll(store.get<ESM4::Key>());
                 addAll(store.get<ESM4::MiscItem>());
                 addAll(store.get<ESM4::Potion>());
                 addAll(store.get<ESM4::Weapon>());

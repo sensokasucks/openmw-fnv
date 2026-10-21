@@ -105,8 +105,8 @@ namespace ESM4
         RadioStationData mRadio;
 
         TeleportDest mDoor;
-        bool mIsLocked;
-        std::int8_t mLockLevel;
+        bool mIsLocked = false;
+        std::int8_t mLockLevel = 0; // 0-100; 255 (read as -1) means only a key opens it
         ESM::FormId mKey;
 
         ESM::FormId mTargetRef;
