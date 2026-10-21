@@ -9,15 +9,12 @@ local EnableObject = async:registerTimerCallback('EnableObject', function(obj) o
 
 local function ESM4DoorActivation(door, actor)
     -- TODO: Implement lockpicking minigame
-    -- TODO: Play door opening animation
     local Door4 = types.ESM4Door
-    core.sound.playSound3d(Door4.record(door).openSound, actor)
-    if Door4.isTeleport(door) then
-        actor:teleport(Door4.destCell(door), Door4.destPosition(door), Door4.destRotation(door))
-    else
-        door.enabled = false
-        async:newSimulationTimer(5, EnableObject, door)
+    if not Door4.isTeleport(door) then
+        return -- C++ (MWClass::ESM4Door) plays the open/close animation and sound
     end
+    core.sound.playSound3d(Door4.record(door).openSound, actor)
+    actor:teleport(Door4.destCell(door), Door4.destPosition(door), Door4.destRotation(door))
     return false -- disable activation handling in C++ mwmechanics code
 end
 
