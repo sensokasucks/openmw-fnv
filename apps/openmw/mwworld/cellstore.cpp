@@ -123,6 +123,16 @@ namespace
     {
         using StateType = ESM::CreatureLevListState;
     };
+    template <>
+    struct RecordToState<ESM4::Container>
+    {
+        using StateType = ESM::ContainerState;
+    };
+    template <>
+    struct RecordToState<ESM4::Door>
+    {
+        using StateType = ESM::DoorState;
+    };
 
     template <typename T>
     MWWorld::Ptr searchInContainerList(MWWorld::CellRefList<T>& containerList, const ESM::RefId& id)
@@ -149,11 +159,6 @@ namespace
         // references
         for (const MWWorld::LiveCellRef<T>& liveCellRef : collection.mList)
         {
-            if (ESM::isESM4Rec(T::sRecordId))
-            {
-                // TODO: Implement loading/saving of REFR4 and ACHR4 with ESM3 reader/writer.
-                continue;
-            }
             if (!liveCellRef.mData.hasChanged() && !liveCellRef.mRef.hasChanged() && liveCellRef.mRef.hasContentFile())
             {
                 // Reference that came from a content file and has not been changed -> ignore
@@ -443,10 +448,16 @@ namespace MWWorld
             Log(Debug::Warning) << "Warning: could not resolve cell reference " << ref.mId << " (dropping reference)";
             return;
         }
-        LiveCellRef<X> liveCellRef(ref, ptr);
         if (!isEnabled(ref, esmStore))
-            liveCellRef.mData.disable();
-        list.push_back(std::move(liveCellRef));
+        {
+            // Start disabled through the record flag rather than RefData::disable(), so the reference is not
+            // marked as changed and written to every saved game.
+            R disabled = ref;
+            disabled.mFlags |= ESM4::Rec_Disabled;
+            list.push_back(LiveCellRef<X>(disabled, ptr));
+            return;
+        }
+        list.push_back(LiveCellRef<X>(ref, ptr));
     }
 
     template <typename X>

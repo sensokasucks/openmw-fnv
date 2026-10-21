@@ -1,6 +1,8 @@
 #include "esm4container.hpp"
 #include "esm4lock.hpp"
 
+#include <components/esm3/containerstate.hpp>
+
 #include <MyGUI_TextIterator.h>
 #include <MyGUI_UString.h>
 
@@ -20,6 +22,11 @@ namespace MWClass
     ESM4ContainerCustomData::ESM4ContainerCustomData(const ESM4::Container& container)
     {
         mStore.fillESM4(container.mInventory, MWBase::Environment::get().getWorld()->getPrng());
+    }
+
+    ESM4ContainerCustomData::ESM4ContainerCustomData(const ESM::InventoryState& inventory)
+    {
+        mStore.readState(inventory);
     }
 
     ESM4Container::ESM4Container()
@@ -97,5 +104,32 @@ namespace MWClass
     float ESM4Container::getEncumbrance(const MWWorld::Ptr& ptr) const
     {
         return getContainerStore(ptr).getWeight();
+    }
+
+    void ESM4Container::readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const
+    {
+        if (!state.mHasCustomState)
+            return;
+
+        const ESM::ContainerState& containerState = state.asContainerState();
+        ptr.getRefData().setCustomData(std::make_unique<ESM4ContainerCustomData>(containerState.mInventory));
+
+        MWBase::Environment::get().getWorldModel()->registerPtr(ptr);
+        getContainerStore(ptr).setPtr(ptr);
+    }
+
+    void ESM4Container::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
+    {
+        // A container whose inventory was never rolled has nothing to save; it is filled when first opened.
+        if (!ptr.getRefData().getCustomData())
+        {
+            state.mHasCustomState = false;
+            return;
+        }
+
+        const ESM4ContainerCustomData& customData
+            = static_cast<const ESM4ContainerCustomData&>(*ptr.getRefData().getCustomData());
+        ESM::ContainerState& containerState = state.asContainerState();
+        customData.mStore.writeState(containerState.mInventory);
     }
 }

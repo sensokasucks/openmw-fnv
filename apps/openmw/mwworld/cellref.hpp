@@ -278,6 +278,10 @@ namespace MWWorld
         // Write the content of this CellRef into the given ObjectState
         void writeState(ESM::ObjectState& state) const;
 
+        // Read state written by writeState(). An ESM4 reference keeps its content file data and only takes the
+        // fields that change during play; an ESM3 one is replaced entirely.
+        void loadState(const ESM::ObjectState& state);
+
         // Has this CellRef changed since it was originally loaded?
         bool hasChanged() const { return mChanged; }
 
