@@ -855,6 +855,10 @@ namespace Resource
                 return false;
         }
 
+        // FO3/FONV hair meshes hold "Hat" and "NoHat" variants that are toggled per NPC.
+        if (filename.find("characters/hair/") != std::string_view::npos)
+            return false;
+
         // For spell VFX, DummyXX nodes must remain intact. Not adding those to reservedNames to avoid being overly
         // cautious - instead, decide on filename
         if (filename.find("vfx_pattern") != std::string_view::npos)

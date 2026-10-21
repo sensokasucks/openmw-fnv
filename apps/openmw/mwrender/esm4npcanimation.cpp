@@ -9,8 +9,11 @@
 #include <components/esm4/loadrace.hpp>
 
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/strings/algorithm.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
+#include <components/sceneutil/attach.hpp>
+#include <components/sceneutil/visitor.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwclass/esm4npc.hpp"
@@ -36,9 +39,7 @@ namespace MWRender
         if (traits->mIsTES4)
             updatePartsTES4(*traits);
         else if (traits->mIsFONV)
-        {
-            // Not implemented yet
-        }
+            updatePartsFONV(*traits);
         else
         {
             // There is no easy way to distinguish TES5 and FO3.
@@ -91,6 +92,92 @@ namespace MWRender
             insertPart(chooseTes4EquipmentModel(armor, isFemale));
         for (const ESM4::Clothing* clothing : MWClass::ESM4Npc::getEquippedClothing(mPtr))
             insertPart(chooseTes4EquipmentModel(clothing, isFemale));
+    }
+
+    osg::ref_ptr<osg::Node> ESM4NpcAnimation::attachPart(std::string_view model)
+    {
+        if (model.empty() || !Misc::StringUtils::ciEndsWith(model, ".nif"))
+            return nullptr;
+        Resource::SceneManager* sceneManager = mResourceSystem->getSceneManager();
+        osg::ref_ptr<const osg::Node> templateNode
+            = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
+
+        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) are modelled relative to the
+        // head bone, which is their "Prn" parent in FO3/FONV.
+        constexpr std::string_view headBone = "Bip01 Head";
+        const NodeMap& nodeMap = getNodeMap();
+        auto found = nodeMap.find(headBone);
+        osg::Group* attachNode = found != nodeMap.end() ? found->second.get() : mObjectRoot.get();
+        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, attachNode, sceneManager);
+    }
+
+    void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
+    {
+        const MWWorld::ESMStore* store = MWBase::Environment::get().getESMStore();
+        const ESM4::Race* race = MWClass::ESM4Npc::getRace(mPtr);
+        const bool isFemale = MWClass::ESM4Npc::isFemale(mPtr);
+
+        // The skeleton carries a facial animation helper shape that the game never draws.
+        SceneUtil::FindByNameVisitor findHeadAnims("HeadAnims");
+        mObjectRoot->accept(findHeadAnims);
+        if (findHeadAnims.mFoundNode)
+            findHeadAnims.mFoundNode->setNodeMask(0);
+
+        // Equip at most one armor per biped slot, in inventory order.
+        uint32_t usedSlots = 0;
+        for (const ESM4::Armor* armor : MWClass::ESM4Npc::getEquippedArmor(mPtr))
+        {
+            const uint32_t slots = armor->mArmorFlags & 0x000fffff;
+            if (slots == 0 || (slots & usedSlots))
+                continue;
+            const ESM::Path& model
+                = isFemale && !armor->mModelFemale.empty() ? armor->mModelFemale : armor->mModelMale;
+            if (model.empty())
+                continue;
+            usedSlots |= slots;
+            attachPart(model.getOriginal());
+        }
+
+        // Race body: 0 upper body, 1 left hand, 2 right hand, 3 body texture (.egt)
+        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        constexpr uint32_t bodySlots[] = { ESM4::Armor::FO3_UpperBody, ESM4::Armor::FO3_LeftHand,
+            ESM4::Armor::FO3_RightHand };
+        for (size_t i = 0; i < bodyParts.size() && i < std::size(bodySlots); ++i)
+            if (!(usedSlots & bodySlots[i]))
+                attachPart(bodyParts[i].mesh);
+
+        if (usedSlots & ESM4::Armor::FO3_Head)
+            return;
+
+        // Race head: head, ears, mouth, lower teeth, upper teeth, tongue, left eye, right eye
+        for (const ESM4::Race::BodyPart& part : isFemale ? race->mHeadPartsFemale : race->mHeadParts)
+            attachPart(part.mesh);
+
+        for (ESM::FormId partId : traits.mHeadParts)
+        {
+            if (partId.isZeroOrUnset())
+                continue;
+            if (const ESM4::HeadPart* part = store->get<ESM4::HeadPart>().search(partId))
+                attachPart(part->mModel.getOriginal());
+            else
+                Log(Debug::Error) << "Head part not found: " << ESM::RefId(partId);
+        }
+
+        if (!traits.mHair.isZeroOrUnset() && !(usedSlots & ESM4::Armor::FO3_Hair))
+        {
+            const ESM4::Hair* hair = store->get<ESM4::Hair>().search(traits.mHair);
+            if (hair == nullptr)
+                Log(Debug::Error) << "Hair not found: " << ESM::RefId(traits.mHair);
+            else if (osg::ref_ptr<osg::Node> node = attachPart(hair->mModel.getOriginal()))
+            {
+                // Hair meshes carry a full and a trimmed variant; show the one that fits under a hat.
+                const bool hat = usedSlots & ESM4::Armor::FO3_Hat;
+                SceneUtil::FindByNameVisitor findHidden(hat ? "NoHat" : "Hat");
+                node->accept(findHidden);
+                if (findHidden.mFoundNode)
+                    findHidden.mFoundNode->setNodeMask(0);
+            }
+        }
     }
 
     void ESM4NpcAnimation::insertHeadParts(
