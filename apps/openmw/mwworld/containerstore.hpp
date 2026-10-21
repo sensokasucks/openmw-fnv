@@ -19,6 +19,17 @@
 #include <components/esm3/loadrepa.hpp>
 #include <components/esm3/loadweap.hpp>
 
+#include <components/esm4/loadalch.hpp>
+#include <components/esm4/loadammo.hpp>
+#include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadbook.hpp>
+#include <components/esm4/loadclot.hpp>
+#include <components/esm4/loadimod.hpp>
+#include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadmisc.hpp>
+#include <components/esm4/inventory.hpp>
+#include <components/esm4/loadweap.hpp>
+
 #include <components/misc/rng.hpp>
 
 #include "cellreflist.hpp"
@@ -140,6 +151,15 @@ namespace MWWorld
         typename Iterator<ESM::Probe>::type mProbe;
         typename Iterator<ESM::Repair>::type mRepair;
         typename Iterator<ESM::Weapon>::type mWeapon;
+        typename Iterator<ESM4::Potion>::type mESM4Potion;
+        typename Iterator<ESM4::Ammunition>::type mESM4Ammunition;
+        typename Iterator<ESM4::Armor>::type mESM4Armor;
+        typename Iterator<ESM4::Book>::type mESM4Book;
+        typename Iterator<ESM4::Clothing>::type mESM4Clothing;
+        typename Iterator<ESM4::Ingredient>::type mESM4Ingredient;
+        typename Iterator<ESM4::ItemMod>::type mESM4ItemMod;
+        typename Iterator<ESM4::MiscItem>::type mESM4MiscItem;
+        typename Iterator<ESM4::Weapon>::type mESM4Weapon;
 
         ContainerStoreIteratorBase(ContainerStoreType container);
         ///< End-iterator
@@ -160,6 +180,15 @@ namespace MWWorld
         ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM::Probe>::type);
         ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM::Repair>::type);
         ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM::Weapon>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Potion>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Ammunition>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Armor>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Book>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Clothing>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Ingredient>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::ItemMod>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::MiscItem>::type);
+        ContainerStoreIteratorBase(ContainerStoreType container, typename Iterator<ESM4::Weapon>::type);
 
         template <class T>
         void copy(const ContainerStoreIteratorBase<T>& src);
@@ -227,6 +256,15 @@ namespace MWWorld
             MWWorld::CellRefList<ESM::Probe> mProbes;
             MWWorld::CellRefList<ESM::Repair> mRepairs;
             MWWorld::CellRefList<ESM::Weapon> mWeapons;
+            MWWorld::CellRefList<ESM4::Potion> mESM4Potions;
+            MWWorld::CellRefList<ESM4::Ammunition> mESM4Ammo;
+            MWWorld::CellRefList<ESM4::Armor> mESM4Armors;
+            MWWorld::CellRefList<ESM4::Book> mESM4Books;
+            MWWorld::CellRefList<ESM4::Clothing> mESM4Clothes;
+            MWWorld::CellRefList<ESM4::Ingredient> mESM4Ingreds;
+            MWWorld::CellRefList<ESM4::ItemMod> mESM4ItemMods;
+            MWWorld::CellRefList<ESM4::MiscItem> mESM4MiscItems;
+            MWWorld::CellRefList<ESM4::Weapon> mESM4Weapons;
         };
 
     public:
@@ -242,10 +280,19 @@ namespace MWWorld
         static constexpr int Type_Probe = 0x0200;
         static constexpr int Type_Repair = 0x0400;
         static constexpr int Type_Weapon = 0x0800;
+        static constexpr int Type_ESM4Potion = 0x001000;
+        static constexpr int Type_ESM4Ammunition = 0x002000;
+        static constexpr int Type_ESM4Armor = 0x004000;
+        static constexpr int Type_ESM4Book = 0x008000;
+        static constexpr int Type_ESM4Clothing = 0x010000;
+        static constexpr int Type_ESM4Ingredient = 0x020000;
+        static constexpr int Type_ESM4ItemMod = 0x040000;
+        static constexpr int Type_ESM4MiscItem = 0x080000;
+        static constexpr int Type_ESM4Weapon = 0x100000;
 
-        static constexpr int Type_Last = Type_Weapon;
+        static constexpr int Type_Last = Type_ESM4Weapon;
 
-        static constexpr int Type_All = 0xffff;
+        static constexpr int Type_All = 0x1fffff;
 
         static const ESM::RefId sGoldId;
 
@@ -254,7 +301,10 @@ namespace MWWorld
             return t == ESM::Potion::sRecordId || t == ESM::Apparatus::sRecordId || t == ESM::Armor::sRecordId
                 || t == ESM::Book::sRecordId || t == ESM::Clothing::sRecordId || t == ESM::Ingredient::sRecordId
                 || t == ESM::Light::sRecordId || t == ESM::Lockpick::sRecordId || t == ESM::Miscellaneous::sRecordId
-                || t == ESM::Probe::sRecordId || t == ESM::Repair::sRecordId || t == ESM::Weapon::sRecordId;
+                || t == ESM::Probe::sRecordId || t == ESM::Repair::sRecordId || t == ESM::Weapon::sRecordId
+                || t == ESM4::Potion::sRecordId || t == ESM4::Ammunition::sRecordId || t == ESM4::Armor::sRecordId
+                || t == ESM4::Book::sRecordId || t == ESM4::Clothing::sRecordId || t == ESM4::Ingredient::sRecordId
+                || t == ESM4::ItemMod::sRecordId || t == ESM4::MiscItem::sRecordId || t == ESM4::Weapon::sRecordId;
         }
         template <typename T>
         static constexpr bool isStorableType()
@@ -423,6 +473,9 @@ namespace MWWorld
 
         void fillNonRandom(const ESM::InventoryList& items, const ESM::RefId& owner, unsigned int seed);
         ///< Insert items into *this, excluding leveled items
+
+        void fillESM4(const std::vector<ESM4::InventoryItem>& items, Misc::Rng::Generator& prng);
+        ///< Insert ESM4 (FNV) container items into *this, resolving levelled lists.
 
         virtual void clear();
         ///< Empty container.

@@ -812,7 +812,8 @@ namespace MWGui
             && (type != ESM::Clothing::sRecordId) && (type != ESM::Ingredient::sRecordId)
             && (type != ESM::Light::sRecordId) && (type != ESM::Miscellaneous::sRecordId)
             && (type != ESM::Lockpick::sRecordId) && (type != ESM::Probe::sRecordId) && (type != ESM::Repair::sRecordId)
-            && (type != ESM::Weapon::sRecordId) && (type != ESM::Potion::sRecordId))
+            && (type != ESM::Weapon::sRecordId) && (type != ESM::Potion::sRecordId)
+            && !MWWorld::ContainerStore::isStorableType(type))
             return;
 
         // An object that can be picked up must have a tooltip.

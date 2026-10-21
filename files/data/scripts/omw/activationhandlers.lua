@@ -24,6 +24,7 @@ local function ESM4BookActivation(book, actor)
     if actor.type == types.Player then
         actor:sendEvent('AddUiMode', { mode = 'Book', target = book })
     end
+    return false -- read in place; C++ would otherwise pick the book up
 end
 
 local handlersPerObject = {}

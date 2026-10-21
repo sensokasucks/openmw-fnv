@@ -96,6 +96,8 @@ namespace
                 return func(store.get<ESM4::Book>());
             case ESM::REC_CLOT4:
                 return func(store.get<ESM4::Clothing>());
+            case ESM::REC_IMOD4:
+                return func(store.get<ESM4::ItemMod>());
             case ESM::REC_INGR4:
                 return func(store.get<ESM4::Ingredient>());
             case ESM::REC_MISC4:
