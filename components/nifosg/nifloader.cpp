@@ -331,6 +331,34 @@ namespace NifOsg
         // This is used to queue emitters that weren't attached to their node yet.
         std::vector<std::pair<unsigned int, osg::ref_ptr<Emitter>>> mEmitterQueue;
 
+        // Gamebryo 10+ KF files (FO3/FONV): one NiControllerSequence whose controlled blocks name the animated nodes.
+        void loadControllerSequence(const Nif::NiControllerSequence* seq, SceneUtil::KeyframeHolder& target) const
+        {
+            if (!seq->mTextKeys.empty() && seq->mTextKeys->mRecordType == Nif::RC_NiTextKeyExtraData)
+                extractTextKeys(static_cast<const Nif::NiTextKeyExtraData*>(seq->mTextKeys.getPtr()), target.mTextKeys);
+
+            const auto function = std::make_shared<ControllerFunction>(seq);
+            for (const Nif::ControlledBlock& block : seq->mControlledBlocks)
+            {
+                if (block.mInterpolator.empty() || block.mNodeName.empty())
+                    continue;
+                if (!block.mControllerType.empty() && block.mControllerType != "NiTransformController")
+                    continue;
+                const unsigned int type = block.mInterpolator->mRecordType;
+                if (type != Nif::RC_NiTransformInterpolator && type != Nif::RC_NiBSplineCompTransformInterpolator
+                    && type != Nif::RC_NiBSplineTransformInterpolator)
+                    continue;
+
+                osg::ref_ptr<SceneUtil::KeyframeController> callback
+                    = new NifOsg::KeyframeController(block.mInterpolator.getPtr());
+                callback->setFunction(function);
+
+                if (!target.mKeyframeControllers.emplace(block.mNodeName, callback).second)
+                    Log(Debug::Verbose) << "Controller " << block.mNodeName << " present more than once in "
+                                        << mFilename << ", ignoring later version";
+            }
+        }
+
         void loadKf(Nif::FileView nif, SceneUtil::KeyframeHolder& target) const
         {
             const Nif::NiSequenceStreamHelper* seq = nullptr;
@@ -347,6 +375,15 @@ namespace NifOsg
 
             if (!seq)
             {
+                for (size_t i = 0; i < numRoots; ++i)
+                {
+                    const Nif::Record* r = nif.getRoot(i);
+                    if (r && r->mRecordType == Nif::RC_NiControllerSequence)
+                    {
+                        loadControllerSequence(static_cast<const Nif::NiControllerSequence*>(r), target);
+                        return;
+                    }
+                }
                 Log(Debug::Warning) << "NIFFile Warning: Found no NiSequenceStreamHelper root record. File: "
                                     << nif.getFilename();
                 return;
@@ -1534,8 +1571,15 @@ namespace NifOsg
                 hasPartitions = partitions != nullptr;
                 if (hasPartitions)
                 {
-                    for (const Nif::NiSkinPartition::Partition& partition : partitions->mPartitions)
+                    const Nif::BSDismemberSkinInstance* dismember = skin->mRecordType == Nif::RC_BSDismemberSkinInstance
+                        ? static_cast<const Nif::BSDismemberSkinInstance*>(skin)
+                        : nullptr;
+                    for (size_t i = 0; i < partitions->mPartitions.size(); ++i)
                     {
+                        // Body part types from 100 up are dismemberment caps and gore, only shown once a limb is lost
+                        if (dismember && i < dismember->mParts.size() && dismember->mParts[i].mType >= 100)
+                            continue;
+                        const Nif::NiSkinPartition::Partition& partition = partitions->mPartitions[i];
                         const std::vector<unsigned short>& trueTriangles = partition.mTrueTriangles;
                         if (!trueTriangles.empty())
                         {

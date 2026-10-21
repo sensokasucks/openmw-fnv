@@ -200,6 +200,7 @@ namespace NifOsg
 
     public:
         ControllerFunction(const Nif::NiTimeController* ctrl);
+        ControllerFunction(const Nif::NiControllerSequence* sequence);
 
         float calculate(float value) const override;
 
@@ -238,6 +239,8 @@ namespace NifOsg
         KeyframeController();
         KeyframeController(const KeyframeController& copy, const osg::CopyOp& copyop);
         KeyframeController(const Nif::NiKeyframeController* keyctrl);
+        // NiTransformInterpolator or NiBSpline(Comp)TransformInterpolator, as found in Gamebryo 10+ KF sequences
+        KeyframeController(const Nif::NiInterpolator* interpolator);
 
         META_Object(NifOsg, KeyframeController)
 
@@ -261,6 +264,7 @@ namespace NifOsg
         Nif::NiKeyframeData::AxisOrder mAxisOrder{ Nif::NiKeyframeData::AxisOrder::Order_XYZ };
 
         osg::Quat getXYZRotation(float time) const;
+        void initFromInterpolator(const Nif::NiInterpolator* interpolator);
     };
 #ifdef _MSC_VER
 #pragma warning(pop)

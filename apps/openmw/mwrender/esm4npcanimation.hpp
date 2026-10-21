@@ -34,6 +34,7 @@ namespace MWRender
         void updatePartsTES4(const ESM4::Npc& traits);
         void updatePartsTES5(const ESM4::Npc& traits);
         void updatePartsFONV(const ESM4::Npc& traits);
+        void playIdleFONV();
     };
 }
 

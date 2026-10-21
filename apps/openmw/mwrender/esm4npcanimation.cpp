@@ -12,10 +12,16 @@
 #include <osg/Transform>
 
 #include <components/misc/resourcehelpers.hpp>
+#include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
+#include <components/resource/keyframemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
 #include <components/sceneutil/attach.hpp>
+#include <components/sceneutil/controller.hpp>
+#include <components/sceneutil/keyframe.hpp>
+#include <components/sceneutil/riggeometry.hpp>
+#include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -42,7 +48,10 @@ namespace MWRender
         if (traits->mIsTES4)
             updatePartsTES4(*traits);
         else if (traits->mIsFONV)
+        {
             updatePartsFONV(*traits);
+            playIdleFONV();
+        }
         else
         {
             // There is no easy way to distinguish TES5 and FO3.
@@ -97,6 +106,35 @@ namespace MWRender
             insertPart(chooseTes4EquipmentModel(clothing, isFemale));
     }
 
+    namespace
+    {
+        // Collects the shapes of a skinned part without the bone nodes the part file carries along, so that the
+        // copies bind to the NPC skeleton instead of to the part's own static bones.
+        class CollectRigsVisitor : public osg::NodeVisitor
+        {
+        public:
+            CollectRigsVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Drawable& drawable) override
+            {
+                if (!dynamic_cast<SceneUtil::RigGeometry*>(&drawable))
+                    return;
+                // The shape's own node carries its material and textures; anything above it is skeleton.
+                const osg::NodePath& path = getNodePath();
+                const osg::Node* node = &drawable;
+                if (path.size() >= 3)
+                    node = path[path.size() - 2];
+                if (std::find(mShapes.begin(), mShapes.end(), node) == mShapes.end())
+                    mShapes.push_back(node);
+            }
+
+            std::vector<const osg::Node*> mShapes;
+        };
+    }
+
     osg::ref_ptr<osg::Node> ESM4NpcAnimation::attachPart(std::string_view model)
     {
         if (model.empty() || !Misc::StringUtils::ciEndsWith(model, ".nif"))
@@ -104,6 +142,18 @@ namespace MWRender
         Resource::SceneManager* sceneManager = mResourceSystem->getSceneManager();
         osg::ref_ptr<const osg::Node> templateNode
             = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
+
+        if (dynamic_cast<const SceneUtil::Skeleton*>(templateNode.get()))
+        {
+            CollectRigsVisitor collect;
+            const_cast<osg::Node*>(templateNode.get())->accept(collect);
+            osg::ref_ptr<osg::Group> handle = new osg::Group;
+            for (const osg::Node* shape : collect.mShapes)
+                handle->addChild(sceneManager->getInstance(shape));
+            handle->getOrCreateUserDataContainer()->addUserObject(new Resource::TemplateRef(templateNode));
+            mObjectRoot->addChild(handle);
+            return handle;
+        }
 
         // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) hang off the head bone, which
         // is their "Prn" parent in FO3/FONV, but are modelled upright in skeleton axes like the skinned head.
@@ -208,6 +258,46 @@ namespace MWRender
                     findHidden.mFoundNode->setNodeMask(0);
                 tintHair(*node, traits.mHairColour);
             }
+        }
+    }
+
+    void ESM4NpcAnimation::playIdleFONV()
+    {
+        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
+        // standing idle that sits next to the skeleton so NPCs don't stand in the bind pose.
+        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const std::string_view skeleton = skeletonPath.value();
+        const size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return;
+        const VFS::Path::Normalized idle(std::string(skeleton.substr(0, slash)) + "/locomotion/mtidle.kf");
+        if (!mResourceSystem->getVFS()->exists(idle))
+            return;
+
+        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(idle);
+        const NodeMap& nodeMap = getNodeMap();
+        const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
+        const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
+        for (const auto& [name, controller] : keyframes->mKeyframeControllers)
+        {
+            // Without movement accumulation, "Bip01 NonAccum" carries the whole root offset, so it belongs on the
+            // accumulation root that holds the pelvis height in the skeleton.
+            const std::string_view target = !hasAccumRootTrack && name == "Bip01 NonAccum" ? "Bip01" : name;
+            auto found = nodeMap.find(target);
+            if (found == nodeMap.end() || !dynamic_cast<NifOsg::MatrixTransform*>(found->second.get()))
+                continue;
+            // The skeleton's own transform controllers have no time source and would reset the bone every frame.
+            osg::Callback* callback = found->second->getUpdateCallback();
+            while (callback != nullptr)
+            {
+                osg::Callback* next = callback->getNestedCallback();
+                if (dynamic_cast<SceneUtil::KeyframeController*>(callback))
+                    found->second->removeUpdateCallback(callback);
+                callback = next;
+            }
+            osg::ref_ptr<SceneUtil::KeyframeController> cloned = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
+            cloned->setSource(source);
+            found->second->addUpdateCallback(cloned->getAsCallback());
         }
     }
 
