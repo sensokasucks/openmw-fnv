@@ -62,6 +62,7 @@ namespace MWClass
     public:
         const ESM4::Npc* mTraits;
         const ESM4::Npc* mBaseData;
+        const ESM4::Npc* mModel; // FO3/FONV: the record that provides the skeleton
         const ESM4::Race* mRace;
         bool mIsFemale;
 
@@ -102,6 +103,8 @@ namespace MWClass
         if (data->mBaseData == nullptr)
             Log(Debug::Warning) << "Base data is not found for ESM4 NPC base record: \"" << base->mEditorId << "\" ("
                                 << ESM::RefId(base->mId) << ")";
+
+        data->mModel = chooseTemplate(npcRecs, ESM4::Npc::Template_UseModel);
 
         if (data->mTraits != nullptr)
         {
@@ -182,6 +185,12 @@ namespace MWClass
             return {};
         if (data.mTraits->mIsTES4)
             return data.mTraits->mModel.getNormalized();
+        if (data.mTraits->mIsFONV)
+        {
+            if (data.mModel == nullptr)
+                return {};
+            return data.mModel->mModel.getNormalized();
+        }
         return data.mIsFemale ? data.mRace->mModelFemale.getNormalized() : data.mRace->mModelMale.getNormalized();
     }
 

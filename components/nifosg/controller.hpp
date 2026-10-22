@@ -243,7 +243,10 @@ namespace NifOsg
         KeyframeController();
         KeyframeController(const KeyframeController& copy, const osg::CopyOp& copyop);
         KeyframeController(const Nif::NiKeyframeController* keyctrl);
+        // Embedded sequences: keys only, channels without keys keep the node's own transform
         explicit KeyframeController(const Nif::NiTransformInterpolator* interp);
+        // NiTransformInterpolator or NiBSpline(Comp)TransformInterpolator, as found in Gamebryo 10+ KF sequences
+        KeyframeController(const Nif::NiInterpolator* interpolator);
 
         META_Object(NifOsg, KeyframeController)
 
@@ -257,7 +260,6 @@ namespace NifOsg
         void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
 
     private:
-        void initFromInterpolator(const Nif::NiTransformInterpolator* interp);
 
         QuaternionInterpolator mRotations;
 
@@ -271,6 +273,7 @@ namespace NifOsg
         Nif::NiKeyframeData::AxisOrder mAxisOrder{ Nif::NiKeyframeData::AxisOrder::Order_XYZ };
 
         osg::Quat getXYZRotation(float time) const;
+        void initFromInterpolator(const Nif::NiInterpolator* interpolator);
     };
 
     // Plays the NiControllerSequences embedded in a Gamebryo NIF (e.g. the "Open" and "Close" sequences of an ESM4
