@@ -3,14 +3,14 @@
 
 #include "animation.hpp"
 
+#include <osg/Matrixf>
+
 #include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include <osg/Quat>
 
 namespace SceneUtil
 {
@@ -52,6 +52,9 @@ namespace MWRender
         float getLocomotionSpeed() const;
 
     private:
+        // FO3/FONV: places rigid head parts in the skinned head's space under the head bone
+        osg::Matrixf mHeadBinding;
+
         Locomotion mLocomotion = Locomotion::Idle;
         bool mDead = false;
         bool mInAction = false;
@@ -59,11 +62,9 @@ namespace MWRender
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
 
-        // FO3/FONV: rotation that puts rigid head parts upright under the head bone
-        std::optional<osg::Quat> mHeadAttitude;
-
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
+        void initHeadBinding(std::string_view headModel);
         void overrideDiffuse(osg::Node& node, std::string_view texture);
         void overrideDiffuse(osg::Node& node, osg::ref_ptr<osg::Image> image);
         osg::ref_ptr<osg::Image> getTexture(std::string_view texture);

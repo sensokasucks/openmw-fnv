@@ -1,5 +1,7 @@
 #include "esm4npcanimation.hpp"
 
+#include <algorithm>
+
 #include <components/esm4/loadarma.hpp>
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadeyes.hpp>
@@ -12,6 +14,7 @@
 #include <span>
 
 #include <osg/Material>
+#include <osg/MatrixTransform>
 #include <osg/io_utils>
 #include <osg/Texture2D>
 #include <osg/Transform>
@@ -182,27 +185,62 @@ namespace MWRender
             const_cast<osg::Node*>(templateNode.get())->accept(collect);
             osg::ref_ptr<osg::Group> handle = new osg::Group;
             for (const osg::Node* shape : collect.mShapes)
-                handle->addChild(sceneManager->getInstance(shape));
+            {
+                osg::ref_ptr<osg::Node> instance = sceneManager->getInstance(shape);
+                // Skinned vertices are placed by the bones alone; a skinned shape's own transform (creature parts
+                // often carry one) is not applied on top.
+                if (auto* transform = dynamic_cast<osg::MatrixTransform*>(instance.get()))
+                    transform->setMatrix(osg::Matrix::identity());
+                handle->addChild(instance);
+            }
             handle->getOrCreateUserDataContainer()->addUserObject(new Resource::TemplateRef(templateNode));
             mObjectRoot->addChild(handle);
             return handle;
         }
 
-        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) hang off the head bone, which
-        // is their "Prn" parent in FO3/FONV, but are modelled upright in skeleton axes like the skinned head.
+        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth, hats...) hang off the head bone,
+        // their "Prn" parent in FO3/FONV, and are modelled in the same space as the skinned head mesh. Place them
+        // with the head mesh's own binding to that bone so they follow it exactly like the skinned head does.
         constexpr std::string_view headBone = "Bip01 Head";
         const NodeMap& nodeMap = getNodeMap();
         auto found = nodeMap.find(headBone);
         if (found == nodeMap.end())
             return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
-        if (!mHeadAttitude)
+        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(mHeadBinding);
+        found->second->addChild(binding);
+        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
+    }
+
+    void ESM4NpcAnimation::initHeadBinding(std::string_view headModel)
+    {
+        mHeadBinding = osg::Matrixf();
+        if (headModel.empty())
+            return;
+        osg::ref_ptr<const osg::Node> head = mResourceSystem->getSceneManager()->getTemplate(
+            Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(headModel)));
+        CollectRigsVisitor collect;
+        const_cast<osg::Node*>(head.get())->accept(collect);
+        for (const osg::Node* shape : collect.mShapes)
         {
-            // The skeleton is still in its bind pose here.
-            const osg::NodePathList paths = found->second->getParentalNodePaths(mObjectRoot);
-            mHeadAttitude = paths.empty() ? osg::Quat() : osg::computeLocalToWorld(paths.front()).getRotate().inverse();
+            const osg::Group* group = shape->asGroup();
+            for (unsigned int i = 0; group && i < group->getNumChildren(); ++i)
+            {
+                const auto* rig = dynamic_cast<const SceneUtil::RigGeometry*>(group->getChild(i));
+                if (const osg::Matrixf* bind = rig ? rig->getInvBindMatrix("Bip01 Head") : nullptr)
+                {
+                    mHeadBinding = *bind;
+                    return;
+                }
+            }
         }
-        return SceneUtil::attach(
-            std::move(templateNode), mObjectRoot, {}, found->second, sceneManager, &*mHeadAttitude);
+    }
+
+    // Parts are instances of cached meshes whose state sets are shared between NPCs, so copy before changing one.
+    static osg::StateSet* getUniqueStateSet(osg::Node& node)
+    {
+        if (const osg::StateSet* shared = node.getStateSet())
+            node.setStateSet(osg::clone(shared, osg::CopyOp::SHALLOW_COPY));
+        return node.getOrCreateStateSet();
     }
 
     static void tintHair(osg::Node& node, const ESM4::Npc::HairColour& colour)
@@ -213,7 +251,7 @@ namespace MWRender
         material->setColorMode(osg::Material::OFF);
         material->setDiffuse(osg::Material::FRONT_AND_BACK, tint);
         material->setAmbient(osg::Material::FRONT_AND_BACK, tint);
-        osg::StateSet* stateset = node.getOrCreateStateSet();
+        osg::StateSet* stateset = getUniqueStateSet(node);
         stateset->setAttributeAndModes(material, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
         stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
@@ -240,7 +278,7 @@ namespace MWRender
         texture2d->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
         texture2d->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
         // The base texture of a BSShaderTextureSet is always bound to the first unit.
-        node.getOrCreateStateSet()->setTextureAttributeAndModes(
+        getUniqueStateSet(node)->setTextureAttributeAndModes(
             0, texture2d, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
@@ -248,6 +286,47 @@ namespace MWRender
     {
         applyFaceGenShape(node, model, traits.mSymShapeModeCoefficients, traits.mAsymShapeModeCoefficients,
             *mResourceSystem->getVFS());
+    }
+
+    namespace
+    {
+        // Finds the skin-shaded shapes of an outfit, tagged by the NIF loader.
+        class CollectSkinVisitor : public osg::NodeVisitor
+        {
+        public:
+            CollectSkinVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                bool skin = false;
+                if (node.getUserValue("bsSkin", skin) && skin)
+                    mNodes.push_back(&node);
+                traverse(node);
+            }
+
+            std::vector<osg::Node*> mNodes;
+        };
+
+        // FO3/FONV hand FaceGen files follow the body's: UpperBodyHumanOldFemale.egt -> LeftHandOldFemale.egt
+        std::string handEgt(std::string_view bodyEgt, std::string_view side)
+        {
+            std::string path = Misc::StringUtils::lowerCase(bodyEgt);
+            std::replace(path.begin(), path.end(), '/', '\\');
+            const size_t slash = path.find_last_of('\\');
+            std::string name = path.substr(slash == std::string::npos ? 0 : slash + 1);
+            for (std::string_view prefix : { "upperbodyhuman", "upperbody" })
+            {
+                if (name.starts_with(prefix))
+                {
+                    name.erase(0, prefix.size());
+                    return path.substr(0, slash + 1) + std::string(side) + name;
+                }
+            }
+            return {};
+        }
     }
 
     void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
@@ -262,6 +341,28 @@ namespace MWRender
         if (findHeadAnims.mFoundNode)
             findHeadAnims.mFoundNode->setNodeMask(0);
 
+        initHeadBinding(race->mHeadParts.empty() ? std::string_view()
+                                                 : std::string_view((isFemale ? race->mHeadPartsFemale
+                                                                              : race->mHeadParts)[0].mesh));
+
+        // Every human race shares the same skin textures; the NPC's FaceGen texture modes give it its colour, on the
+        // body and hands as on the face. Race body parts: 0 upper body, 1 left hand, 2 right hand, 3 body .egt
+        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        auto skinTexture = [&](std::string_view texture, std::string_view egt) {
+            osg::ref_ptr<osg::Image> base = getTexture(texture);
+            if (!base || egt.empty())
+                return base;
+            osg::ref_ptr<osg::Image> skin = makeFaceGenTexture(*base, egt, traits.mSymTextureModeCoefficients, vfs);
+            return skin ? skin : base;
+        };
+        const std::string_view bodyEgt = bodyParts.size() > 3 ? std::string_view(bodyParts[3].mesh) : std::string_view();
+        osg::ref_ptr<osg::Image> bodySkin = bodyParts.size() > 0 ? skinTexture(bodyParts[0].texture, bodyEgt) : nullptr;
+        osg::ref_ptr<osg::Image> leftHandSkin
+            = bodyParts.size() > 1 ? skinTexture(bodyParts[1].texture, handEgt(bodyEgt, "lefthand")) : nullptr;
+        osg::ref_ptr<osg::Image> rightHandSkin
+            = bodyParts.size() > 2 ? skinTexture(bodyParts[2].texture, handEgt(bodyEgt, "righthand")) : nullptr;
+
         // Equip at most one armor per biped slot, in inventory order.
         uint32_t usedSlots = 0;
         for (const ESM4::Armor* armor : MWClass::ESM4Npc::getEquippedArmor(mPtr))
@@ -274,20 +375,36 @@ namespace MWRender
             if (model.empty())
                 continue;
             usedSlots |= slots;
-            attachPart(model.getOriginal());
+            osg::ref_ptr<osg::Node> node = attachPart(model.getOriginal());
+            if (!node)
+                continue;
+            // Bare skin in outfits is painted with the generic body or hand texture; use the NPC's instead.
+            CollectSkinVisitor collectSkin;
+            node->accept(collectSkin);
+            for (osg::Node* skinNode : collectSkin.mNodes)
+            {
+                const osg::StateSet* stateset = skinNode->getStateSet();
+                const osg::Texture* texture = stateset ? dynamic_cast<const osg::Texture*>(
+                                                  stateset->getTextureAttribute(0, osg::StateAttribute::TEXTURE))
+                                                       : nullptr;
+                const osg::Image* image = texture ? texture->getImage(0) : nullptr;
+                const std::string name = image ? Misc::StringUtils::lowerCase(image->getFileName()) : std::string();
+                if (name.find("hand") != std::string::npos)
+                    overrideDiffuse(*skinNode, leftHandSkin);
+                else if (name.find("upperbody") != std::string::npos)
+                    overrideDiffuse(*skinNode, bodySkin);
+            }
         }
 
-        // Race body: 0 upper body, 1 left hand, 2 right hand, 3 body texture (.egt)
-        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        const osg::ref_ptr<osg::Image> bodySkins[] = { bodySkin, leftHandSkin, rightHandSkin };
         constexpr uint32_t bodySlots[] = { ESM4::Armor::FO3_UpperBody, ESM4::Armor::FO3_LeftHand,
             ESM4::Armor::FO3_RightHand };
         for (size_t i = 0; i < bodyParts.size() && i < std::size(bodySlots); ++i)
         {
             if (usedSlots & bodySlots[i])
                 continue;
-            // Races share body meshes and set their own skin with the part's texture
             if (osg::ref_ptr<osg::Node> node = attachPart(bodyParts[i].mesh))
-                overrideDiffuse(*node, bodyParts[i].texture);
+                overrideDiffuse(*node, bodySkins[i]);
         }
 
         if (usedSlots & ESM4::Armor::FO3_Head)
@@ -541,6 +658,9 @@ namespace MWRender
             dir + (isFemale() ? "female/" : "male/") + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
+        // Creatures keep their idle next to the skeleton (creatures/nvgecko/mtidle.kf)
+        if (!mResourceSystem->getVFS()->exists(path))
+            path = VFS::Path::Normalized(std::string(skeleton.substr(0, slash + 1)) + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
         {
             Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
@@ -557,9 +677,19 @@ namespace MWRender
         const NodeMap& nodeMap = getNodeMap();
         float duration = 0.f;
 
-        // Drop the sequence played before
+        // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
+        // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which
+        // lifts "Bip01" instead) takes over, leaving the NPC floating.
         for (auto& [node, callback] : mLoopCallbacks)
+        {
             node->removeUpdateCallback(callback);
+            if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
+            {
+                transform->setRotation(transform->mRotationScale);
+                if (auto rest = mRestTranslations.find(transform); rest != mRestTranslations.end())
+                    transform->setTranslation(rest->second);
+            }
+        }
         mLoopCallbacks.clear();
 
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");

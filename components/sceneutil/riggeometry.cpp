@@ -28,6 +28,16 @@ namespace SceneUtil
         setNumChildrenRequiringUpdateTraversal(1);
     }
 
+    const osg::Matrixf* RigGeometry::getInvBindMatrix(std::string_view boneName) const
+    {
+        if (mData == nullptr)
+            return nullptr;
+        for (const BoneInfo& bone : mData->mBones)
+            if (Misc::StringUtils::ciEqual(bone.mName, boneName))
+                return &bone.mInvBindMatrix;
+        return nullptr;
+    }
+
     void RigGeometry::setSourceGeometry(osg::ref_ptr<osg::Geometry> sourceGeometry)
     {
         for (unsigned int i = 0; i < 2; ++i)

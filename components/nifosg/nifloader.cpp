@@ -1795,8 +1795,10 @@ namespace NifOsg
                         : nullptr;
                     for (size_t i = 0; i < partitions->mPartitions.size(); ++i)
                     {
-                        // Body part types from 100 up are dismemberment caps and gore, only shown once a limb is lost
-                        if (dismember && i < dismember->mParts.size() && dismember->mParts[i].mType >= 100)
+                        // Body part types 100-999 are dismemberment caps and gore, only shown once a limb is lost.
+                        // From 1000 up they are ordinary sections (3000 upper left arm, 10000 upper torso...).
+                        if (dismember && i < dismember->mParts.size() && dismember->mParts[i].mType >= 100
+                            && dismember->mParts[i].mType < 1000)
                             continue;
                         const Nif::NiSkinPartition::Partition& partition = partitions->mPartitions[i];
                         const std::vector<unsigned short>& trueTriangles = partition.mTrueTriangles;
@@ -2801,6 +2803,9 @@ namespace NifOsg
                 {
                     auto texprop = static_cast<const Nif::BSShaderPPLightingProperty*>(property);
                     node->setUserValue("shaderPrefix", std::string(getBSShaderPrefix(texprop->mType)));
+                    // FO3/FONV swap the NPC's own skin into skin-shaded shapes (bare arms and necks of outfits).
+                    if (texprop->mType == static_cast<unsigned int>(Nif::BSShaderType::ShaderType_Skin))
+                        node->setUserValue("bsSkin", true);
                     osg::StateSet* stateset = node->getOrCreateStateSet();
                     clearBoundTextures(stateset, boundTextures);
                     if (!texprop->mTextureSet.empty())
