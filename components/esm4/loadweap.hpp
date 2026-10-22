@@ -89,6 +89,7 @@ namespace ESM4
             float minSpread = 0.f; // 16
             float spread = 0.f; // 20
             ESM::FormId projectile; // 36
+            std::uint8_t attackAnim = 255; // 41: 26 left, 32 right, 38 attack3 ... 68 attack8 (steps of 6), 74 loop
             std::uint8_t projectileCount = 1; // 42
             float minRange = 0.f; // 44
             float maxRange = 0.f; // 48

@@ -579,7 +579,7 @@ namespace MWRender
         switch (mLocomotion)
         {
             case Locomotion::Idle:
-                playLoopFONV("mtidle.kf", false);
+                playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
                 break;
             case Locomotion::Walk:
                 playLoopFONV("mtforward.kf", true);
@@ -590,11 +590,57 @@ namespace MWRender
         }
     }
 
+    void ESM4NpcAnimation::setIdleSequence(std::string_view file)
+    {
+        if (file == mIdleSequence)
+            return;
+        mIdleSequence = file;
+        if (mLocomotion == Locomotion::Idle && !mInAction && !mDead)
+            playLocomotion();
+    }
+
+    void ESM4NpcAnimation::showWeapon(std::string_view model)
+    {
+        if (mWeapon != nullptr)
+        {
+            for (osg::Group* parent : mWeapon->getParents())
+                parent->removeChild(mWeapon);
+            mWeapon = nullptr;
+        }
+        if (model.empty() || mObjectRoot == nullptr)
+            return;
+        // FO3/FONV skeletons carry a "Weapon" bone in the right hand that weapon models are made to sit on. It has
+        // no controller, so it may not be a transform the node map knows.
+        osg::Group* bone = nullptr;
+        SceneUtil::FindByNameVisitor findWeaponBone("Weapon");
+        mObjectRoot->accept(findWeaponBone);
+        bone = findWeaponBone.mFoundNode;
+        if (bone == nullptr)
+        {
+            const NodeMap& nodeMap = getNodeMap();
+            if (auto found = nodeMap.find("Bip01 R Hand"); found != nodeMap.end())
+                bone = found->second;
+        }
+        if (bone == nullptr)
+        {
+            Log(Debug::Verbose) << "No weapon bone for " << mPtr.getCellRef().getRefId();
+            return;
+        }
+        Resource::SceneManager* sceneManager = mResourceSystem->getSceneManager();
+        osg::ref_ptr<const osg::Node> templateNode
+            = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
+        // Weapon files can carry bones of their own (SceneUtil::attach would then look for skinned shapes only), so
+        // the whole model hangs off the bone as it is.
+        mWeapon = sceneManager->getInstance(templateNode);
+        bone->addChild(mWeapon);
+    }
+
     void ESM4NpcAnimation::playDeath(bool instant)
     {
         if (mDead)
             return;
         mDead = true;
+        showWeapon({});
         // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
         // lays it down; humans have death poses.
         const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);

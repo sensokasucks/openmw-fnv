@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 #include <random>
+#include <string>
 
 #include <osg/ComputeBoundsVisitor>
 
@@ -17,6 +18,7 @@
 #include <components/misc/strings/algorithm.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/soundmanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwclass/esm4creature.hpp"
@@ -305,13 +307,28 @@ namespace MWMechanics::ESM4Combat
             collectTargets<ESM4::Npc>(*cell, candidates);
             collectTargets<ESM4::Creature>(*cell, candidates);
         }
+        const MWWorld::Ptr player = getPlayer();
+        if (attacker != player && !player.getClass().getCreatureStats(player).isDead())
+            candidates.push_back(player);
         for (const MWWorld::Ptr& candidate : candidates)
         {
             if (candidate == attacker || isDead(candidate))
                 continue;
-            osg::ComputeBoundsVisitor bounds;
-            candidate.getRefData().getBaseNode()->accept(bounds);
-            const osg::BoundingBox& box = bounds.getBoundingBox();
+            osg::BoundingBox box;
+            if (candidate == player)
+            {
+                // The player's model may be the first person one; use its collision box
+                const osg::Vec3f half = world->getHalfExtents(candidate);
+                const osg::Vec3f position = candidate.getRefData().getPosition().asVec3();
+                box = osg::BoundingBox(position - osg::Vec3f(half.x(), half.y(), 0.f),
+                    position + osg::Vec3f(half.x(), half.y(), half.z() * 2.f));
+            }
+            else
+            {
+                osg::ComputeBoundsVisitor bounds;
+                candidate.getRefData().getBaseNode()->accept(bounds);
+                box = bounds.getBoundingBox();
+            }
             if (!box.valid())
                 continue;
             if (const std::optional<float> distance = intersect(box, origin, dir, range))
@@ -328,9 +345,163 @@ namespace MWMechanics::ESM4Combat
         float damage = 0.f;
         for (int i = 0; i < projectiles; ++i)
             damage += applyArmor(result.mTarget, getWeaponDamage(attacker, weapon));
+        if (result.mTarget == player)
+        {
+            hurtPlayer(player, damage);
+            result.mDamage = damage;
+            return result;
+        }
         result.mDamage = hit(result.mTarget, attacker, damage);
         result.mKilled = isDead(result.mTarget);
         return result;
+    }
+
+    namespace
+    {
+        // Animation group prefix by DNAM animation type
+        std::string_view animPrefix(const ESM4::Weapon& weapon)
+        {
+            static constexpr std::string_view prefixes[]
+                = { "h2h", "1hm", "2hm", "1hp", "1hp", "2hr", "2ha", "2hr", "2hh", "2hl", "1gt", "1lm", "1md", "1gt" };
+            const std::uint32_t type = weapon.mHasFO3Data ? weapon.mFO3Data.animType : 3;
+            return type < std::size(prefixes) ? prefixes[type] : std::string_view("1hp");
+        }
+
+        // DNAM attack animation: 26 left, 32 right, then attack3 .. attack8 in steps of 6, 74 loop
+        std::string attackSequence(const ESM4::Weapon& weapon)
+        {
+            const int anim = weapon.mHasFO3Data ? weapon.mFO3Data.attackAnim : 255;
+            std::string suffix = "attackright";
+            if (anim == 26)
+                suffix = "attackleft";
+            else if (anim >= 38 && anim <= 68 && (anim - 38) % 6 == 0)
+                suffix = "attack" + std::to_string(3 + (anim - 38) / 6);
+            else if (anim == 74)
+                suffix = "attackloop";
+            return std::string(animPrefix(weapon)) + suffix + ".kf";
+        }
+
+        osg::BoundingBox worldBounds(const MWWorld::Ptr& ptr)
+        {
+            osg::ComputeBoundsVisitor bounds;
+            if (osg::Node* node = ptr.getRefData().getBaseNode())
+                node->accept(bounds);
+            return bounds.getBoundingBox();
+        }
+
+        // FNV NPCs' aim wanders up to fNPCMaxGunWobbleAngle; scaled down by the weapon skill
+        // (fGunSpreadSkillBase 0.5 + fGunSpreadSkillMult -0.005 x skill), plus the weapon's own spread.
+        float aimErrorDegrees(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon)
+        {
+            constexpr float fNPCMaxGunWobbleAngle = 15.f;
+            int skill = weapon.mHasFO3Data ? weapon.mFO3Data.skill : -1;
+            if (skill < 0 || skill >= Stats::Count)
+                skill = Stats::Guns;
+            const float skillFactor = std::clamp(0.5f - 0.005f * Stats::getCurrent(attacker, skill), 0.f, 0.5f);
+            const float weaponSpread = weapon.mHasFO3Data ? weapon.mFO3Data.minSpread + weapon.mFO3Data.spread : 0.f;
+            return weaponSpread + fNPCMaxGunWobbleAngle * skillFactor;
+        }
+    }
+
+    const ESM4::Weapon* getActorWeapon(const MWWorld::Ptr& actor)
+    {
+        if (actor.getType() != ESM::REC_NPC_4)
+            return nullptr;
+        return MWClass::ESM4Npc::getEquippedWeapon(actor);
+    }
+
+    bool isGun(const ESM4::Weapon& weapon)
+    {
+        return weapon.mHasFO3Data && weapon.mFO3Data.animType >= 3 && weapon.mFO3Data.animType <= 9;
+    }
+
+    void drawWeapon(const MWWorld::Ptr& actor, bool drawn)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        const ESM4::Weapon* weapon = getActorWeapon(actor);
+        if (animation == nullptr || weapon == nullptr || isDead(actor))
+            return;
+        animation->showWeapon(drawn ? weapon->mModel.getOriginal() : std::string_view());
+        animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
+    }
+
+    namespace
+    {
+        // Where an actor's shots start: about eye height
+        osg::Vec3f muzzle(const MWWorld::Ptr& actor)
+        {
+            const osg::BoundingBox box = worldBounds(actor);
+            const osg::Vec3f position = actor.getRefData().getPosition().asVec3();
+            return osg::Vec3f(position.x(), position.y(),
+                box.valid() ? box.zMin() + (box.zMax() - box.zMin()) * 0.85f : position.z() + 110.f);
+        }
+
+        // Where shots at an actor go: the upper body
+        osg::Vec3f aimPoint(const MWWorld::Ptr& target)
+        {
+            const osg::Vec3f position = target.getRefData().getPosition().asVec3();
+            if (target == getPlayer())
+                return position
+                    + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 1.4f);
+            const osg::BoundingBox box = worldBounds(target);
+            if (!box.valid())
+                return position + osg::Vec3f(0, 0, 60);
+            return osg::Vec3f(position.x(), position.y(), box.zMin() + (box.zMax() - box.zMin()) * 0.65f);
+        }
+    }
+
+    bool hasLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target)
+    {
+        const MWPhysics::RayCastingResult wall = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(
+            muzzle(attacker), aimPoint(target), { attacker, target }, {},
+            MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
+        return !wall.mHit;
+    }
+
+    bool shoot(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, HitResult& result)
+    {
+        const ESM4::Weapon* weapon = getActorWeapon(attacker);
+        if (weapon == nullptr || !isGun(*weapon) || isDead(attacker) || ESM4Actors::get().isActing(attacker))
+            return false;
+        if (ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
+            ESM4Actors::get().playAction(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
+
+        if (!weapon->mFireSound.isZeroOrUnset())
+            MWBase::Environment::get().getSoundManager()->playSound3D(
+                attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
+
+        const osg::Vec3f origin = muzzle(attacker);
+        osg::Vec3f direction = aimPoint(target) - origin;
+        direction.normalize();
+
+        // Turn the shot by a random angle within the aim error
+        const float error = osg::DegreesToRadians(aimErrorDegrees(attacker, *weapon));
+        std::uniform_real_distribution<float> unit(-1.f, 1.f);
+        osg::Vec3f side = direction ^ osg::Vec3f(0, 0, 1);
+        if (side.normalize() == 0.f)
+            side = osg::Vec3f(1, 0, 0);
+        const osg::Vec3f up = side ^ direction;
+        const float yaw = error * unit(random());
+        const float pitch = error * unit(random());
+        direction = direction + side * std::tan(yaw) + up * std::tan(pitch);
+
+        result = fire(attacker, *weapon, origin, direction);
+        return true;
+    }
+
+    float reload(const MWWorld::Ptr& actor)
+    {
+        const ESM4::Weapon* weapon = getActorWeapon(actor);
+        if (weapon == nullptr || isDead(actor))
+            return 0.f;
+        const int letter = weapon->mHasFO3Data ? weapon->mFO3Data.reloadAnim : 0;
+        const std::string prefix(animPrefix(*weapon));
+        float length = 0.f;
+        if (letter >= 0 && letter < 26)
+            length = ESM4Actors::get().playAction(actor, prefix + "reload" + char('a' + letter) + ".kf");
+        if (length <= 0.f)
+            length = ESM4Actors::get().playAction(actor, prefix + "reloada.kf");
+        return std::max(length, weapon->mHasFO3Data ? weapon->mFO3Data.reloadTime : 1.f);
     }
 
     float getUnarmedDamage(const MWWorld::Ptr& attacker)

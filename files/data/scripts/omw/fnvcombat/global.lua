@@ -19,8 +19,9 @@
 --     Cautious below half health, Average below a quarter, Brave below a
 --     tenth, Foolhardy never.
 --   * Attackers run to the target along the navmesh (straight when there is
---     no route) and use their unarmed or creature attacks within reach.
---     NPC weapons are not used yet.
+--     no route) and use their unarmed or creature attacks within reach. NPCs
+--     with a gun draw it, stop within its range and shoot (aim error from
+--     their weapon skill), reloading when the clip runs dry.
 -- While an NPC fights, its AI package (scripts/omw/fnvai) waits.
 --
 -- From the console (luag): I.FNVCombat.kill(obj), I.FNVCombat.health(obj),
@@ -75,14 +76,28 @@ local function startCombat(actor, target)
     if not isAlive(actor) or not isAlive(target) or actor == target then return end
     local s = fighting[actor.id]
     if s and s.target == target then return end
-    fighting[actor.id] = { actor = actor, target = target, fleeing = false, nextAttack = 0, nextMove = 0 }
+    s = { actor = actor, target = target, fleeing = false, nextAttack = 0, nextMove = 0 }
+    if types.ESM4NPC.objectIsInstance(actor) then
+        local weapon = combat.getActorWeapon(actor)
+        if weapon and weapon.isGun then
+            s.gun = weapon
+            s.clip = math.max(1, weapon.clipSize)
+            s.reloadUntil = 0
+            combat.drawWeapon(actor, true)
+        end
+    end
+    fighting[actor.id] = s
     tracked[actor.id] = actor
 end
 
 local function stopCombat(actor)
-    if fighting[actor.id] then
+    local s = fighting[actor.id]
+    if s then
         fighting[actor.id] = nil
-        if actor:isValid() then ai.stop(actor) end
+        if actor:isValid() then
+            ai.stop(actor)
+            if s.gun then combat.drawWeapon(actor, false) end
+        end
     end
 end
 
@@ -125,6 +140,46 @@ local function yawTo(from, to)
     return math.atan2(d.x, d.y)
 end
 
+-- How close gunmen get before they stop and shoot: the weapon's range, within reason
+local function gunRange(gun)
+    return math.min(math.max(gun.maxRange or 0, 600), 1500)
+end
+
+local function approach(s, actor, target, reach, aroundObstacles)
+    -- The navmesh ends where the target may not (rocks, furniture): when the route runs out short of the
+    -- target, or it is close, go straight for it. Getting around something in the way needs the navmesh.
+    local status = ai.status(actor)
+    local close = (target.position - actor.position):length() < STRAIGHT_DISTANCE
+    if status == 'arrived' or status == 'nopath' or (close and not aroundObstacles) then
+        s.straight = true
+    end
+    local moved = s.goal == nil or (s.goal - target.position):length() > 64
+    if status ~= 'moving' or (moved and simTime >= s.nextMove) then
+        s.nextMove = simTime + 0.5
+        s.goal = target.position
+        ai.moveTo(actor, target.position, { run = true, direct = true, straight = s.straight, tolerance = reach * 0.7 })
+    end
+end
+
+-- Fires at the rate the weapon allows, with a short pause between shots as FNV NPCs take; reloads an empty clip.
+local function shootAt(s, actor, target)
+    local gun = s.gun
+    if gun.clipSize > 0 and s.clip <= 0 then
+        combat.reload(actor)
+        s.clip = gun.clipSize
+        s.nextAttack = simTime + math.max(gun.reloadTime or 1, 0.5)
+        return
+    end
+    combat.shoot(actor, target)
+    s.clip = s.clip - math.max(1, gun.ammoUse or 1)
+    local rate = gun.shotsPerSecond or 0
+    local delay = rate > 0 and 1 / rate or 1
+    if not gun.automatic then
+        delay = delay + 0.4 + math.random() * 0.8
+    end
+    s.nextAttack = simTime + delay
+end
+
 local function fight(s)
     local actor, target = s.actor, s.target
     if not isAlive(target) then
@@ -157,20 +212,11 @@ local function fight(s)
     end
 
     if combat.isActing(actor) then return end
-    if distance > REACH then
-        -- The navmesh ends where the target may not (rocks, furniture): when the route runs out short of the
-        -- target, or it is close, go straight for it.
-        local status = ai.status(actor)
-        if status == 'arrived' or status == 'nopath' or distance < STRAIGHT_DISTANCE then
-            s.straight = true
-        end
-        local moved = s.goal == nil or (s.goal - target.position):length() > 64
-        if status ~= 'moving' or (moved and simTime >= s.nextMove) then
-            s.nextMove = simTime + 0.5
-            s.goal = target.position
-            ai.moveTo(actor, target.position,
-                { run = true, direct = true, straight = s.straight, tolerance = REACH * 0.7 })
-        end
+    local reach = s.gun and gunRange(s.gun) or REACH
+    -- Gunmen move up until they have a clear shot
+    local blocked = s.gun and not combat.hasLineOfFire(actor, target)
+    if distance > reach or (blocked and distance > REACH) then
+        approach(s, actor, target, blocked and REACH or reach, blocked)
         return
     end
     s.straight = false
@@ -178,7 +224,10 @@ local function fight(s)
         ai.stop(actor)
     end
     ai.face(actor, yawTo(actor.position, target.position))
-    if simTime >= s.nextAttack then
+    if simTime < s.nextAttack then return end
+    if s.gun then
+        shootAt(s, actor, target)
+    else
         s.nextAttack = simTime + 1.2 + math.random() * 0.8
         combat.attack(actor, target, REACH)
     end

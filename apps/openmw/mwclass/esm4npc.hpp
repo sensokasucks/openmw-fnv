@@ -14,6 +14,11 @@
 
 #include "esm4base.hpp"
 
+namespace ESM4
+{
+    struct Weapon;
+}
+
 namespace MWClass
 {
     class ESM4Npc final : public MWWorld::RegisteredClass<ESM4Npc>
@@ -67,6 +72,8 @@ namespace MWClass
         static const ESM4::Npc* getFactionsRecord(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Armor*>& getEquippedArmor(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Clothing*>& getEquippedClothing(const MWWorld::Ptr& ptr);
+        // FO3/FONV: the weapon from the NPC's inventory it fights with (a gun if it has one), or nullptr.
+        static const ESM4::Weapon* getEquippedWeapon(const MWWorld::Ptr& ptr);
 
     private:
         static ESM4NpcCustomData& getCustomData(const MWWorld::ConstPtr& ptr);

@@ -7,6 +7,7 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadotft.hpp>
 #include <components/esm4/loadrace.hpp>
+#include <components/esm4/loadweap.hpp>
 
 #include <components/misc/resourcehelpers.hpp>
 
@@ -70,6 +71,7 @@ namespace MWClass
         // TODO: Use InventoryStore instead (currently doesn't support ESM4 objects)
         std::vector<const ESM4::Armor*> mEquippedArmor;
         std::vector<const ESM4::Clothing*> mEquippedClothing;
+        const ESM4::Weapon* mEquippedWeapon = nullptr; // FO3/FONV: what the NPC fights with
 
         ESM4NpcCustomData& asESM4NpcCustomData() override { return *this; }
         const ESM4NpcCustomData& asESM4NpcCustomData() const override { return *this; }
@@ -137,6 +139,16 @@ namespace MWClass
                 if (auto* armor
                     = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Armor>(ESM::FormId::fromUint32(item.item)))
                     data->mEquippedArmor.push_back(armor);
+                else if (auto* weapon = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Weapon>(
+                             ESM::FormId::fromUint32(item.item)))
+                {
+                    // Guns are preferred over melee weapons and grenades
+                    auto isGun = [](const ESM4::Weapon* w) {
+                        return w->mHasFO3Data && w->mFO3Data.animType >= 3 && w->mFO3Data.animType <= 9;
+                    };
+                    if (data->mEquippedWeapon == nullptr || (isGun(weapon) && !isGun(data->mEquippedWeapon)))
+                        data->mEquippedWeapon = weapon;
+                }
                 else if (data->mTraits != nullptr && data->mTraits->mIsTES4)
                 {
                     const auto* clothing = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Clothing>(
@@ -161,6 +173,11 @@ namespace MWClass
         ESM4NpcCustomData& res = *data;
         refData.setCustomData(std::move(data));
         return res;
+    }
+
+    const ESM4::Weapon* ESM4Npc::getEquippedWeapon(const MWWorld::Ptr& ptr)
+    {
+        return getCustomData(ptr).mEquippedWeapon;
     }
 
     const std::vector<const ESM4::Armor*>& ESM4Npc::getEquippedArmor(const MWWorld::Ptr& ptr)

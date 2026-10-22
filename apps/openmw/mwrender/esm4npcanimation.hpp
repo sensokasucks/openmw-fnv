@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -44,6 +45,11 @@ namespace MWRender
         float playActionFONV(std::string_view file);
         void resumeLocomotion();
 
+        // Sequence looped while standing instead of mtidle.kf (e.g. "2hraim.kf" with a rifle drawn); empty resets.
+        void setIdleSequence(std::string_view file);
+        // Puts a weapon model on the "Weapon" bone of the right hand; empty takes it away.
+        void showWeapon(std::string_view model);
+
         // Lays the actor down and keeps it there; instant for actors that were already dead when loaded.
         void playDeath(bool instant);
         bool isDead() const { return mDead; }
@@ -58,6 +64,8 @@ namespace MWRender
         Locomotion mLocomotion = Locomotion::Idle;
         bool mDead = false;
         bool mInAction = false;
+        std::string mIdleSequence;
+        osg::ref_ptr<osg::Node> mWeapon;
         float mLocomotionSpeed = 0.f;
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
