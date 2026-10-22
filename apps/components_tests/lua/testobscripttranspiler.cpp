@@ -142,6 +142,19 @@ namespace
         EXPECT_THAT(lua, HasSubstr("(0.5 + (5.0 * -(2)))"));
     }
 
+    TEST_F(ObScriptTranspilerTest, NegativeArguments)
+    {
+        const std::string lua = transpile(
+            "scn S\nshort x\nbegin GameMode\n"
+            "ModAV Strength -2\nset x to GetAV Luck - 1\nset x to x -1\nend\n");
+        // a minus glued to the number after a space is a negative argument...
+        EXPECT_THAT(lua, HasSubstr("obs.f(\"ModAV\", \"Strength\", -(2))"));
+        // ...while a spaced minus subtracts
+        EXPECT_THAT(lua, HasSubstr("(obs.f(\"GetAV\", \"Luck\") - 1)"));
+        // and so does one after something that takes no arguments
+        EXPECT_THAT(lua, HasSubstr("S.x = (S.x - 1)"));
+    }
+
     TEST_F(ObScriptTranspilerTest, ReturnAndStray)
     {
         const std::string lua = transpile("scn S\nbegin GameMode\nreturn\nend\nDisable\n");

@@ -85,6 +85,15 @@ namespace
                 return seen
             end,
 
+            memberValueRunsCommand = function()
+                -- `player.GetLevel` in value position reaches the GetLevel binding
+                obs.bind('GetLevelForTest', function(ref) return ref == 'player' and 12 or 0 end)
+                local level = obs.mv('player', 'GetLevelForTest')
+                -- a variable of a loaded script still wins over a command of the same name
+                obs.msetv('SomeQuest', 'GetLevelForTest', 3)
+                return level, obs.mv('SomeQuest', 'GetLevelForTest')
+            end,
+
             unknownCommandIsZero = function()
                 local before = obs._unknown['neverimplemented'] or 0
                 local value = obs.f('NeverImplemented', 1, 2, 3)
@@ -278,6 +287,9 @@ namespace
         EXPECT_EQ(std::get<1>(r), "x"); // args pass through; name case-insensitive
         EXPECT_EQ(std::get<2>(r), 2);
         EXPECT_EQ(LuaUtil::call(s["memberDispatchResolvesRef"]).get<std::string>(), "resolved:SomeRef");
+        auto member = LuaUtil::call(s["memberValueRunsCommand"]).get<std::tuple<int, int>>();
+        EXPECT_EQ(std::get<0>(member), 12);
+        EXPECT_EQ(std::get<1>(member), 3);
     }
 
     TEST_F(ObScriptRuntimeTest, UnknownCommandsStubToZero)

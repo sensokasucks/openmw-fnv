@@ -182,9 +182,7 @@ end
 
 -- ---------------------------------------------------------------- conditions
 
-local AV_DEFAULT = {}
-for av = 5, 11 do AV_DEFAULT[av] = 5 end    -- SPECIAL
-for av = 32, 45 do AV_DEFAULT[av] = 15 end  -- skills
+local stats = core.obscript.stats
 
 local function objectForRunOn(cond, subject, target)
     if cond.runOn == 0 then return subject end
@@ -211,8 +209,7 @@ local function actorData(obj)
 end
 
 local function playerIsFemale(obj)
-    local ok, record = pcall(types.NPC.record, obj)
-    return ok and record and not record.isMale
+    return obj ~= nil and stats.isFemale(obj)
 end
 
 local functions = {}
@@ -263,15 +260,8 @@ functions[79] = function(cond) -- GetQuestVariable
     return obs.mv(quest.editorId, name)
 end
 functions[70] = function(cond, obj) -- GetIsSex (0 male, 1 female)
-    local female
-    if isPlayer(obj) then
-        female = playerIsFemale(obj)
-    else
-        local a = actorData(obj)
-        if a == nil then return 0 end
-        female = a.isFemale
-    end
-    return (female and 1 or 0) == cond.param1
+    if obj == nil or not stats.hasActorValues(obj) then return 0 end
+    return ((stats.isFemale(obj) and 1 or 0) == cond.param1)
 end
 functions[131] = function(cond, _, _, target) -- GetPCIsSex
     return ((playerIsFemale(target) and 1 or 0) == cond.param1)
@@ -304,9 +294,15 @@ functions[47] = function(cond, obj) -- GetItemCount
     local ok, count = pcall(function() return types.Actor.inventory(obj):countOf(cond.param1Form) end)
     return ok and count or 0
 end
-functions[14] = function(cond) return AV_DEFAULT[cond.param1] or 0 end -- GetActorValue
-functions[277] = functions[14] -- GetBaseActorValue
-functions[495] = functions[14] -- GetPermanentActorValue
+local function actorValueFunction(fn)
+    return function(cond, obj)
+        if obj == nil or not stats.actorValue(cond.param1) then return 0 end
+        return fn(obj, cond.param1)
+    end
+end
+functions[14] = actorValueFunction(stats.get) -- GetActorValue
+functions[277] = actorValueFunction(stats.getBase) -- GetBaseActorValue
+functions[495] = actorValueFunction(stats.getPermanent) -- GetPermanentActorValue
 functions[1] = function(cond, obj, subject, target) -- GetDistance
     local other
     if formIndex(cond.param1) == 0x14 then
@@ -330,8 +326,8 @@ functions[170] = function() return math.floor(core.getGameTime() / 86400) % 7 en
 functions[77] = function() return math.random(0, 99) end -- GetRandomPercent
 functions[76] = function() return 50 end -- GetDisposition
 functions[80] = function(_, obj) -- GetLevel
-    local ok, level = pcall(function() return types.Actor.stats.level(obj).current end)
-    return ok and level or 1
+    if obj == nil then return 0 end
+    return stats.getLevel(obj)
 end
 functions[431] = function() return 1 end -- GetHealthPercentage
 functions[415] = function(_, obj) return obj ~= nil end -- Exists
@@ -501,6 +497,13 @@ local function speakerOr(ref)
     end
     return ref
 end
+
+-- GetAV/SetAV/ModAV/GetLevel/GetIsSex... on the speaker or a named reference
+require('openmw_aux.obscript.stats').install(obs, {
+    subject = function() return speakerOr(nil) end,
+    resolve = speakerOr,
+    change = function(object, op, av, value) I.FNVStats.change(object, op, av, value) end,
+})
 
 obs.bind('SetStage', function(q, stage)
     local quest = questArg(q)

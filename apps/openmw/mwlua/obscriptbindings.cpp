@@ -34,6 +34,7 @@
 #include "context.hpp"
 #include "object.hpp"
 #include "obscriptdialoguebindings.hpp"
+#include "obscriptstatsbindings.hpp"
 
 namespace sol
 {
@@ -201,6 +202,7 @@ namespace MWLua
         }();
 
         api["dialogue"] = initObScriptDialogueBindings(context);
+        api["stats"] = initObScriptStatsBindings(context);
 
         return LuaUtil::makeReadOnly(api);
     }
