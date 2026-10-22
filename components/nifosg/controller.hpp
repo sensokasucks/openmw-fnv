@@ -200,6 +200,7 @@ namespace NifOsg
 
     public:
         ControllerFunction(const Nif::NiTimeController* ctrl);
+        ControllerFunction(const Nif::NiControllerSequence* sequence);
 
         float calculate(float value) const override;
 
@@ -211,6 +212,10 @@ namespace NifOsg
     {
     public:
         GeomMorpherController(const Nif::NiGeomMorpherController* ctrl);
+        // For a morpher driven by a NiControllerManager: the morph weights come from a sequence's interpolators,
+        // one per morph target (null where the target is not animated).
+        GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+            const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators);
         GeomMorpherController();
         GeomMorpherController(const GeomMorpherController& copy, const osg::CopyOp& copyop);
 

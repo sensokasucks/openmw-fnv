@@ -746,6 +746,7 @@ namespace MWRender
                 if (cnode->getNumChildrenRequiringUpdateTraversal() > 0
                     || SceneUtil::hasUserDescription(cnode, Constants::NightDayLabel)
                     || SceneUtil::hasUserDescription(cnode, Constants::HerbalismLabel)
+                    || SceneUtil::hasUserDescription(cnode, Constants::EmbeddedIdleLabel)
                     || (cnode->getName() == "Collada visual scene group"
                         && dynamic_cast<const osgAnimation::BasicAnimationManager*>(cnode->getUpdateCallback())))
                     continue;

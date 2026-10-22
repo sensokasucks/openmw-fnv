@@ -37,6 +37,9 @@ namespace Constants
     // A label to mark visual switches for herbalism feature
     const std::string HerbalismLabel = "HerbalismSwitch";
 
+    // A label to mark Gamebryo models that loop an embedded "Idle" sequence (e.g. waving flags)
+    const std::string EmbeddedIdleLabel = "EmbeddedIdleAnimation";
+
     // Percentage height at which projectiles are spawned from an actor
     constexpr float TorsoHeight = 0.75f;
 

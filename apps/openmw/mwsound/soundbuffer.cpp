@@ -130,7 +130,12 @@ namespace MWSound
             for (const ESM::Sound& sound : esmstore->get<ESM::Sound>())
                 insertSound(sound.mId, sound);
             for (const ESM4::Sound& sound : esmstore->get<ESM4::Sound>())
-                insertSound(sound.mId, sound);
+            {
+                SoundBuffer* sfx = insertSound(sound.mId, sound);
+                // Text keys in Gamebryo animations name sounds by editor ID (e.g. "Sound: EMTFlagFlap02").
+                if (!sound.mEditorId.empty())
+                    mBufferNameMap.emplace(ESM::RefId::stringRefId(sound.mEditorId), sfx);
+            }
             for (const ESM4::SoundReference& sound : esmstore->get<ESM4::SoundReference>())
                 insertSound(sound.mId, sound);
         }

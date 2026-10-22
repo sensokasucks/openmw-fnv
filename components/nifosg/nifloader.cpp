@@ -225,6 +225,33 @@ namespace
         }
     }
 
+    // Gamebryo models keep their embedded animations (NiControllerSequences) on a NiControllerManager on the root.
+    const Nif::NiControllerManager* findControllerManager(Nif::FileView nif)
+    {
+        for (size_t i = 0; i < nif.numRoots(); ++i)
+        {
+            const auto* root = dynamic_cast<const Nif::NiObjectNET*>(nif.getRoot(i));
+            if (root == nullptr)
+                continue;
+            for (Nif::NiTimeControllerPtr ctrl = root->mController; !ctrl.empty(); ctrl = ctrl->mNext)
+                if (ctrl->mRecordType == Nif::RC_NiControllerManager)
+                    return static_cast<const Nif::NiControllerManager*>(ctrl.getPtr());
+        }
+        return nullptr;
+    }
+
+    // Like the original engine, an object loops the "Idle" sequence of its model while it is loaded.
+    const Nif::NiControllerSequence* findEmbeddedIdle(Nif::FileView nif)
+    {
+        const Nif::NiControllerManager* manager = findControllerManager(nif);
+        if (manager == nullptr)
+            return nullptr;
+        for (const auto& sequence : manager->mSequences)
+            if (!sequence.empty() && Misc::StringUtils::ciEqual(sequence->mName, "Idle"))
+                return sequence.getPtr();
+        return nullptr;
+    }
+
     void handleExtraData(const std::string& data, osg::Group* node)
     {
         YAML::Node root = YAML::Load(data);
@@ -323,6 +350,8 @@ namespace NifOsg
 
         bool mHasNightDayLabel = false;
         bool mHasHerbalismLabel = false;
+        // The embedded "Idle" sequence, which also drives manager-controlled morphers (e.g. hanging flags)
+        const Nif::NiControllerSequence* mIdleSequence = nullptr;
         bool mHasStencilProperty = false;
 
         const Nif::NiSortAdjustNode* mPushedSorter = nullptr;
@@ -441,6 +470,8 @@ namespace NifOsg
 
             osg::ref_ptr<SceneUtil::TextKeyMapHolder> textkeys(new SceneUtil::TextKeyMapHolder);
 
+            mIdleSequence = findEmbeddedIdle(nif);
+
             osg::ref_ptr<osg::Group> created(new osg::Group);
             created->setDataVariance(osg::Object::STATIC);
             for (const Nif::NiAVObject* root : roots)
@@ -453,6 +484,8 @@ namespace NifOsg
                 created->getOrCreateUserDataContainer()->addDescription(Constants::NightDayLabel);
             if (mHasHerbalismLabel)
                 created->getOrCreateUserDataContainer()->addDescription(Constants::HerbalismLabel);
+            if (mIdleSequence != nullptr)
+                created->getOrCreateUserDataContainer()->addDescription(Constants::EmbeddedIdleLabel);
 
             // Attach particle emitters to their nodes which should all be loaded by now.
             handleQueuedParticleEmitters(created, nif);
@@ -532,6 +565,35 @@ namespace NifOsg
 
             if (!shaderprop.empty())
                 handleProperty(shaderprop.getPtr(), applyTo, composite, boundTextures, animflags, hasStencilProperty);
+        }
+
+        // A morpher driven by a NiControllerManager has blend interpolators of its own; its weights come from the
+        // controlled blocks of the "Idle" sequence that target it, one block per morph target in morph order.
+        // The sequence loops on its own clock, like the "Idle" group played on the rest of the model.
+        osg::ref_ptr<GeomMorpherController> createSequenceMorpher(const Nif::NiGeomMorpherController* nimorphctrl) const
+        {
+            if (!nimorphctrl->mManagerControlled || mIdleSequence == nullptr)
+                return nullptr;
+
+            std::vector<const Nif::NiFloatInterpolator*> interpolators;
+            for (const Nif::ControlledBlock& block : mIdleSequence->mControlledBlocks)
+            {
+                if (block.mController.getPtr() != nimorphctrl)
+                    continue;
+                const Nif::NiInterpolator* interpolator
+                    = block.mInterpolator.empty() ? nullptr : block.mInterpolator.getPtr();
+                if (interpolator != nullptr && interpolator->mRecordType == Nif::RC_NiFloatInterpolator)
+                    interpolators.push_back(static_cast<const Nif::NiFloatInterpolator*>(interpolator));
+                else
+                    interpolators.push_back(nullptr);
+            }
+            if (interpolators.empty())
+                return nullptr;
+
+            osg::ref_ptr<GeomMorpherController> morphctrl = new GeomMorpherController(nimorphctrl, interpolators);
+            morphctrl->setSource(std::make_shared<SceneUtil::FrameTimeSource>());
+            morphctrl->setFunction(std::make_shared<ControllerFunction>(mIdleSequence));
+            return morphctrl;
         }
 
         static void setupController(const Nif::NiTimeController* ctrl, SceneUtil::Controller* toSetup, int animflags)
@@ -1703,8 +1765,12 @@ namespace NifOsg
                                                       morphs[i].mVertices.data()),
                             0.f);
 
-                    osg::ref_ptr<GeomMorpherController> morphctrl = new GeomMorpherController(nimorphctrl);
-                    setupController(ctrl.getPtr(), morphctrl, animflags);
+                    osg::ref_ptr<GeomMorpherController> morphctrl = createSequenceMorpher(nimorphctrl);
+                    if (morphctrl == nullptr)
+                    {
+                        morphctrl = new GeomMorpherController(nimorphctrl);
+                        setupController(ctrl.getPtr(), morphctrl, animflags);
+                    }
                     morphGeom->setUpdateCallback(morphctrl);
 
                     drawable = morphGeom;
@@ -2987,22 +3053,7 @@ namespace NifOsg
 
     void Loader::loadEmbeddedSequences(Nif::FileView nif, SceneUtil::KeyframeHolder& target)
     {
-        const Nif::NiControllerManager* manager = nullptr;
-        for (size_t i = 0; i < nif.numRoots() && manager == nullptr; ++i)
-        {
-            const auto* root = dynamic_cast<const Nif::NiObjectNET*>(nif.getRoot(i));
-            if (root == nullptr)
-                continue;
-            for (Nif::NiTimeControllerPtr ctrl = root->mController; !ctrl.empty(); ctrl = ctrl->mNext)
-            {
-                if (ctrl->mRecordType == Nif::RC_NiControllerManager)
-                {
-                    manager = static_cast<const Nif::NiControllerManager*>(ctrl.getPtr());
-                    break;
-                }
-            }
-        }
-
+        const Nif::NiControllerManager* manager = findControllerManager(nif);
         if (manager == nullptr)
             return;
 
@@ -3024,6 +3075,17 @@ namespace NifOsg
             const float offset = timelineTime - sequence.mStartTime;
             target.mTextKeys.emplace(timelineTime, name + ": start");
             target.mTextKeys.emplace(timelineTime + length, name + ": stop");
+
+            // Keep the sequence's own text keys (e.g. "Sound: EMTFlagFlap02" on flags). Its "start" and "end" keys
+            // are already covered by the group's start and stop keys.
+            if (const auto* textKeys = dynamic_cast<const Nif::NiTextKeyExtraData*>(sequence.mTextKeys.getPtr()))
+            {
+                SceneUtil::TextKeyMap sequenceKeys;
+                extractTextKeys(textKeys, sequenceKeys);
+                for (const auto& [time, key] : sequenceKeys)
+                    if (key != "start" && key != "end")
+                        target.mTextKeys.emplace(time + offset, std::string(key));
+            }
 
             for (const Nif::ControlledBlock& block : sequence.mControlledBlocks)
             {

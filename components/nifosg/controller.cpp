@@ -26,6 +26,27 @@ namespace NifOsg
     {
     }
 
+    ControllerFunction::ControllerFunction(const Nif::NiControllerSequence* sequence)
+        : mFrequency(sequence->mFrequency)
+        , mPhase(0.f)
+        , mStartTime(sequence->mStartTime)
+        , mStopTime(sequence->mStopTime)
+    {
+        // Sequences store their cycle type as 0 = loop, 1 = reverse, 2 = clamp
+        switch (static_cast<uint32_t>(sequence->mExtrapolationMode))
+        {
+            case 0:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Cycle;
+                break;
+            case 1:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Reverse;
+                break;
+            default:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Constant;
+                break;
+        }
+    }
+
     float ControllerFunction::calculate(float value) const
     {
         float time = mFrequency * value + mPhase;
@@ -327,6 +348,17 @@ namespace NifOsg
                 mKeyFrames[i] = FloatInterpolator(interpolator);
             }
         }
+    }
+
+    GeomMorpherController::GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+        const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators)
+    {
+        mKeyFrames.resize(sequenceInterpolators.size());
+        mWeights = ctrl->mWeights;
+
+        for (std::size_t i = 0; i < sequenceInterpolators.size(); ++i)
+            if (sequenceInterpolators[i] != nullptr)
+                mKeyFrames[i] = FloatInterpolator(sequenceInterpolators[i]);
     }
 
     void GeomMorpherController::operator()(SceneUtil::MorphGeometry* node, osg::NodeVisitor* nv)
