@@ -5,6 +5,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 
 #include <osg/Vec3f>
 
@@ -19,9 +20,8 @@ namespace MWWorld
 
 namespace MWMechanics
 {
-    // Moves FO3/FONV NPCs along their cell's navmesh and plays their idle and furniture sequences. What to do is
-    // decided by the AI packages, evaluated in Lua (scripts/omw/fnvai); this only walks there, turns the NPC,
-    // switches its walk/idle sequences and runs the enter/loop/exit steps of using a chair, bed or lean marker.
+    // Moves FO3/FONV NPCs along their cell's navmesh. Which way to go is decided by the AI packages, evaluated in
+    // Lua (scripts/omw/fnvai); this only walks there, turning the NPC and switching its walk/idle sequences.
     class ESM4Actors
     {
     public:
@@ -38,6 +38,8 @@ namespace MWMechanics
             bool mRun = false;
             float mTolerance = 32.f; // how close counts as arrived
             std::optional<float> mFinalYaw; // radians, turned to on arrival
+            bool mDirect = false; // without a navmesh route, go straight there
+            bool mStraight = false; // go straight there, ignoring the navmesh
         };
 
         // How a piece of furniture is used, as the original engine does it: the actor stands on the furniture
@@ -75,6 +77,11 @@ namespace MWMechanics
         void face(const MWWorld::Ptr& ptr, float yaw);
         Status getStatus(const MWWorld::Ptr& ptr) const;
 
+        // Plays a one-off sequence (an attack) and goes back to walking or standing when it ends. Returns its length,
+        // 0 when the actor has no such sequence.
+        float playAction(const MWWorld::Ptr& ptr, std::string_view file);
+        bool isActing(const MWWorld::Ptr& ptr) const;
+
         // Starts using furniture: the actor is placed on the marker and plays the entry sequence. Any movement stops.
         void useFurniture(const MWWorld::Ptr& ptr, const FurnitureUse& use);
         // Plays the exit sequence; the actor stands on the marker again once it ends.
@@ -98,6 +105,7 @@ namespace MWMechanics
             osg::Vec3f mTarget;
             std::optional<float> mTurnTo;
             float mStuckTime = 0.f;
+            float mActionTime = 0.f; // left of the one-off sequence playing
 
             UsePhase mUsePhase = UsePhase::None;
             FurnitureUse mFurniture;

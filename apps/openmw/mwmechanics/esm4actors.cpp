@@ -10,12 +10,16 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwphysics/collisiontype.hpp"
+#include "../mwphysics/raycasting.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/worldmodel.hpp"
+
+#include "esm4combat.hpp"
 
 namespace MWMechanics
 {
@@ -41,10 +45,31 @@ namespace MWMechanics
             return dynamic_cast<MWRender::ESM4NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(ptr));
         }
 
-        void setLocomotion(const MWWorld::Ptr& ptr, MWRender::ESM4NpcAnimation::Locomotion locomotion, bool force = false)
+        void setLocomotion(
+            const MWWorld::Ptr& ptr, MWRender::ESM4NpcAnimation::Locomotion locomotion, bool force = false)
         {
             if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr))
                 animation->setLocomotion(locomotion, force);
+        }
+
+        void setYaw(const MWWorld::Ptr& ptr, float yaw)
+        {
+            float wrapped = yaw;
+            while (wrapped > osg::PI)
+                wrapped -= 2 * osg::PI;
+            while (wrapped < -osg::PI)
+                wrapped += 2 * osg::PI;
+            MWBase::Environment::get().getWorld()->rotateObject(
+                ptr, osg::Vec3f(0.f, 0.f, wrapped), MWBase::RotationFlag_none);
+        }
+
+        // Marker space (x right, y along the heading) to world: the heading is the yaw the actor faces, measured
+        // like actor rotations (0 = +y, clockwise).
+        osg::Vec3f markerToWorld(const osg::Vec3f& marker, float heading, const osg::Vec3f& offset)
+        {
+            const float s = std::sin(heading);
+            const float c = std::cos(heading);
+            return marker + osg::Vec3f(offset.x() * c + offset.y() * s, -offset.x() * s + offset.y() * c, offset.z());
         }
 
         float wrapAngle(float angle)
@@ -54,12 +79,6 @@ namespace MWMechanics
             while (angle < -osg::PI)
                 angle += 2 * osg::PI;
             return angle;
-        }
-
-        void setYaw(const MWWorld::Ptr& ptr, float yaw)
-        {
-            MWBase::Environment::get().getWorld()->rotateObject(
-                ptr, osg::Vec3f(0.f, 0.f, wrapAngle(yaw)), MWBase::RotationFlag_none);
         }
 
         // Turns the actor towards yaw; true once it faces it.
@@ -75,15 +94,6 @@ namespace MWMechanics
             MWBase::Environment::get().getWorld()->rotateObject(ptr, rot, MWBase::RotationFlag_none);
             return done;
         }
-
-        // Marker space (x right, y along the heading) to world: the heading is the yaw the actor faces, measured
-        // like actor rotations (0 = +y, clockwise).
-        osg::Vec3f markerToWorld(const osg::Vec3f& marker, float heading, const osg::Vec3f& offset)
-        {
-            const float s = std::sin(heading);
-            const float c = std::cos(heading);
-            return marker + osg::Vec3f(offset.x() * c + offset.y() * s, -offset.x() * s + offset.y() * c, offset.z());
-        }
     }
 
     ESM4Actors& ESM4Actors::get()
@@ -94,6 +104,8 @@ namespace MWMechanics
 
     bool ESM4Actors::moveTo(const MWWorld::Ptr& ptr, const osg::Vec3f& target, const MoveOptions& options)
     {
+        if (ESM4Combat::isDead(ptr))
+            return false;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mUsePhase != UsePhase::None)
             finishUsing(ptr, state);
@@ -108,8 +120,13 @@ namespace MWMechanics
         const std::optional<ESM::FormId> cell = getCellFormId(ptr);
         const osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
         std::optional<ESM4Navigation::Path> path;
-        if (cell)
+        if (cell && !options.mStraight)
             path = mNavigation.findPath(*cell, position, target);
+        if (!path && (options.mDirect || options.mStraight))
+        {
+            path = ESM4Navigation::Path();
+            path->mPoints.push_back(target);
+        }
         if (!path)
         {
             Log(Debug::Verbose) << "ESM4 AI: no path for " << ptr.getCellRef().getRefNum().toString() << " from "
@@ -131,34 +148,30 @@ namespace MWMechanics
         auto it = mStates.find(ptr.getCellRef().getRefNum());
         if (it == mStates.end())
             return;
-        if (it->second.mUsePhase != UsePhase::None)
+        const bool wasUsing = it->second.mUsePhase != UsePhase::None || it->second.mIdleTimer > 0.f;
+        if (wasUsing)
             finishUsing(ptr, it->second);
-        mStates.erase(it);
-        setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle, true);
-    }
-
-    void ESM4Actors::face(const MWWorld::Ptr& ptr, float yaw)
-    {
-        State& state = mStates[ptr.getCellRef().getRefNum()];
-        if (state.mStatus == Status::Moving || state.mUsePhase != UsePhase::None)
-            return;
-        state.mTurnTo = yaw;
-    }
-
-    ESM4Actors::Status ESM4Actors::getStatus(const MWWorld::Ptr& ptr) const
-    {
-        auto it = mStates.find(ptr.getCellRef().getRefNum());
-        return it == mStates.end() ? Status::None : it->second.mStatus;
+        if (it->second.mActionTime > 0.f)
+        {
+            it->second.mStatus = Status::None;
+            it->second.mTurnTo.reset();
+        }
+        else
+            mStates.erase(it);
+        setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle, wasUsing);
     }
 
     void ESM4Actors::useFurniture(const MWWorld::Ptr& ptr, const FurnitureUse& use)
     {
+        if (ESM4Combat::isDead(ptr))
+            return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mUsePhase != UsePhase::None)
             finishUsing(ptr, state);
         state.mStatus = Status::None;
         state.mTurnTo.reset();
         state.mIdleTimer = 0.f;
+        state.mActionTime = 0.f;
         state.mFurniture = use;
 
         MWBase::World& world = *MWBase::Environment::get().getWorld();
@@ -235,7 +248,8 @@ namespace MWMechanics
             MWWorld::Ptr moved = world.moveObject(ptr, state.mFurniture.mMarker);
             setYaw(moved, state.mFurniture.mHeading);
         }
-        world.setActorCollisionMode(ptr, true, true);
+        if (state.mUsePhase != UsePhase::None)
+            world.setActorCollisionMode(ptr, true, true);
         state.mUsePhase = UsePhase::None;
         state.mPhaseTimer = 0.f;
         state.mIdleTimer = 0.f;
@@ -250,8 +264,10 @@ namespace MWMechanics
 
     void ESM4Actors::playIdle(const MWWorld::Ptr& ptr, const std::string& model)
     {
+        if (ESM4Combat::isDead(ptr))
+            return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
-        if (state.mStatus == Status::Moving || state.mUsePhase == UsePhase::Entering
+        if (state.mStatus == Status::Moving || state.mActionTime > 0.f || state.mUsePhase == UsePhase::Entering
             || state.mUsePhase == UsePhase::Leaving)
             return;
         MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
@@ -283,6 +299,39 @@ namespace MWMechanics
         animation->setLocomotion(MWRender::ESM4NpcAnimation::Locomotion::Idle, true);
     }
 
+    float ESM4Actors::playAction(const MWWorld::Ptr& ptr, std::string_view file)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        if (animation == nullptr || ESM4Combat::isDead(ptr))
+            return 0.f;
+        const float length = animation->playActionFONV(file);
+        if (length > 0.f)
+            mStates[ptr.getCellRef().getRefNum()].mActionTime = length;
+        return length;
+    }
+
+    bool ESM4Actors::isActing(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it != mStates.end() && it->second.mActionTime > 0.f;
+    }
+
+    void ESM4Actors::face(const MWWorld::Ptr& ptr, float yaw)
+    {
+        if (ESM4Combat::isDead(ptr))
+            return;
+        State& state = mStates[ptr.getCellRef().getRefNum()];
+        if (state.mStatus == Status::Moving || state.mUsePhase != UsePhase::None)
+            return;
+        state.mTurnTo = yaw;
+    }
+
+    ESM4Actors::Status ESM4Actors::getStatus(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it == mStates.end() ? Status::None : it->second.mStatus;
+    }
+
     bool ESM4Actors::updateActor(const MWWorld::Ptr& ptr, State& state, float duration)
     {
         if (state.mUsePhase == UsePhase::Entering || state.mUsePhase == UsePhase::Leaving)
@@ -307,11 +356,21 @@ namespace MWMechanics
         if (state.mUsePhase == UsePhase::Using)
             return true;
 
+        if (state.mActionTime > 0.f)
+        {
+            state.mActionTime -= duration;
+            if (state.mActionTime <= 0.f)
+            {
+                state.mActionTime = 0.f;
+                if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr))
+                    animation->resumeLocomotion();
+            }
+        }
         if (state.mStatus != Status::Moving)
         {
             if (state.mTurnTo && turnTowards(ptr, *state.mTurnTo, duration))
                 state.mTurnTo.reset();
-            return true;
+            return state.mStatus != Status::None || state.mTurnTo || state.mActionTime > 0.f;
         }
 
         MWBase::World& world = *MWBase::Environment::get().getWorld();
@@ -328,6 +387,12 @@ namespace MWMechanics
 
         osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
         float remaining = speed * duration;
+        // Close enough to the goal counts as there (attackers stop at arm's length)
+        const osg::Vec2f toGoal(state.mTarget.x() - position.x(), state.mTarget.y() - position.y());
+        if (toGoal.length() <= state.mOptions.mTolerance)
+            state.mNextPoint = state.mPath.mPoints.size();
+        else if (state.mNextPoint + 1 == state.mPath.mPoints.size())
+            remaining = std::min(remaining, toGoal.length() - state.mOptions.mTolerance);
         osg::Vec3f direction;
         while (remaining > 0.f && state.mNextPoint < state.mPath.mPoints.size())
         {
@@ -361,6 +426,16 @@ namespace MWMechanics
                 position.z() = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
                 break;
             }
+        }
+
+        if (corridor.empty())
+        {
+            // Straight moves keep to the ground below
+            const osg::Vec3f up(0.f, 0.f, 128.f);
+            const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(position + up,
+                position - up * 4.f, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            if (ground.mHit)
+                position.z() = ground.mHitPos.z();
         }
 
         MWWorld::Ptr moved = world.moveObject(ptr, position);

@@ -238,4 +238,22 @@ obs.bind('AddNote', function(a, b)
     return 0
 end)
 
+-- ---------------------------------------------------------------- actor values
+-- GetAV/SetAV/ModAV/GetLevel/GetIsSex... (openmw_aux.obscript.stats). A local
+-- script can only reach itself and the player; changes go through the global
+-- script scripts/omw/fnvstats.lua.
+require('openmw_aux.obscript.stats').install(obs, {
+    subject = function() return self.object end,
+    resolve = function(ref)
+        if isObject(ref) then return ref end
+        if type(ref) ~= 'string' then return nil end
+        local key = ref:lower()
+        if key == 'player' or key == 'playerref' then return player() end
+        return nil
+    end,
+    change = function(object, op, av, value)
+        core.sendGlobalEvent('FNVStatsChange', { object = object, op = op, av = av, value = value })
+    end,
+})
+
 return obs

@@ -1,8 +1,8 @@
 #include "esm4lock.hpp"
+#include "esm4stats.hpp"
 
 #include <cstdlib>
 
-#include <components/esm3/loadskil.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadsoun.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -106,7 +106,7 @@ namespace MWClass::ESM4Lock
         }
 
         const int needed = std::abs(level);
-        const float skill = actorClass.getSkill(actor, ESM::Skill::Security);
+        const float skill = ESM4Stats::getCurrent(actor, ESM4Stats::Lockpick);
         if (skill < needed)
         {
             tell(actor,
@@ -122,7 +122,6 @@ namespace MWClass::ESM4Lock
         }
 
         unlock(ptr);
-        actorClass.skillUsageSucceeded(actor, ESM::Skill::Security, ESM::Skill::Security_PickLock);
         tell(actor, "Lock picked.");
         return true;
     }

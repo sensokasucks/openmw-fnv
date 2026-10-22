@@ -29,6 +29,7 @@ if ai == nil or types.ESM4NPC == nil then
 end
 local furniture = require('scripts.omw.fnvai.furniture')
 local dlg = core.obscript.dialogue
+local combat = core.obscript.combat
 
 local PLAYER_REF = 'FormId:0x14'
 
@@ -684,9 +685,17 @@ return {
             if simTime < nextTick then return end
             nextTick = simTime + TICK_EVERY
             for id, npc in pairs(tracked) do
-                if not npc:isValid() or not ai.isInScene(npc) or not npc.enabled then
+                if not npc:isValid() or not ai.isInScene(npc) or not npc.enabled
+                    or (combat and combat.isDead(npc)) then
                     tracked[id] = nil
                     if states[id] ~= nil then furniture.release(states[id]) end
+                    states[id] = nil
+                elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
+                    -- fighting (scripts/omw/fnvcombat); the package is picked again afterwards
+                    if states[id] ~= nil then
+                        if furniture.inUse(states[id]) then ai.stop(npc) end
+                        furniture.release(states[id])
+                    end
                     states[id] = nil
                 else
                     local s = states[id]

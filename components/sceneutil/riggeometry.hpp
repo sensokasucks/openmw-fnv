@@ -49,6 +49,8 @@ namespace SceneUtil
         using BoneWeights = std::vector<BoneWeight>;
 
         void setBoneInfo(std::vector<BoneInfo>&& bones);
+        /// Returns the inverse bind matrix of the named bone, if this geometry is skinned to it.
+        const osg::Matrixf* getInvBindMatrix(std::string_view boneName) const;
         // Convert influences in bone and weight list per vertex format
         void setInfluences(const std::vector<BoneWeights>& influences);
 

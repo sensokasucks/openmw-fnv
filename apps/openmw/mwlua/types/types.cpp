@@ -42,6 +42,7 @@ namespace MWLua
         constexpr std::string_view ESM4Book = "ESM4Book";
         constexpr std::string_view ESM4Clothing = "ESM4Clothing";
         constexpr std::string_view ESM4Container = "ESM4Container";
+        constexpr std::string_view ESM4Creature = "ESM4Creature";
         constexpr std::string_view ESM4Door = "ESM4Door";
         constexpr std::string_view ESM4Flora = "ESM4Flora";
         constexpr std::string_view ESM4Furniture = "ESM4Furniture";
@@ -94,6 +95,7 @@ namespace MWLua
             { ESM::REC_BOOK4, ObjectTypeName::ESM4Book },
             { ESM::REC_CLOT4, ObjectTypeName::ESM4Clothing },
             { ESM::REC_CONT4, ObjectTypeName::ESM4Container },
+            { ESM::REC_CREA4, ObjectTypeName::ESM4Creature },
             { ESM::REC_DOOR4, ObjectTypeName::ESM4Door },
             { ESM::REC_FLOR4, ObjectTypeName::ESM4Flora },
             { ESM::REC_FURN4, ObjectTypeName::ESM4Furniture },
@@ -247,6 +249,7 @@ namespace MWLua
         addType(ObjectTypeName::ESM4Book, { ESM::REC_BOOK4 });
         addType(ObjectTypeName::ESM4Clothing, { ESM::REC_CLOT4 });
         addType(ObjectTypeName::ESM4Container, { ESM::REC_CONT4 });
+        addType(ObjectTypeName::ESM4Creature, { ESM::REC_CREA4 });
         addESM4DoorBindings(addType(ObjectTypeName::ESM4Door, { ESM::REC_DOOR4 }, ObjectTypeName::Lockable), context);
         addType(ObjectTypeName::ESM4Flora, { ESM::REC_FLOR4 });
         addESM4FurnitureBindings(addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 }), context);

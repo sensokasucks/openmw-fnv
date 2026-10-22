@@ -26,7 +26,9 @@
 */
 #include "loadweap.hpp"
 
+#include <cstring>
 #include <stdexcept>
+#include <vector>
 
 #include "reader.hpp"
 //#include "writer.hpp"
@@ -109,16 +111,99 @@ void ESM4::Weapon::load(ESM4::Reader& reader)
             case ESM::fourCC("ZNAM"):
                 reader.getFormId(mDropSound);
                 break;
+            case ESM::fourCC("DNAM"):
+            {
+                if (!isFONV)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                std::vector<std::uint8_t> raw(subHdr.dataSize);
+                reader.get(raw.data(), raw.size());
+                auto get = [&](std::size_t offset, auto& out) {
+                    if (offset + sizeof(out) <= raw.size())
+                        std::memcpy(&out, raw.data() + offset, sizeof(out));
+                };
+                DataFO3& d = mFO3Data;
+                get(0, d.animType);
+                get(4, d.animMult);
+                get(8, d.reach);
+                get(12, d.flags1);
+                get(14, d.ammoUse);
+                get(15, d.reloadAnim);
+                get(16, d.minSpread);
+                get(20, d.spread);
+                std::uint32_t projectile = 0;
+                get(36, projectile);
+                d.projectile = ESM::FormId::fromUint32(projectile);
+                reader.adjustFormId(d.projectile);
+                get(42, d.projectileCount);
+                get(44, d.minRange);
+                get(48, d.maxRange);
+                get(56, d.flags2);
+                get(60, d.animAttackMult);
+                get(64, d.fireRate);
+                get(68, d.actionPoints);
+                get(88, d.shotsPerSecond);
+                get(92, d.reloadTime);
+                get(96, d.jamTime);
+                get(104, d.skill);
+                get(116, d.limbDamageMult);
+                get(120, d.resistType);
+                get(128, d.semiAutoDelayMin);
+                get(132, d.semiAutoDelayMax);
+                mHasFO3Data = true;
+                break;
+            }
+            case ESM::fourCC("CRDT"):
+                if (isFONV && subHdr.dataSize >= 8)
+                {
+                    reader.get(mCritDamage);
+                    std::uint16_t unused;
+                    reader.get(unused);
+                    reader.get(mCritChanceMult);
+                    reader.skipSubRecordData(subHdr.dataSize - 8);
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("NAM0"):
+                if (isFONV)
+                    reader.getFormId(mAmmo);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("SNAM"):
+                if (isFONV)
+                    reader.getFormId(mFireSound.isZeroOrUnset() ? mFireSound : mFireSoundDist);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("XNAM"):
+                if (isFONV)
+                    reader.getFormId(mFireSound2D);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("TNAM"):
+                if (isFONV)
+                    reader.getFormId(mDryFireSound);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("INAM"):
+                if (isFONV)
+                    reader.getFormId(mImpactDataSet);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("MODT"): // Model data
             case ESM::fourCC("MODC"):
             case ESM::fourCC("MODS"):
             case ESM::fourCC("MODF"): // Model data end
             case ESM::fourCC("BAMT"):
             case ESM::fourCC("BIDS"):
-            case ESM::fourCC("INAM"):
             case ESM::fourCC("CNAM"):
-            case ESM::fourCC("CRDT"):
-            case ESM::fourCC("DNAM"):
             case ESM::fourCC("EAMT"):
             case ESM::fourCC("EITM"):
             case ESM::fourCC("ETYP"):
@@ -127,15 +212,11 @@ void ESM4::Weapon::load(ESM4::Reader& reader)
             case ESM::fourCC("NAM8"):
             case ESM::fourCC("NAM9"):
             case ESM::fourCC("OBND"):
-            case ESM::fourCC("SNAM"):
-            case ESM::fourCC("TNAM"):
             case ESM::fourCC("UNAM"):
             case ESM::fourCC("VMAD"):
             case ESM::fourCC("VNAM"):
             case ESM::fourCC("WNAM"):
-            case ESM::fourCC("XNAM"): // Dawnguard only?
             case ESM::fourCC("NNAM"):
-            case ESM::fourCC("NAM0"): // FO3
             case ESM::fourCC("REPL"): // FO3
             case ESM::fourCC("MOD2"): // FO3
             case ESM::fourCC("MO2T"): // FO3

@@ -182,6 +182,13 @@ end
 -- cross-script variable read: Quest.var / Ref.var
 function obs.mv(base, name)
     local entry = obs._scripts[tostring(base):lower()]
+    if entry and rawget(entry.locals, name:lower()) ~= nil then
+        return entry.locals[name:lower()]
+    end
+    -- zero-argument member command in value position: `player.GetLevel`
+    if obs._bindings[name:lower()] then
+        return dispatch(name, obs.resolveRef(base))
+    end
     if entry then
         return entry.locals[name:lower()]
     end
