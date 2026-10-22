@@ -64,6 +64,14 @@ namespace MWClass
         return true;
     }
 
+    bool ESM4Impl::playEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group)
+    {
+        if (!prepareEmbeddedAnimation(ptr, group))
+            return false;
+        // Mode 1 replaces a sequence that is still playing (e.g. "Close" while "Open" runs).
+        return MWBase::Environment::get().getMechanicsManager()->playAnimationGroup(ptr, group, 1, 0, true);
+    }
+
     void ESM4Impl::insertObjectPhysics(
         const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics)
     {

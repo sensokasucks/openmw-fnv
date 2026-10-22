@@ -49,6 +49,18 @@ return {
         ObScriptActivateByRef = function(data)
             activate(resolveRef(data.editorId, 'Activate'), data.actor, data.runOnActivateBlock)
         end,
+        ObScriptPlayGroupByRef = function(data)
+            local obj = resolveRef(data.editorId, 'PlayGroup')
+            if obj then
+                core.obscript.playEmbeddedGroup(obj, data.group)
+            end
+        end,
+        ObScriptSetOpenStateByRef = function(data)
+            local obj = resolveRef(data.editorId, 'SetOpenState')
+            if obj then
+                core.obscript.setOpenState(obj, data.open)
+            end
+        end,
         ObScriptSetEnabled = function(data)
             data.object.enabled = data.enabled
         end,
