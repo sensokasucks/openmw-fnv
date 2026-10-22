@@ -138,6 +138,21 @@ namespace ESM4
         Data mData;
         DataFO3 mFO3Data{};
         bool mHasFO3Data = false;
+
+        // FO3/FONV AIDT
+        struct AIDataFO3
+        {
+            std::uint8_t aggression = 0; // 0 unaggressive, 1 aggressive, 2 very aggressive, 3 frenzied
+            std::uint8_t confidence = 2; // 0 cowardly, 1 cautious, 2 average, 3 brave, 4 foolhardy
+            std::uint8_t energy = 50;
+            std::uint8_t responsibility = 50;
+            std::uint8_t mood = 0;
+            std::int8_t assistance = 0; // 0 helps nobody, 1 allies, 2 friends and allies
+            bool aggroRadiusBehavior = false;
+            std::int32_t aggroRadius = 0;
+        };
+        AIDataFO3 mFO3AIData;
+        bool mHasFO3AIData = false;
         ESM::FormId mCombatStyle;
         ESM::FormId mSoundBase;
         ESM::FormId mSound;

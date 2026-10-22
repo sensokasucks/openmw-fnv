@@ -191,6 +191,28 @@ namespace MWClass::ESM4Stats
         // skill and the stealth skill for Sneak.
         float creatureBase(const MWWorld::Ptr& actor, int av)
         {
+            if ((av >= Aggression && av <= Mood) || av == Assistance)
+            {
+                const ESM4::Creature* aiRecord = ESM4Creature::getAIDataRecord(actor);
+                if (aiRecord == nullptr || !aiRecord->mHasFO3AIData)
+                    return 0;
+                const ESM4::Creature::AIDataFO3& ai = aiRecord->mFO3AIData;
+                switch (av)
+                {
+                    case Aggression:
+                        return ai.aggression;
+                    case Confidence:
+                        return ai.confidence;
+                    case Energy:
+                        return ai.energy;
+                    case Responsibility:
+                        return ai.responsibility;
+                    case Mood:
+                        return ai.mood;
+                    default:
+                        return ai.assistance;
+                }
+            }
             const ESM4::Creature* record = ESM4Creature::getStatsRecord(actor);
             if (record == nullptr || !record->mHasFO3Data)
                 return 0;
