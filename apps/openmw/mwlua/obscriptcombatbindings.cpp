@@ -123,6 +123,21 @@ namespace MWLua
             return t;
         };
 
+        // How the actor's factions treat the player: "enemy", "neutral", "ally" or "friend".
+        api["getReaction"] = [](const Object& actor) -> std::string_view {
+            switch (Combat::getReactionToPlayer(actor.ptr()))
+            {
+                case Combat::Reaction::Enemy:
+                    return "enemy";
+                case Combat::Reaction::Ally:
+                    return "ally";
+                case Combat::Reaction::Friend:
+                    return "friend";
+                default:
+                    return "neutral";
+            }
+        };
+
         api["canBeHit"] = [](const Object& actor) { return Combat::canBeHit(actor.ptr()); };
         api["isDead"] = [](const Object& actor) { return Combat::isDead(actor.ptr()); };
 

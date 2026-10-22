@@ -21,6 +21,7 @@ namespace MWClass
         enum TemplateFlags : std::uint16_t
         {
             UseStats = 0x0002,
+            UseFactions = 0x0004,
             UseAIData = 0x0010,
             UseAIPackages = 0x0020,
             UseModel = 0x0040,
@@ -35,6 +36,7 @@ namespace MWClass
             const ESM4::Creature* mAIData = nullptr;
             const ESM4::Creature* mAIPackages = nullptr;
             const ESM4::Creature* mBaseData = nullptr;
+            const ESM4::Creature* mFactions = nullptr;
         };
 
         // The record itself followed by the records its template chain resolves to.
@@ -84,6 +86,7 @@ namespace MWClass
             data->mAIData = choose(chain, UseAIData);
             data->mAIPackages = choose(chain, UseAIPackages);
             data->mBaseData = choose(chain, UseBaseData);
+            data->mFactions = choose(chain, UseFactions);
             if (data->mBaseData->mFullName.empty())
                 data->mBaseData = data->mModel;
 
@@ -156,6 +159,11 @@ namespace MWClass
     const ESM4::Creature* ESM4Creature::getAIPackagesRecord(const MWWorld::ConstPtr& ptr)
     {
         return getCustomData(ptr).mAIPackages;
+    }
+
+    const ESM4::Creature* ESM4Creature::getFactionsRecord(const MWWorld::ConstPtr& ptr)
+    {
+        return getCustomData(ptr).mFactions;
     }
 
     const ESM4::Creature* ESM4Creature::getBaseDataRecord(const MWWorld::ConstPtr& ptr)

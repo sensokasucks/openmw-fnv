@@ -135,6 +135,7 @@ namespace ESM4
         std::vector<ESM::FormId> mAIPackages;
         ActorBaseConfig mBaseConfig;
         ActorFaction mFaction;
+        std::vector<ActorFaction> mFactions; // every SNAM
         Data mData;
         DataFO3 mFO3Data{};
         bool mHasFO3Data = false;

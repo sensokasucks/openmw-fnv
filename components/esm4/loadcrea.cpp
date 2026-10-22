@@ -71,6 +71,7 @@ void ESM4::Creature::load(ESM4::Reader& reader)
             case ESM::fourCC("SNAM"):
                 reader.get(mFaction);
                 reader.adjustFormId(mFaction.faction);
+                mFactions.push_back(mFaction);
                 break;
             case ESM::fourCC("INAM"):
                 reader.getFormId(mDeathItem);

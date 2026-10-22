@@ -79,6 +79,7 @@ void ESM4::Npc::load(ESM4::Reader& reader)
                 else
                     reader.get(mFaction);
                 reader.adjustFormId(mFaction.faction);
+                mFactions.push_back(mFaction);
                 break;
             }
             case ESM::fourCC("RNAM"):
