@@ -2,6 +2,7 @@
 
 #include <components/esm4/loadarma.hpp>
 #include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadeyes.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadhair.hpp>
 #include <components/esm4/loadhdpt.hpp>
@@ -9,11 +10,13 @@
 #include <components/esm4/loadrace.hpp>
 
 #include <osg/Material>
+#include <osg/Texture2D>
 #include <osg/Transform>
 
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
+#include <components/resource/imagemanager.hpp>
 #include <components/resource/keyframemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
@@ -185,6 +188,24 @@ namespace MWRender
         stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
+    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, std::string_view texture)
+    {
+        if (texture.empty())
+            return;
+        Resource::ImageManager* imageManager = mResourceSystem->getImageManager();
+        osg::ref_ptr<osg::Image> image = imageManager->getImage(Misc::ResourceHelpers::correctTexturePath(
+            VFS::Path::toNormalized(texture), *mResourceSystem->getVFS()));
+        if (!image)
+            return;
+        osg::ref_ptr<osg::Texture2D> texture2d = new osg::Texture2D(image);
+        texture2d->setTextureSize(image->s(), image->t());
+        texture2d->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
+        texture2d->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
+        // The base texture of a BSShaderTextureSet is always bound to the first unit.
+        node.getOrCreateStateSet()->setTextureAttributeAndModes(
+            0, texture2d, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+    }
+
     void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
     {
         const MWWorld::ESMStore* store = MWBase::Environment::get().getESMStore();
@@ -224,8 +245,15 @@ namespace MWRender
             return;
 
         // Race head: head, ears, mouth, lower teeth, upper teeth, tongue, left eye, right eye
-        for (const ESM4::Race::BodyPart& part : isFemale ? race->mHeadPartsFemale : race->mHeadParts)
-            attachPart(part.mesh);
+        const ESM4::Eyes* eyes = traits.mEyes.isZeroOrUnset() ? nullptr : store->get<ESM4::Eyes>().search(traits.mEyes);
+        const std::vector<ESM4::Race::BodyPart>& headParts = isFemale ? race->mHeadPartsFemale : race->mHeadParts;
+        for (size_t i = 0; i < headParts.size(); ++i)
+        {
+            osg::ref_ptr<osg::Node> node = attachPart(headParts[i].mesh);
+            // The eye meshes default to a generic texture; the NPC's EYES record picks the colour.
+            if (node && eyes && (i == 6 || i == 7))
+                overrideDiffuse(*node, eyes->mIcon);
+        }
 
         for (ESM::FormId partId : traits.mHeadParts)
         {
@@ -257,6 +285,8 @@ namespace MWRender
                 if (findHidden.mFoundNode)
                     findHidden.mFoundNode->setNodeMask(0);
                 tintHair(*node, traits.mHairColour);
+                // Several hair styles share one mesh and differ only by texture (e.g. balding).
+                overrideDiffuse(*node, hair->mIcon);
             }
         }
     }

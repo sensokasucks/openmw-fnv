@@ -26,6 +26,7 @@ namespace MWRender
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
+        void overrideDiffuse(osg::Node& node, std::string_view texture);
 
         // Works for FO3/FONV/TES5
         void insertHeadParts(const std::vector<ESM::FormId>& partIds, std::set<uint32_t>& usedHeadPartTypes);
