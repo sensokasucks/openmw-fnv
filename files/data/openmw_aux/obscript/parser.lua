@@ -452,6 +452,10 @@ function Parser:parseCallExpr()
             self:next()
         elseif ARG_KINDS[t.kind] then
             args[#args + 1] = self:parsePostfix()
+        elseif #args > 0 and self:isNegativeLiteral() then
+            -- `ModAV Strength -2`: a minus glued to a number after a space is a negative argument
+            self:next()
+            args[#args + 1] = node('Neg', { operand = self:parsePrimary() })
         else
             break
         end
@@ -460,6 +464,18 @@ function Parser:parseCallExpr()
         return node('Call', { callee = expr, args = args })
     end
     return expr
+end
+
+-- A '-' with a space before it and a number right after it.
+function Parser:isNegativeLiteral()
+    local minus, number, prev = self:peek(), self:peek(1), self.toks[self.i - 1]
+    if not (minus.kind == 'OP' and minus.value == '-' and (number.kind == 'INT' or number.kind == 'FLOAT')) then
+        return false
+    end
+    if minus.pos == nil or number.pos == nil or prev == nil or prev.pos == nil then
+        return false
+    end
+    return number.pos == minus.pos + 1 and prev.pos + #prev.value < minus.pos
 end
 
 function Parser:parsePostfix()

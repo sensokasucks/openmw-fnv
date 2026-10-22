@@ -15,7 +15,7 @@ namespace MWClass::ESM4Lock
     // either with the matching key or (player only) by picking it. Shows the player why it stays shut.
     //
     // Picking has no minigame yet: it succeeds when the player has a bobby pin and their skill reaches the
-    // lock level. Morrowind's Security skill stands in for Lockpick until ESM4 actor stats exist.
+    // lock level. The skill is the FNV Lockpick actor value (see ESM4Stats).
     bool tryOpen(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor);
 
     // Tooltip line such as "Lock: Average (50)", or empty if not locked.

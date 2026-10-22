@@ -27,6 +27,7 @@
 #ifndef ESM4_NPC__H
 #define ESM4_NPC__H
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -206,6 +207,23 @@ namespace ESM4
         ActorBaseConfig mBaseConfig; // union
         ActorFaction mFaction;
         Data mData;
+
+        // FO3/FONV stats from DATA, DNAM and AIDT. SPECIAL is Strength..Luck and the skills
+        // Barter..Unarmed, both in actor value order.
+        struct FO3Stats
+        {
+            std::int32_t baseHealth = 0;
+            std::array<std::uint8_t, 7> special{};
+            std::array<std::uint8_t, 14> skills{};
+            std::array<std::uint8_t, 14> skillOffsets{};
+            std::array<std::uint8_t, 5> aiValues{}; // aggression, confidence, energy, responsibility, mood
+            std::int8_t assistance = 0;
+            bool hasSpecial = false;
+            bool hasSkills = false;
+            bool hasAIValues = false;
+        };
+        FO3Stats mFO3Stats;
+
         ESM::FormId mCombatStyle;
         ESM::FormId mSoundBase;
         ESM::FormId mSound;

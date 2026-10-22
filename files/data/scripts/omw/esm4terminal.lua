@@ -6,13 +6,17 @@
 -- the ObScript `AddNote` command) are remembered and can be read again from
 -- the notes list (N key), standing in for the Pip-Boy data tab.
 --
--- Not implemented yet: hacking/passwords, entry conditions (CTDA, all
+-- A locked terminal opens when the player knows its password note or their
+-- Science skill reaches its difficulty (there is no hacking minigame yet).
+--
+-- Not implemented yet: the hacking minigame, entry conditions (CTDA, all
 -- entries are shown) and the entries' embedded result scripts.
 
 local ambient = require('openmw.ambient')
 local async = require('openmw.async')
 local core = require('openmw.core')
 local input = require('openmw.input')
+local self = require('openmw.self')
 local types = require('openmw.types')
 local ui = require('openmw.ui')
 local util = require('openmw.util')
@@ -400,6 +404,39 @@ terminalPage = function(rec, intro)
     return page
 end
 
+-- ------------------------------------------------------------ locked terminals
+
+local TERMINAL_UNLOCKED = 0x02
+local difficultyNames = { [0] = 'Very Easy', 'Easy', 'Average', 'Hard', 'Very Hard' }
+local hacked = {}  -- terminal object id -> true
+
+-- Whether the player may use the terminal, telling them why not; the intro line to show if so.
+local function unlockTerminal(terminal, rec)
+    if util.bitAnd(rec.flags or 0, TERMINAL_UNLOCKED) ~= 0 or hacked[terminal.id] then
+        return true
+    end
+    if rec.passwordNote and knownSet[rec.passwordNote] then
+        hacked[terminal.id] = true
+        return true, 'Password accepted.'
+    end
+    local difficulty = rec.difficulty or 0
+    local name = difficultyNames[difficulty]
+    if name == nil then
+        ui.showMessage('This terminal requires a password.')
+        return false
+    end
+    local stats = core.obscript and core.obscript.stats
+    local needed = difficulty * 25
+    local science = stats and stats.get(self.object, 'Science') or 0
+    if science < needed then
+        ui.showMessage(('This terminal is %s. You need a Science skill of %d (yours is %d).')
+            :format(name, needed, math.floor(science)))
+        return false
+    end
+    hacked[terminal.id] = true
+    return true, ('Terminal hacked (%s).'):format(name)
+end
+
 -- ------------------------------------------------------------ handlers
 
 local keyToIndex = {}
@@ -452,9 +489,10 @@ return {
     engineHandlers = {
         onKeyPress = onKeyPress,
         onSave = function()
-            return { notes = knownNotes }
+            return { notes = knownNotes, hacked = hacked }
         end,
         onLoad = function(data)
+            hacked = data and data.hacked or {}
             knownNotes, knownSet = {}, {}
             if data and data.notes then
                 for _, id in ipairs(data.notes) do addNote(id, true) end
@@ -464,7 +502,10 @@ return {
     eventHandlers = {
         ESM4OpenTerminal = function(data)
             if element then return end
-            open(terminalPage(types.ESM4Terminal.record(data.terminal)))
+            local rec = types.ESM4Terminal.record(data.terminal)
+            local ok, intro = unlockTerminal(data.terminal, rec)
+            if not ok then return end
+            open(terminalPage(rec, intro))
         end,
         ESM4PickUpNote = function(data)
             local rec = noteRecord(data.note)

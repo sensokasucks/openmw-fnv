@@ -208,4 +208,10 @@ namespace MWClass
             return {};
         return baseData->mFullName;
     }
+
+    const ESM4::Npc* ESM4Npc::getStatsRecord(const MWWorld::Ptr& ptr)
+    {
+        const ESM4::Npc* const base = ptr.get<ESM4::Npc>()->mBase;
+        return chooseTemplate(withBaseTemplates<ESM4::LevelledNpc, ESM4::Npc>(base), ESM4::Npc::Template_UseStats);
+    }
 }

@@ -20,6 +20,7 @@ local lexer = {}
 -- @field #string kind Name of the matched rule (possibly remapped by the rule's `map` function)
 -- @field #string value Matched text
 -- @field #number line 1-based line number where the token starts
+-- @field #number pos 1-based offset in the text where the token starts
 
 ---
 -- A lexical rule.
@@ -75,7 +76,7 @@ function lexer.tokenize(text, rules)
                     if rule.map then
                         kind, value = rule.map(value)
                     end
-                    tokens[#tokens + 1] = { kind = kind, value = value, line = line }
+                    tokens[#tokens + 1] = { kind = kind, value = value, line = line, pos = pos }
                 end
                 line = line + countNewlines(value)
                 pos = pos + #value

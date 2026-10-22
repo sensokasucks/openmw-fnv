@@ -119,7 +119,7 @@ namespace MWRender
         insertBegin(ptr);
         ptr.getRefData().getBaseNode()->setNodeMask(Mask_Actor);
 
-        if (ptr.getType() == ESM::REC_NPC_4)
+        if (ptr.getType() == ESM::REC_NPC_4 || ptr.getType() == ESM::REC_CREA4)
         {
             osg::ref_ptr<ESM4NpcAnimation> anim(
                 new ESM4NpcAnimation(ptr, osg::ref_ptr<osg::Group>(ptr.getRefData().getBaseNode()), mResourceSystem));
