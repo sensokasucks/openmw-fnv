@@ -1,6 +1,7 @@
 #include "nifloader.hpp"
 
 #include <mutex>
+#include <set>
 #include <string_view>
 
 #include <osg/Array>
@@ -79,6 +80,27 @@ namespace
         }
 
         void apply(osg::Drawable& node) override { traverse(node); }
+    };
+
+    // Keeps the named nodes away from the scene optimizer.
+    struct KeepNodesVisitor : osg::NodeVisitor
+    {
+        explicit KeepNodesVisitor(const std::set<std::string>& names)
+            : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            , mNames(names)
+        {
+        }
+
+        void apply(osg::Node& node) override
+        {
+            if (mNames.contains(node.getName()))
+                node.setDataVariance(osg::Object::DYNAMIC);
+            traverse(node);
+        }
+
+        void apply(osg::Drawable& node) override {}
+
+        const std::set<std::string>& mNames;
     };
 
     struct RemoveLodOverlapVisitor : public osg::NodeVisitor
@@ -225,6 +247,109 @@ namespace
         }
     }
 
+    // Gamebryo models keep their embedded animations (NiControllerSequences) on a NiControllerManager on the root.
+    const Nif::NiControllerManager* findControllerManager(Nif::FileView nif)
+    {
+        for (size_t i = 0; i < nif.numRoots(); ++i)
+        {
+            const auto* root = dynamic_cast<const Nif::NiObjectNET*>(nif.getRoot(i));
+            if (root == nullptr)
+                continue;
+            for (Nif::NiTimeControllerPtr ctrl = root->mController; !ctrl.empty(); ctrl = ctrl->mNext)
+                if (ctrl->mRecordType == Nif::RC_NiControllerManager)
+                    return static_cast<const Nif::NiControllerManager*>(ctrl.getPtr());
+        }
+        return nullptr;
+    }
+
+    // Like the original engine, an object loops the "Idle" sequence of its model while it is loaded.
+    const Nif::NiControllerSequence* findEmbeddedIdle(Nif::FileView nif)
+    {
+        const Nif::NiControllerManager* manager = findControllerManager(nif);
+        if (manager == nullptr)
+            return nullptr;
+        for (const auto& sequence : manager->mSequences)
+            if (!sequence.empty() && Misc::StringUtils::ciEqual(sequence->mName, "Idle"))
+                return sequence.getPtr();
+        return nullptr;
+    }
+
+    // Every embedded sequence has its own time range (usually starting at 0), but an animation source has one
+    // timeline. The sequences are laid out one after another with a gap between them; the transform controllers of
+    // the animation source and the material controllers of the model both use this layout.
+    struct EmbeddedSequence
+    {
+        const Nif::NiControllerSequence* mSequence;
+        std::string mName; // lower case
+        float mStart; // timeline time where the sequence starts
+        float mLength;
+        float mOffset; // timeline time minus sequence time
+    };
+
+    std::vector<EmbeddedSequence> layoutEmbeddedSequences(const Nif::NiControllerManager* manager)
+    {
+        std::vector<EmbeddedSequence> result;
+        if (manager == nullptr)
+            return result;
+        constexpr float sequenceGap = 1.f;
+        float timelineTime = 0.f;
+        for (const auto& sequencePtr : manager->mSequences)
+        {
+            if (sequencePtr.empty())
+                continue;
+            const Nif::NiControllerSequence& sequence = sequencePtr.get();
+            std::string name = Misc::StringUtils::lowerCase(sequence.mName);
+            if (name.empty())
+                continue;
+            const float length = std::max(sequence.mStopTime - sequence.mStartTime, 0.f);
+            result.push_back({ .mSequence = &sequence,
+                .mName = std::move(name),
+                .mStart = timelineTime,
+                .mLength = length,
+                .mOffset = timelineTime - sequence.mStartTime });
+            timelineTime += length + sequenceGap;
+        }
+        return result;
+    }
+
+    // Joins the keys that the embedded sequences give a manager-controlled controller (e.g. the NiAlphaController
+    // that hides a plant's fruit in "Forward") into one key map on the sequence timeline.
+    template <class KeyMap, class Interpolator>
+    std::shared_ptr<KeyMap> joinSequenceKeys(const std::vector<EmbeddedSequence>& sequences,
+        const Nif::NiTimeController* ctrl, unsigned int interpolatorType)
+    {
+        auto joined = std::make_shared<KeyMap>();
+        for (const EmbeddedSequence& sequence : sequences)
+        {
+            for (const Nif::ControlledBlock& block : sequence.mSequence->mControlledBlocks)
+            {
+                if (block.mController.getPtr() != ctrl || block.mInterpolator.empty()
+                    || block.mInterpolator->mRecordType != interpolatorType)
+                    continue;
+                const auto* interpolator = static_cast<const Interpolator*>(block.mInterpolator.getPtr());
+                const auto keys = interpolator->mData.empty() ? nullptr : interpolator->mData->mKeyList;
+                if (keys != nullptr && !keys->mKeys.empty())
+                {
+                    if (joined->mInterpolationType == Nif::InterpolationType_Unknown)
+                        joined->mInterpolationType = keys->mInterpolationType;
+                    for (const auto& [time, key] : keys->mKeys)
+                        joined->mKeys.emplace_back(time + sequence.mOffset, key);
+                }
+                else
+                {
+                    // A constant value for the whole sequence
+                    if (joined->mInterpolationType == Nif::InterpolationType_Unknown)
+                        joined->mInterpolationType = Nif::InterpolationType_Linear;
+                    joined->mKeys.emplace_back(
+                        sequence.mStart, typename KeyMap::KeyType{ interpolator->mDefaultValue });
+                }
+            }
+        }
+        if (joined->mKeys.empty())
+            return nullptr;
+        return joined;
+    }
+
     void handleExtraData(const std::string& data, osg::Group* node)
     {
         YAML::Node root = YAML::Load(data);
@@ -323,6 +448,16 @@ namespace NifOsg
 
         bool mHasNightDayLabel = false;
         bool mHasHerbalismLabel = false;
+        // The embedded "Idle" sequence, which also drives manager-controlled morphers (e.g. hanging flags)
+        const Nif::NiControllerSequence* mIdleSequence = nullptr;
+        // All embedded sequences, which drive manager-controlled material controllers
+        std::vector<EmbeddedSequence> mEmbeddedSequences;
+        // Nodes the optimizer must leave alone:
+        // - Skin roots of FO3/FONV skinned shapes. The skin transform of such a shape already maps from its skin root
+        //   to the shape, so RigGeometry must find the root by name; the optimizer would otherwise remove it if it has
+        //   an identity transform (e.g. "Scene Root" of flags), and the shape would be offset by its own transform.
+        // - Nodes animated by the embedded sequences (fan blades, gates), which get their controllers after loading.
+        std::set<std::string> mKeptNodes;
         bool mHasStencilProperty = false;
 
         const Nif::NiSortAdjustNode* mPushedSorter = nullptr;
@@ -330,6 +465,21 @@ namespace NifOsg
 
         // This is used to queue emitters that weren't attached to their node yet.
         std::vector<std::pair<unsigned int, osg::ref_ptr<Emitter>>> mEmitterQueue;
+
+        // FO3/FONV only draw shapes that carry a BSShader*Property; ones without (bone boxes left in animated
+        // meshes, for example) stay invisible in the game.
+        bool hasFO3Shader(const Nif::NiAVObject* nifNode) const
+        {
+            if (mBethVersion < Nif::NIFFile::BethVersion::BETHVER_FO3 || mBethVersion >= Nif::NIFFile::BethVersion::BETHVER_SKY)
+                return true;
+            const unsigned int type = nifNode->mRecordType;
+            if (type != Nif::RC_NiTriShape && type != Nif::RC_NiTriStrips && type != Nif::RC_BSLODTriShape)
+                return true;
+            for (const auto& property : nifNode->mProperties)
+                if (!property.empty() && dynamic_cast<const Nif::BSShaderProperty*>(property.getPtr()))
+                    return true;
+            return false;
+        }
 
         void loadKf(Nif::FileView nif, SceneUtil::KeyframeHolder& target) const
         {
@@ -441,6 +591,19 @@ namespace NifOsg
 
             osg::ref_ptr<SceneUtil::TextKeyMapHolder> textkeys(new SceneUtil::TextKeyMapHolder);
 
+            mIdleSequence = findEmbeddedIdle(nif);
+            mEmbeddedSequences = layoutEmbeddedSequences(findControllerManager(nif));
+            if (const Nif::NiControllerManager* manager = findControllerManager(nif))
+            {
+                for (const auto& sequence : manager->mSequences)
+                {
+                    if (sequence.empty())
+                        continue;
+                    for (const Nif::ControlledBlock& block : sequence->mControlledBlocks)
+                        mKeptNodes.insert(block.mNodeName.empty() ? block.mTargetName : block.mNodeName);
+                }
+            }
+
             osg::ref_ptr<osg::Group> created(new osg::Group);
             created->setDataVariance(osg::Object::STATIC);
             for (const Nif::NiAVObject* root : roots)
@@ -453,9 +616,17 @@ namespace NifOsg
                 created->getOrCreateUserDataContainer()->addDescription(Constants::NightDayLabel);
             if (mHasHerbalismLabel)
                 created->getOrCreateUserDataContainer()->addDescription(Constants::HerbalismLabel);
+            if (mIdleSequence != nullptr)
+                created->getOrCreateUserDataContainer()->addDescription(Constants::EmbeddedIdleLabel);
 
             // Attach particle emitters to their nodes which should all be loaded by now.
             handleQueuedParticleEmitters(created, nif);
+
+            if (!mKeptNodes.empty())
+            {
+                KeepNodesVisitor keepNodes(mKeptNodes);
+                created->accept(keepNodes);
+            }
 
             RemoveLodOverlapVisitor removeLodOverlaps;
             created->accept(removeLodOverlaps);
@@ -532,6 +703,35 @@ namespace NifOsg
 
             if (!shaderprop.empty())
                 handleProperty(shaderprop.getPtr(), applyTo, composite, boundTextures, animflags, hasStencilProperty);
+        }
+
+        // A morpher driven by a NiControllerManager has blend interpolators of its own; its weights come from the
+        // controlled blocks of the "Idle" sequence that target it, one block per morph target in morph order.
+        // The sequence loops on its own clock, like the "Idle" group played on the rest of the model.
+        osg::ref_ptr<GeomMorpherController> createSequenceMorpher(const Nif::NiGeomMorpherController* nimorphctrl) const
+        {
+            if (!nimorphctrl->mManagerControlled || mIdleSequence == nullptr)
+                return nullptr;
+
+            std::vector<const Nif::NiFloatInterpolator*> interpolators;
+            for (const Nif::ControlledBlock& block : mIdleSequence->mControlledBlocks)
+            {
+                if (block.mController.getPtr() != nimorphctrl)
+                    continue;
+                const Nif::NiInterpolator* interpolator
+                    = block.mInterpolator.empty() ? nullptr : block.mInterpolator.getPtr();
+                if (interpolator != nullptr && interpolator->mRecordType == Nif::RC_NiFloatInterpolator)
+                    interpolators.push_back(static_cast<const Nif::NiFloatInterpolator*>(interpolator));
+                else
+                    interpolators.push_back(nullptr);
+            }
+            if (interpolators.empty())
+                return nullptr;
+
+            osg::ref_ptr<GeomMorpherController> morphctrl = new GeomMorpherController(nimorphctrl, interpolators);
+            morphctrl->setSource(std::make_shared<SceneUtil::FrameTimeSource>());
+            morphctrl->setFunction(std::make_shared<ControllerFunction>(mIdleSequence));
+            return morphctrl;
         }
 
         static void setupController(const Nif::NiTimeController* ctrl, SceneUtil::Controller* toSetup, int animflags)
@@ -856,6 +1056,8 @@ namespace NifOsg
                     if (args.mHasMarkers)
                         skip = Misc::StringUtils::ciStartsWith(nifNode->mName, "EditorMarker")
                             || Misc::StringUtils::ciStartsWith(nifNode->mName, "VisibilityEditorMarker");
+                    if (!skip && isNiGeometry && !hasFO3Shader(nifNode))
+                        skip = true;
                 }
                 if (!skip)
                 {
@@ -1070,6 +1272,14 @@ namespace NifOsg
                 if (ctrl->mRecordType == Nif::RC_NiAlphaController)
                 {
                     const Nif::NiAlphaController* alphactrl = static_cast<const Nif::NiAlphaController*>(ctrl.getPtr());
+                    if (alphactrl->mManagerControlled)
+                    {
+                        // Driven by the animation time of the embedded sequence being played; no source of its own.
+                        if (auto keys = joinSequenceKeys<Nif::FloatKeyMap, Nif::NiFloatInterpolator>(
+                                mEmbeddedSequences, alphactrl, Nif::RC_NiFloatInterpolator))
+                            composite->addController(new AlphaController(std::move(keys), baseMaterial));
+                        continue;
+                    }
                     if (alphactrl->mData.empty() && alphactrl->mInterpolator.empty())
                         continue;
                     if (!alphactrl->mInterpolator.empty()
@@ -1089,6 +1299,15 @@ namespace NifOsg
                     const Nif::NiMaterialColorController* matctrl
                         = static_cast<const Nif::NiMaterialColorController*>(ctrl.getPtr());
                     Nif::NiInterpolatorPtr interp = matctrl->mInterpolator;
+                    if (matctrl->mManagerControlled)
+                    {
+                        // Driven by the animation time of the embedded sequence being played; no source of its own.
+                        if (auto keys = joinSequenceKeys<Nif::Vector3KeyMap, Nif::NiPoint3Interpolator>(
+                                mEmbeddedSequences, matctrl, Nif::RC_NiPoint3Interpolator))
+                            composite->addController(
+                                new MaterialColorController(std::move(keys), matctrl->mTargetColor, baseMaterial));
+                        continue;
+                    }
                     if (matctrl->mData.empty() && interp.empty())
                         continue;
                     if (mVersion <= Nif::NIFFile::VER_MW
@@ -1672,7 +1891,11 @@ namespace NifOsg
                 rig->setInfluences(influences);
                 rig->setTransform(data->mTransform.toMatrix());
                 if (const Nif::NiAVObject* rootBone = skin->mRoot.getPtr())
+                {
                     rig->setRootBone(rootBone->mName);
+                    if (mBethVersion >= Nif::NIFFile::BethVersion::BETHVER_FO3)
+                        mKeptNodes.insert(rootBone->mName);
+                }
 
                 drawable = rig;
             }
@@ -1703,8 +1926,12 @@ namespace NifOsg
                                                       morphs[i].mVertices.data()),
                             0.f);
 
-                    osg::ref_ptr<GeomMorpherController> morphctrl = new GeomMorpherController(nimorphctrl);
-                    setupController(ctrl.getPtr(), morphctrl, animflags);
+                    osg::ref_ptr<GeomMorpherController> morphctrl = createSequenceMorpher(nimorphctrl);
+                    if (morphctrl == nullptr)
+                    {
+                        morphctrl = new GeomMorpherController(nimorphctrl);
+                        setupController(ctrl.getPtr(), morphctrl, animflags);
+                    }
                     morphGeom->setUpdateCallback(morphctrl);
 
                     drawable = morphGeom;
@@ -2987,43 +3214,31 @@ namespace NifOsg
 
     void Loader::loadEmbeddedSequences(Nif::FileView nif, SceneUtil::KeyframeHolder& target)
     {
-        const Nif::NiControllerManager* manager = nullptr;
-        for (size_t i = 0; i < nif.numRoots() && manager == nullptr; ++i)
-        {
-            const auto* root = dynamic_cast<const Nif::NiObjectNET*>(nif.getRoot(i));
-            if (root == nullptr)
-                continue;
-            for (Nif::NiTimeControllerPtr ctrl = root->mController; !ctrl.empty(); ctrl = ctrl->mNext)
-            {
-                if (ctrl->mRecordType == Nif::RC_NiControllerManager)
-                {
-                    manager = static_cast<const Nif::NiControllerManager*>(ctrl.getPtr());
-                    break;
-                }
-            }
-        }
-
+        const Nif::NiControllerManager* manager = findControllerManager(nif);
         if (manager == nullptr)
             return;
 
-        // Every sequence has its own time range (usually starting at 0), but an animation source has one timeline.
-        // Lay the sequences out one after another with a gap between them.
-        constexpr float sequenceGap = 1.f;
-        float timelineTime = 0.f;
         std::map<std::string, osg::ref_ptr<SequenceKeyframeController>> controllers;
-        for (const auto& sequencePtr : manager->mSequences)
+        for (const EmbeddedSequence& layout : layoutEmbeddedSequences(manager))
         {
-            if (sequencePtr.empty())
-                continue;
-            const Nif::NiControllerSequence& sequence = sequencePtr.get();
-            const std::string name = Misc::StringUtils::lowerCase(sequence.mName);
-            if (name.empty())
-                continue;
-
-            const float length = std::max(sequence.mStopTime - sequence.mStartTime, 0.f);
-            const float offset = timelineTime - sequence.mStartTime;
+            const Nif::NiControllerSequence& sequence = *layout.mSequence;
+            const std::string& name = layout.mName;
+            const float timelineTime = layout.mStart;
+            const float length = layout.mLength;
+            const float offset = layout.mOffset;
             target.mTextKeys.emplace(timelineTime, name + ": start");
             target.mTextKeys.emplace(timelineTime + length, name + ": stop");
+
+            // Keep the sequence's own text keys (e.g. "Sound: EMTFlagFlap02" on flags). Its "start" and "end" keys
+            // are already covered by the group's start and stop keys.
+            if (const auto* textKeys = dynamic_cast<const Nif::NiTextKeyExtraData*>(sequence.mTextKeys.getPtr()))
+            {
+                SceneUtil::TextKeyMap sequenceKeys;
+                extractTextKeys(textKeys, sequenceKeys);
+                for (const auto& [time, key] : sequenceKeys)
+                    if (key != "start" && key != "end")
+                        target.mTextKeys.emplace(time + offset, std::string(key));
+            }
 
             for (const Nif::ControlledBlock& block : sequence.mControlledBlocks)
             {
@@ -3042,8 +3257,6 @@ namespace NifOsg
                     .mController = new KeyframeController(
                         static_cast<const Nif::NiTransformInterpolator*>(block.mInterpolator.getPtr())) });
             }
-
-            timelineTime += length + sequenceGap;
         }
 
         for (const auto& [nodeName, controller] : controllers)

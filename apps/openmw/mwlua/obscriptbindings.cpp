@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -9,12 +10,14 @@
 #include <sol/table.hpp>
 #include <sol/usertype.hpp>
 
+#include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadbook.hpp>
 #include <components/esm4/loadclot.hpp>
+#include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadmesg.hpp>
@@ -28,10 +31,13 @@
 #include <components/misc/strings/lower.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwclass/esm4base.hpp"
+#include "../mwclass/esm4door.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/store.hpp"
 
 #include "context.hpp"
+#include "luamanagerimp.hpp"
 #include "object.hpp"
 #include "obscriptdialoguebindings.hpp"
 
@@ -171,7 +177,8 @@ namespace MWLua
             auto it = index.find(Misc::StringUtils::lowerCase(editorId));
             if (it == index.end())
                 return sol::nil;
-            const ESM4::Message* msg = MWBase::Environment::get().getESMStore()->get<ESM4::Message>().search(it->second);
+            const ESM4::Message* msg
+                = MWBase::Environment::get().getESMStore()->get<ESM4::Message>().search(it->second);
             if (msg == nullptr)
                 return sol::nil;
             sol::table res(lua, sol::create);
@@ -192,6 +199,45 @@ namespace MWLua
             if (bounds.x() <= 0.f && bounds.y() <= 0.f && bounds.z() <= 0.f)
                 return sol::nullopt;
             return bounds;
+        };
+
+        // Sequences embedded in the object's model (NiControllerSequences such as "Forward" of a lever or "Open" of a
+        // terminal). Group names are lower case. Plays once and holds the last frame.
+        api["playEmbeddedGroup"] = [context](const Object& object, std::string_view group) {
+            context.mLuaManager->addAction(
+                [object = Object(object), group = Misc::StringUtils::lowerCase(group)] {
+                    // Some scripts play a group every frame, so report each missing group once.
+                    static std::set<std::string> reported;
+                    if (!MWClass::ESM4Impl::playEmbeddedAnimation(object.ptr(), group) && reported.insert(group).second)
+                        Log(Debug::Verbose)
+                            << "[obscript] no embedded animation \"" << group << "\" on " << object.id().toString();
+                },
+                "obscriptPlayEmbeddedGroupAction");
+        };
+
+        // SetOpenState: doors keep their own open state, other objects (terminals, switches, containers) play their
+        // "Open" or "Close" sequence.
+        api["setOpenState"] = [context](const Object& object, bool open) {
+            context.mLuaManager->addAction(
+                [object = Object(object), open] {
+                    const MWWorld::Ptr& ptr = object.ptr();
+                    if (ptr.getType() == ESM4::Door::sRecordId)
+                    {
+                        if (MWClass::ESM4Door::isOpen(ptr) != open)
+                            MWClass::ESM4Door::toggle(ptr);
+                        return;
+                    }
+                    MWClass::ESM4Impl::playEmbeddedAnimation(ptr, open ? "open" : "close");
+                },
+                "obscriptSetOpenStateAction");
+        };
+
+        // Whether a door is open; nil for anything else.
+        api["isDoorOpen"] = [](const Object& object) -> sol::optional<bool> {
+            const MWWorld::Ptr& ptr = object.ptr();
+            if (ptr.getType() != ESM4::Door::sRecordId)
+                return sol::nullopt;
+            return MWClass::ESM4Door::isOpen(ptr);
         };
 
         // Opt-in runtime tracing (OPENMW_OBSCRIPT_TRACE=1); the Lua sandbox has no os.getenv.

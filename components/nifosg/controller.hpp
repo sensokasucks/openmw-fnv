@@ -200,6 +200,7 @@ namespace NifOsg
 
     public:
         ControllerFunction(const Nif::NiTimeController* ctrl);
+        ControllerFunction(const Nif::NiControllerSequence* sequence);
 
         float calculate(float value) const override;
 
@@ -211,6 +212,10 @@ namespace NifOsg
     {
     public:
         GeomMorpherController(const Nif::NiGeomMorpherController* ctrl);
+        // For a morpher driven by a NiControllerManager: the morph weights come from a sequence's interpolators,
+        // one per morph target (null where the target is not animated).
+        GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+            const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators);
         GeomMorpherController();
         GeomMorpherController(const GeomMorpherController& copy, const osg::CopyOp& copyop);
 
@@ -371,6 +376,8 @@ namespace NifOsg
 
     public:
         AlphaController(const Nif::NiAlphaController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial);
         AlphaController();
         AlphaController(const AlphaController& copy, const osg::CopyOp& copyop);
 
@@ -385,6 +392,9 @@ namespace NifOsg
     {
     public:
         MaterialColorController(const Nif::NiMaterialColorController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        MaterialColorController(Nif::Vector3KeyMapPtr keys, Nif::NiMaterialColorController::TargetColor targetColor,
+            const osg::Material* baseMaterial);
         MaterialColorController();
         MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop);
 

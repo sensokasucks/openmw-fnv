@@ -28,6 +28,14 @@ namespace MWClass
             MWPhysics::PhysicsSystem& physics);
         MWGui::ToolTipInfo getToolTipInfo(std::string_view name, int count);
 
+        // Makes the sequence embedded in the object's model (e.g. "open" of a footlocker) playable through the
+        // mechanics manager. Returns false if the model has no such sequence.
+        bool prepareEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group);
+
+        // Plays a sequence embedded in the object's model once and holds its last frame, like the original engine
+        // does for PlayGroup and SetOpenState. Returns false if the model has no such sequence.
+        bool playEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group);
+
         // We don't handle ESM4 player stats yet, so for resolving levelled object we use an arbitrary number.
         constexpr int sDefaultLevel = 5;
 

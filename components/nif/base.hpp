@@ -25,7 +25,9 @@ namespace Nif
     {
         enum Flags
         {
-            Flag_Active = 0x8
+            Flag_Active = 0x8,
+            // Later versions keep the manager-controlled bool of NiInterpController here
+            Flag_ManagerControlled = 0x20
         };
 
         enum ExtrapolationMode

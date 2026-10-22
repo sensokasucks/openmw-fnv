@@ -26,6 +26,27 @@ namespace NifOsg
     {
     }
 
+    ControllerFunction::ControllerFunction(const Nif::NiControllerSequence* sequence)
+        : mFrequency(sequence->mFrequency)
+        , mPhase(0.f)
+        , mStartTime(sequence->mStartTime)
+        , mStopTime(sequence->mStopTime)
+    {
+        // Sequences store their cycle type as 0 = loop, 1 = reverse, 2 = clamp
+        switch (static_cast<uint32_t>(sequence->mExtrapolationMode))
+        {
+            case 0:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Cycle;
+                break;
+            case 1:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Reverse;
+                break;
+            default:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Constant;
+                break;
+        }
+    }
+
     float ControllerFunction::calculate(float value) const
     {
         float time = mFrequency * value + mPhase;
@@ -329,6 +350,17 @@ namespace NifOsg
         }
     }
 
+    GeomMorpherController::GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+        const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators)
+    {
+        mKeyFrames.resize(sequenceInterpolators.size());
+        mWeights = ctrl->mWeights;
+
+        for (std::size_t i = 0; i < sequenceInterpolators.size(); ++i)
+            if (sequenceInterpolators[i] != nullptr)
+                mKeyFrames[i] = FloatInterpolator(sequenceInterpolators[i]);
+    }
+
     void GeomMorpherController::operator()(SceneUtil::MorphGeometry* node, osg::NodeVisitor* nv)
     {
         if (hasInput())
@@ -520,6 +552,12 @@ namespace NifOsg
             mData = FloatInterpolator(ctrl->mData->mKeyList, 1.f);
     }
 
+    AlphaController::AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial)
+        : mData(std::move(keys), 1.f)
+        , mBaseMaterial(baseMaterial)
+    {
+    }
+
     AlphaController::AlphaController(const AlphaController& copy, const osg::CopyOp& copyop)
         : StateSetUpdater(copy, copyop)
         , Controller(copy)
@@ -560,6 +598,14 @@ namespace NifOsg
         }
         else if (!ctrl->mData.empty())
             mData = Vec3Interpolator(ctrl->mData->mKeyList, osg::Vec3f(1, 1, 1));
+    }
+
+    MaterialColorController::MaterialColorController(Nif::Vector3KeyMapPtr keys,
+        Nif::NiMaterialColorController::TargetColor targetColor, const osg::Material* baseMaterial)
+        : mData(std::move(keys), osg::Vec3f(1, 1, 1))
+        , mTargetColor(targetColor)
+        , mBaseMaterial(baseMaterial)
+    {
     }
 
     MaterialColorController::MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop)

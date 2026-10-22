@@ -83,8 +83,10 @@ obs.bind('GetButtonPressed', function()
 end)
 
 -- ---------------------------------------------------------------- PlayGroup
--- `PlayGroup GroupName flags` on the script's own object. OpenMW only plays
--- animations it has text keys for, so a missing group is reported once.
+-- `PlayGroup GroupName flags` on the script's own object, or `Ref.PlayGroup`.
+-- Groups OpenMW does not know yet are looked up among the sequences embedded in
+-- the model (levers' "Forward"/"Backward", terminals' "Open"), which are set up
+-- on first use.
 obs.bind('PlayGroup', function(a, b)
     local ref, group
     if type(a) == 'string' and type(b) == 'string' then
@@ -94,19 +96,49 @@ obs.bind('PlayGroup', function(a, b)
     end
     if type(group) ~= 'string' then return 0 end
     if ref ~= nil and ref:lower() ~= 'player' then
-        warnOnce('playgroup:ref', 'PlayGroup on another reference is not supported yet: ' .. ref)
+        core.sendGlobalEvent('ObScriptPlayGroupByRef', { editorId = ref, group = group })
         return 0
     end
     local ok, has = pcall(anim.hasGroup, self, group)
     if not ok or not has then
-        warnOnce('playgroup:' .. group:lower(),
-            'PlayGroup: no animation group "' .. group .. '" on ' .. tostring(self.object)
-            .. (ok and '' or ' (no animation)'))
+        core.obscript.playEmbeddedGroup(self.object, group)
         return 0
     end
     -- Play once; animations whose text keys loop keep looping on their own.
     anim.playBlended(self, group, { loops = 0, autoDisable = true })
     return 0
+end)
+
+-- ---------------------------------------------------------------- open state
+-- `SetOpenState 1|0` and `GetOpenState` (1 open, 3 closed; the original also
+-- reports 2 opening and 4 closing). Doors keep their own state; other objects
+-- play their "Open" or "Close" sequence and remember the last state set here.
+local openState = nil
+obs.bind('SetOpenState', function(a, b)
+    local ref, value
+    if type(a) == 'string' then
+        ref, value = a, b
+    else
+        value = a
+    end
+    local open = obs.b(value or 0)
+    if ref ~= nil then
+        core.sendGlobalEvent('ObScriptSetOpenStateByRef', { editorId = ref, open = open })
+        return 0
+    end
+    openState = open
+    core.obscript.setOpenState(self.object, open)
+    return 0
+end)
+
+obs.bind('GetOpenState', function(ref)
+    if type(ref) == 'string' then
+        warnOnce('getopenstate:ref', 'GetOpenState on another reference is not supported yet: ' .. ref)
+        return 3
+    end
+    local open = core.obscript.isDoorOpen(self.object)
+    if open == nil then open = openState end
+    return open and 1 or 3
 end)
 
 -- ---------------------------------------------------------------- trigger volumes

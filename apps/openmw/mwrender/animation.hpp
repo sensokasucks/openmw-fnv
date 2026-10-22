@@ -295,7 +295,10 @@ namespace MWRender
          * @param baseModel The filename of the mObjectRoot, only used for error messages.
          */
         void addAnimSource(std::string_view model, const std::string& baseModel);
-        std::shared_ptr<AnimSource> addSingleAnimSource(VFS::Path::NormalizedView kfname, const std::string& baseModel);
+        /// @param allowWithoutControllers Also add a source whose groups only drive the model's own controllers
+        /// (e.g. embedded sequences that fade a plant's fruit), which then follow the animation time.
+        std::shared_ptr<AnimSource> addSingleAnimSource(
+            VFS::Path::NormalizedView kfname, const std::string& baseModel, bool allowWithoutControllers = false);
 
         /** Adds an additional light to the given node using the specified ESM record. */
         void addExtraLight(osg::ref_ptr<osg::Group> parent, const SceneUtil::LightCommon& light);
