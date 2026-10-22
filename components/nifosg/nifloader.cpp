@@ -360,6 +360,21 @@ namespace NifOsg
         // This is used to queue emitters that weren't attached to their node yet.
         std::vector<std::pair<unsigned int, osg::ref_ptr<Emitter>>> mEmitterQueue;
 
+        // FO3/FONV only draw shapes that carry a BSShader*Property; ones without (bone boxes left in animated
+        // meshes, for example) stay invisible in the game.
+        bool hasFO3Shader(const Nif::NiAVObject* nifNode) const
+        {
+            if (mBethVersion < Nif::NIFFile::BethVersion::BETHVER_FO3 || mBethVersion >= Nif::NIFFile::BethVersion::BETHVER_SKY)
+                return true;
+            const unsigned int type = nifNode->mRecordType;
+            if (type != Nif::RC_NiTriShape && type != Nif::RC_NiTriStrips && type != Nif::RC_BSLODTriShape)
+                return true;
+            for (const auto& property : nifNode->mProperties)
+                if (!property.empty() && dynamic_cast<const Nif::BSShaderProperty*>(property.getPtr()))
+                    return true;
+            return false;
+        }
+
         void loadKf(Nif::FileView nif, SceneUtil::KeyframeHolder& target) const
         {
             const Nif::NiSequenceStreamHelper* seq = nullptr;
@@ -918,6 +933,8 @@ namespace NifOsg
                     if (args.mHasMarkers)
                         skip = Misc::StringUtils::ciStartsWith(nifNode->mName, "EditorMarker")
                             || Misc::StringUtils::ciStartsWith(nifNode->mName, "VisibilityEditorMarker");
+                    if (!skip && isNiGeometry && !hasFO3Shader(nifNode))
+                        skip = true;
                 }
                 if (!skip)
                 {
