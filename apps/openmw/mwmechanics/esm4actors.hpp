@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <string_view>
 
 #include <osg/Vec3f>
 
@@ -36,6 +37,7 @@ namespace MWMechanics
             bool mRun = false;
             float mTolerance = 32.f; // how close counts as arrived
             std::optional<float> mFinalYaw; // radians, turned to on arrival
+            bool mDirect = false; // without a navmesh route, go straight there
         };
 
         static ESM4Actors& get();
@@ -49,6 +51,11 @@ namespace MWMechanics
         // Turns in place.
         void face(const MWWorld::Ptr& ptr, float yaw);
         Status getStatus(const MWWorld::Ptr& ptr) const;
+
+        // Plays a one-off sequence (an attack) and goes back to walking or standing when it ends. Returns its length,
+        // 0 when the actor has no such sequence.
+        float playAction(const MWWorld::Ptr& ptr, std::string_view file);
+        bool isActing(const MWWorld::Ptr& ptr) const;
 
         void update(float duration, bool paused);
         void clear();
@@ -64,6 +71,7 @@ namespace MWMechanics
             osg::Vec3f mTarget;
             std::optional<float> mTurnTo;
             float mStuckTime = 0.f;
+            float mActionTime = 0.f; // left of the one-off sequence playing
         };
 
         // Returns false when the actor is done with this state (stopped, arrived and turned).

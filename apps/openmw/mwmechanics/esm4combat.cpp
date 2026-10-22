@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <random>
 
 #include <osg/ComputeBoundsVisitor>
 
@@ -13,6 +14,7 @@
 #include <components/esm4/loadweap.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwclass/esm4stats.hpp"
 #include "../mwphysics/collisiontype.hpp"
@@ -21,8 +23,10 @@
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/scene.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "actorutil.hpp"
+#include "creaturestats.hpp"
 #include "esm4actors.hpp"
 
 namespace MWMechanics::ESM4Combat
@@ -103,6 +107,32 @@ namespace MWMechanics::ESM4Combat
                     return std::nullopt;
             }
             return tMin;
+        }
+
+        struct PendingHit
+        {
+            ESM::RefNum mAttacker;
+            ESM::RefNum mTarget;
+            float mTime; // until the blow lands
+            float mReach;
+        };
+        std::vector<PendingHit> sPendingHits;
+
+        std::mt19937& random()
+        {
+            static std::mt19937 generator{ std::random_device{}() };
+            return generator;
+        }
+
+        // The player is a Morrowind actor: blows take its Morrowind health, so that death works as usual.
+        void hurtPlayer(const MWWorld::Ptr& player, float damage)
+        {
+            MWMechanics::CreatureStats& stats = player.getClass().getCreatureStats(player);
+            MWMechanics::DynamicStat<float> health = stats.getHealth();
+            health.setCurrent(health.getCurrent() - damage);
+            stats.setHealth(health);
+            Stats::damage(player, Stats::Health, damage);
+            MWBase::Environment::get().getWindowManager()->activateHitOverlay();
         }
 
         template <class Record>
@@ -212,6 +242,74 @@ namespace MWMechanics::ESM4Combat
         result.mDamage = hit(result.mTarget, attacker, damage);
         result.mKilled = isDead(result.mTarget);
         return result;
+    }
+
+    float getUnarmedDamage(const MWWorld::Ptr& attacker)
+    {
+        if (attacker.getType() == ESM::REC_CREA4)
+            return Stats::getCurrent(attacker, Stats::MeleeDamage);
+        // FNV unarmed: fUnarmedDamageMult with the Unarmed skill, roughly 1-10 for people
+        return 1.f + Stats::getCurrent(attacker, Stats::Unarmed) / 10.f;
+    }
+
+    bool attack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, float reach)
+    {
+        if (isDead(attacker) || ESM4Actors::get().isActing(attacker))
+            return false;
+        // Creatures keep their attacks next to the skeleton
+        static constexpr std::string_view attacks[]
+            = { "h2hattackleft.kf", "h2hattackright.kf", "h2hattackpower.kf", "h2hattackforwardpower.kf" };
+        const std::size_t first = std::uniform_int_distribution<std::size_t>(0, 1)(random());
+        float length = 0.f;
+        for (std::size_t i = 0; i < std::size(attacks) && length <= 0.f; ++i)
+            length = ESM4Actors::get().playAction(attacker, attacks[(first + i) % std::size(attacks)]);
+        if (length <= 0.f)
+            length = 1.f; // no sequence: the blow still lands
+        sPendingHits.push_back(
+            { attacker.getCellRef().getRefNum(), target.getCellRef().getRefNum(), length * 0.45f, reach });
+        return true;
+    }
+
+    void update(float duration, bool paused)
+    {
+        if (paused || sPendingHits.empty())
+            return;
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        std::vector<PendingHit> landed;
+        for (auto it = sPendingHits.begin(); it != sPendingHits.end();)
+        {
+            it->mTime -= duration;
+            if (it->mTime > 0.f)
+            {
+                ++it;
+                continue;
+            }
+            landed.push_back(*it);
+            it = sPendingHits.erase(it);
+        }
+        for (const PendingHit& blow : landed)
+        {
+            const MWWorld::Ptr attacker = worldModel.getPtr(blow.mAttacker);
+            const MWWorld::Ptr target = worldModel.getPtr(blow.mTarget);
+            if (attacker.isEmpty() || target.isEmpty() || isDead(attacker) || isDead(target))
+                continue;
+            if (target == getPlayer() && target.getClass().getCreatureStats(target).isDead())
+                continue;
+            const osg::Vec3f delta
+                = target.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
+            if (delta.length() > blow.mReach * 1.5f)
+                continue;
+            const float damage = applyArmor(target, getUnarmedDamage(attacker));
+            if (target == getPlayer())
+                hurtPlayer(target, damage);
+            else
+                hit(target, attacker, damage);
+        }
+    }
+
+    void clear()
+    {
+        sPendingHits.clear();
     }
 
     void kill(const MWWorld::Ptr& actor, bool instant)

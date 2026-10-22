@@ -560,6 +560,9 @@ return {
                     or (combat and combat.isDead(npc)) then
                     tracked[id] = nil
                     states[id] = nil
+                elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
+                    -- fighting (scripts/omw/fnvcombat); the package is picked again afterwards
+                    states[id] = nil
                 else
                     local s = states[id]
                     if s == nil then

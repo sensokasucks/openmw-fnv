@@ -380,30 +380,6 @@ namespace MWRender
         };
     }
 
-    void ESM4NpcAnimation::playIdleFONV()
-    {
-        playLoopFONV("mtidle.kf", false);
-    }
-
-    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
-    {
-        if (locomotion == mLocomotion || mDead)
-            return;
-        mLocomotion = locomotion;
-        switch (locomotion)
-        {
-            case Locomotion::Idle:
-                playLoopFONV("mtidle.kf", false);
-                break;
-            case Locomotion::Walk:
-                playLoopFONV("mtforward.kf", true);
-                break;
-            case Locomotion::Run:
-                playLoopFONV("mtfastforward.kf", true);
-                break;
-        }
-    }
-
     namespace
     {
         // Plays a sequence once, backwards when asked, and holds the frame it ends on.
@@ -433,6 +409,72 @@ namespace MWRender
             bool mSkipToEnd;
             std::optional<double> mStart;
         };
+    }
+
+    void ESM4NpcAnimation::playIdleFONV()
+    {
+        playLoopFONV("mtidle.kf", false);
+    }
+
+    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
+    {
+        if (locomotion == mLocomotion || mDead)
+            return;
+        mLocomotion = locomotion;
+        // An attack or other one-off sequence finishes first, resumeLocomotion picks the loop up again.
+        if (!mInAction)
+            playLocomotion();
+    }
+
+    void ESM4NpcAnimation::resumeLocomotion()
+    {
+        if (!mInAction || mDead)
+            return;
+        mInAction = false;
+        playLocomotion();
+    }
+
+    float ESM4NpcAnimation::playActionFONV(std::string_view file)
+    {
+        if (mDead)
+            return 0.f;
+        // Attacks sit next to the skeleton, idles in idleanims/
+        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const std::string_view skeleton = skeletonPath.value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return 0.f;
+        const std::string dir = std::string(skeleton.substr(0, slash + 1));
+        VFS::Path::Normalized path(dir + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+            path = VFS::Path::Normalized(dir + "idleanims/" + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+        {
+            Log(Debug::Verbose) << "No " << file << " for " << mPtr.getCellRef().getRefId();
+            return 0.f;
+        }
+        const auto source = std::make_shared<OnceTimeSource>(false, false);
+        source->mDuration = playKeyframesFONV(path, source, true);
+        mInAction = source->mDuration > 0.f;
+        if (!mInAction)
+            playLocomotion();
+        return source->mDuration;
+    }
+
+    void ESM4NpcAnimation::playLocomotion()
+    {
+        switch (mLocomotion)
+        {
+            case Locomotion::Idle:
+                playLoopFONV("mtidle.kf", false);
+                break;
+            case Locomotion::Walk:
+                playLoopFONV("mtforward.kf", true);
+                break;
+            case Locomotion::Run:
+                playLoopFONV("mtfastforward.kf", true);
+                break;
+        }
     }
 
     void ESM4NpcAnimation::playDeath(bool instant)

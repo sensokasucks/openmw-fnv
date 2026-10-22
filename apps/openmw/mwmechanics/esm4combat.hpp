@@ -44,6 +44,17 @@ namespace MWMechanics::ESM4Combat
 
     // Lays the actor down and stops it moving.
     void kill(const MWWorld::Ptr& actor, bool instant = false);
+
+    // Unarmed or creature attack (one of the actor's attack sequences). Partway through, the target takes the
+    // attacker's damage if it is still within reach. False if the actor can't attack now.
+    bool attack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, float reach);
+
+    // Damage of the attacker's unarmed or creature attack, before armor.
+    float getUnarmedDamage(const MWWorld::Ptr& attacker);
+
+    // Resolves attacks in progress.
+    void update(float duration, bool paused);
+    void clear();
 }
 
 #endif

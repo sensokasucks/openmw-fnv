@@ -10,6 +10,8 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwphysics/collisiontype.hpp"
+#include "../mwphysics/raycasting.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -96,6 +98,11 @@ namespace MWMechanics
         std::optional<ESM4Navigation::Path> path;
         if (cell)
             path = mNavigation.findPath(*cell, position, target);
+        if (!path && options.mDirect)
+        {
+            path = ESM4Navigation::Path();
+            path->mPoints.push_back(target);
+        }
         if (!path)
         {
             Log(Debug::Verbose) << "ESM4 AI: no path for " << ptr.getCellRef().getRefNum().toString() << " from "
@@ -117,8 +124,31 @@ namespace MWMechanics
         auto it = mStates.find(ptr.getCellRef().getRefNum());
         if (it == mStates.end())
             return;
-        mStates.erase(it);
+        if (it->second.mActionTime > 0.f)
+        {
+            it->second.mStatus = Status::None;
+            it->second.mTurnTo.reset();
+        }
+        else
+            mStates.erase(it);
         setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
+    }
+
+    float ESM4Actors::playAction(const MWWorld::Ptr& ptr, std::string_view file)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        if (animation == nullptr || ESM4Combat::isDead(ptr))
+            return 0.f;
+        const float length = animation->playActionFONV(file);
+        if (length > 0.f)
+            mStates[ptr.getCellRef().getRefNum()].mActionTime = length;
+        return length;
+    }
+
+    bool ESM4Actors::isActing(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it != mStates.end() && it->second.mActionTime > 0.f;
     }
 
     void ESM4Actors::face(const MWWorld::Ptr& ptr, float yaw)
@@ -139,11 +169,21 @@ namespace MWMechanics
 
     bool ESM4Actors::updateActor(const MWWorld::Ptr& ptr, State& state, float duration)
     {
+        if (state.mActionTime > 0.f)
+        {
+            state.mActionTime -= duration;
+            if (state.mActionTime <= 0.f)
+            {
+                state.mActionTime = 0.f;
+                if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr))
+                    animation->resumeLocomotion();
+            }
+        }
         if (state.mStatus != Status::Moving)
         {
             if (state.mTurnTo && turnTowards(ptr, *state.mTurnTo, duration))
                 state.mTurnTo.reset();
-            return true;
+            return state.mStatus != Status::None || state.mTurnTo || state.mActionTime > 0.f;
         }
 
         MWBase::World& world = *MWBase::Environment::get().getWorld();
@@ -193,6 +233,16 @@ namespace MWMechanics
                 position.z() = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
                 break;
             }
+        }
+
+        if (corridor.empty())
+        {
+            // Straight moves keep to the ground below
+            const osg::Vec3f up(0.f, 0.f, 128.f);
+            const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(position + up,
+                position - up * 4.f, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            if (ground.mHit)
+                position.z() = ground.mHitPos.z();
         }
 
         MWWorld::Ptr moved = world.moveObject(ptr, position);

@@ -39,6 +39,11 @@ namespace MWRender
 
         // FO3/FONV: loops the standing idle or a forward locomotion sequence.
         void setLocomotion(Locomotion locomotion);
+        // Plays an attack (or another one-off sequence) next to the skeleton or in idleanims/ once, then holds its
+        // last frame until resumeLocomotion. Returns its length, 0 if there is no such file.
+        float playActionFONV(std::string_view file);
+        void resumeLocomotion();
+
         // Lays the actor down and keeps it there; instant for actors that were already dead when loaded.
         void playDeath(bool instant);
         bool isDead() const { return mDead; }
@@ -49,6 +54,7 @@ namespace MWRender
     private:
         Locomotion mLocomotion = Locomotion::Idle;
         bool mDead = false;
+        bool mInAction = false;
         float mLocomotionSpeed = 0.f;
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
@@ -73,6 +79,7 @@ namespace MWRender
         void updatePartsCreature();
         bool isFemale() const;
         void playIdleFONV();
+        void playLocomotion();
         // stripRootMotion: keep the accumulation root in place, the AI moves the actor
         void playLoopFONV(std::string_view file, bool stripRootMotion);
         // Binds the sequence's tracks to the skeleton, replacing the one played before. Returns its length.

@@ -16,7 +16,9 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
+#include "../mwclass/esm4creature.hpp"
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/esm4actors.hpp"
 #include "../mwmechanics/esm4combat.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -105,6 +107,22 @@ namespace MWLua
             return std::string(ptr.getClass().getName(ptr));
         };
 
+        // Aggro radius of a creature (AIDT): { radius = units, enabled = bool }; nil for anything else. Aggression,
+        // confidence and assistance are actor values (core.obscript.stats).
+        api["getAggroRadius"] = [](const Object& object, sol::this_state s) -> sol::object {
+            const MWWorld::Ptr& ptr = object.ptr();
+            if (ptr.getType() != ESM::REC_CREA4)
+                return sol::nil;
+            const ESM4::Creature* rec = MWClass::ESM4Creature::getAIDataRecord(ptr);
+            if (rec == nullptr || !rec->mHasFO3AIData)
+                return sol::nil;
+            sol::state_view lua(s);
+            sol::table t(lua, sol::create);
+            t["radius"] = rec->mFO3AIData.aggroRadius;
+            t["enabled"] = rec->mFO3AIData.aggroRadiusBehavior;
+            return t;
+        };
+
         api["canBeHit"] = [](const Object& actor) { return Combat::canBeHit(actor.ptr()); };
         api["isDead"] = [](const Object& actor) { return Combat::isDead(actor.ptr()); };
 
@@ -155,6 +173,20 @@ namespace MWLua
                 },
                 "obscriptCombatFireAction");
         };
+
+        // Unarmed or creature attack on the target: plays one of the attacker's attack sequences; the blow lands
+        // partway through if the target is still within reach (units).
+        api["attack"] = [context](const Object& attacker, const Object& target, sol::optional<float> reach) {
+            context.mLuaManager->addAction(
+                [attacker = Object(attacker), target = Object(target), reach = reach.value_or(150.f)] {
+                    Combat::attack(attacker.ptr(), target.ptr(), reach);
+                },
+                "obscriptCombatAttackAction");
+        };
+        // Whether an attack (or another one-off sequence) is playing.
+        api["isActing"]
+            = [](const Object& actor) { return MWMechanics::ESM4Actors::get().isActing(actor.ptr()); };
+        api["getUnarmedDamage"] = [](const Object& actor) { return Combat::getUnarmedDamage(actor.ptr()); };
 
         // Damages the target's health directly (melee hits, scripted damage); kills it when health runs out.
         api["hit"] = [context](const Object& target, sol::optional<Object> attacker, float damage) {
