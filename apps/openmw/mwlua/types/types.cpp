@@ -45,6 +45,7 @@ namespace MWLua
         constexpr std::string_view ESM4Door = "ESM4Door";
         constexpr std::string_view ESM4Flora = "ESM4Flora";
         constexpr std::string_view ESM4Furniture = "ESM4Furniture";
+        constexpr std::string_view ESM4IdleMarker = "ESM4IdleMarker";
         constexpr std::string_view ESM4Ingredient = "ESM4Ingredient";
         constexpr std::string_view ESM4ItemMod = "ESM4ItemMod";
         constexpr std::string_view ESM4Key = "ESM4Key";
@@ -96,6 +97,7 @@ namespace MWLua
             { ESM::REC_DOOR4, ObjectTypeName::ESM4Door },
             { ESM::REC_FLOR4, ObjectTypeName::ESM4Flora },
             { ESM::REC_FURN4, ObjectTypeName::ESM4Furniture },
+            { ESM::REC_IDLM4, ObjectTypeName::ESM4IdleMarker },
             { ESM::REC_INGR4, ObjectTypeName::ESM4Ingredient },
             { ESM::REC_IMOD4, ObjectTypeName::ESM4ItemMod },
             { ESM::REC_KEYM4, ObjectTypeName::ESM4Key },
@@ -248,6 +250,7 @@ namespace MWLua
         addESM4DoorBindings(addType(ObjectTypeName::ESM4Door, { ESM::REC_DOOR4 }, ObjectTypeName::Lockable), context);
         addType(ObjectTypeName::ESM4Flora, { ESM::REC_FLOR4 });
         addESM4FurnitureBindings(addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 }), context);
+        addESM4IdleMarkerBindings(addType(ObjectTypeName::ESM4IdleMarker, { ESM::REC_IDLM4 }), context);
         addType(ObjectTypeName::ESM4Ingredient, { ESM::REC_INGR4 });
         addType(ObjectTypeName::ESM4ItemMod, { ESM::REC_IMOD4 });
         addType(ObjectTypeName::ESM4Key, { ESM::REC_KEYM4 });

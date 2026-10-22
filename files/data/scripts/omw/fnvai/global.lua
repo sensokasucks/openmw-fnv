@@ -6,12 +6,13 @@
 -- pass. The package then decides where the NPC walks; the engine walks it
 -- there along the cell's navmesh (core.obscript.ai).
 --
--- Supported for now: Travel, Sandbox, Wander, Sleep and Eat (walk to the
--- place; using beds, chairs and idle markers is not done yet), Guard,
--- Ambush, Dialogue and Use Item At (walk to the location and stay there),
--- Follow, Accompany and Escort (keep near the target). Moving to another
--- cell uses a door that leads there when the player can see the NPC, and
--- teleports it otherwise.
+-- Supported for now: Travel, Sandbox (wander, sit on chairs, lean, use
+-- idle markers), Wander, Sleep (lie in a free bed), Eat (sit down and eat),
+-- Guard, Ambush, Dialogue and Use Item At (walk to the location and stay
+-- there), Follow, Accompany and Escort (keep near the target). Moving to
+-- another cell uses a door that leads there when the player can see the
+-- NPC, and teleports it otherwise. Furniture and idle markers are handled
+-- in furniture.lua, the animations come from the idle tree (idles.lua).
 --
 -- From the console (luag): I.FNVAI.debug('DocMitchell') prints the NPC's
 -- packages and which one runs.
@@ -26,6 +27,7 @@ local ai = core.obscript and core.obscript.ai
 if ai == nil or types.ESM4NPC == nil then
     return {}
 end
+local furniture = require('scripts.omw.fnvai.furniture')
 local dlg = core.obscript.dialogue
 
 local PLAYER_REF = 'FormId:0x14'
@@ -42,6 +44,22 @@ local L = {
     NearReference = 0, InCell = 1, NearCurrentLocation = 2, NearEditorLocation = 3, ObjectId = 4,
     ObjectType = 5, NearLinkedReference = 6, AtPackageLocation = 7,
 }
+
+-- Sandbox package specific flags (PKDT): what the NPC may not do
+local SANDBOX_NO_EATING = 1
+local SANDBOX_NO_SLEEPING = 2
+local SANDBOX_NO_CONVERSATION = 4
+local SANDBOX_NO_IDLE_MARKERS = 8
+local SANDBOX_NO_FURNITURE = 16
+local SANDBOX_NO_WANDERING = 32
+
+local function hasFlag(flags, flag)
+    return math.floor((flags or 0) / flag) % 2 == 1
+end
+
+-- fSandboxDurationMultFurniture / fSandboxDurationMultIdleMarker
+local SANDBOX_FURNITURE_MULT = 3.0
+local SANDBOX_IDLE_MARKER_MULT = 1.5
 
 local EVALUATE_EVERY = 2.0 -- seconds between package picks
 local TICK_EVERY = 0.25 -- seconds between behaviour updates
@@ -401,14 +419,41 @@ local function goAndStay(npc, s, dest)
     end
 end
 
--- Sandbox/Wander: walk to random spots around the place and linger there.
-local function roam(npc, s, dest)
+-- Sandbox/Wander: walk to random spots around the place and linger there; a sandboxing NPC also sits on
+-- the chairs and uses the idle markers nearby.
+local function roam(npc, s, dest, pkg)
     local center = dest.position or s.anchor
     local radius = dest.radius
     if radius == nil or radius <= 0 then
         radius = dest.position and 512 or 1024
     end
     if s.phase == nil or (s.phase == 'wait' and simTime >= s.waitUntil) then
+        local flags = pkg and pkg.type == T.Sandbox and pkg.specificFlags or 0
+        local linger = 8 + math.random() * 8
+        local roll = math.random()
+        if pkg and pkg.type == T.Sandbox and not hasFlag(flags, SANDBOX_NO_FURNITURE) and roll < 0.45 then
+            local target = furniture.findFurniture(npc, center, radius, false)
+            if target ~= nil and not (s.avoid and s.avoid[target.object.id]) then
+                furniture.begin(npc, s, target, { package = pkg.type, duration = linger * SANDBOX_FURNITURE_MULT },
+                    simTime)
+                s.phase = 'furniture'
+                return
+            end
+        end
+        if pkg and pkg.type == T.Sandbox and not hasFlag(flags, SANDBOX_NO_IDLE_MARKERS) and roll < 0.75 then
+            local target = furniture.findIdleMarker(npc, center, radius)
+            if target ~= nil and not (s.avoid and s.avoid[target.object.id]) then
+                local duration = target.record.idleTimer
+                if duration <= 0 then duration = linger * SANDBOX_IDLE_MARKER_MULT end
+                furniture.begin(npc, s, target, { package = pkg.type, duration = duration }, simTime)
+                s.phase = 'furniture'
+                return
+            end
+        end
+        if hasFlag(flags, SANDBOX_NO_WANDERING) then
+            s.phase, s.waitUntil = 'wait', simTime + linger
+            return
+        end
         local point = ai.randomPoint(npc, center, radius)
         if point == nil then
             s.phase, s.waitUntil = 'wait', simTime + 10
@@ -441,25 +486,69 @@ local function follow(npc, s, pkg)
     end
 end
 
--- Nearest bed of the NPC's cell that no other NPC has taken. TODO: lie down in it (furniture markers).
-local bedTakenBy = {} -- bed id -> npc id
-local function findBed(npc)
-    if types.ESM4Furniture == nil then return nil end
-    local best, bestDistance = nil, math.huge
-    for _, obj in ipairs(npc.cell:getAll()) do
-        if types.ESM4Furniture.objectIsInstance(obj) and (bedTakenBy[obj.id] == nil or bedTakenBy[obj.id] == npc.id) then
-            local model = (types.ESM4Furniture.record(obj).model or ''):lower()
-            if model:find('bed') or model:find('mattress') then
-                local distance = (obj.position - npc.position):length()
-                if distance < bestDistance then best, bestDistance = obj, distance end
-            end
+-- Sleep: lie down in a free bed near the place (anywhere in the cell without one), else linger there.
+local function sleep(npc, s, dest)
+    if s.phase == nil and not s.noFurniture then
+        local center = dest.position or npc.position
+        local radius = dest.position and math.max(dest.radius or 0, 512) or math.huge
+        local bed = furniture.findFurniture(npc, center, radius, true)
+        if bed ~= nil and not (s.avoid and s.avoid[bed.object.id]) then
+            furniture.begin(npc, s, bed, { sleep = true, package = T.Sleep }, simTime)
+            s.phase = 'furniture'
+            return
         end
+        s.noFurniture = true
     end
-    if best ~= nil then bedTakenBy[best.id] = npc.id end
-    return best
+    roam(npc, s, { position = dest.position, radius = 512 })
+end
+
+-- Eat: sit on a chair near the place and eat there, else linger.
+local function eat(npc, s, dest)
+    if s.phase == nil and not s.noFurniture then
+        local center = dest.position or npc.position
+        local radius = dest.position and math.max(dest.radius or 0, 512) or 1024
+        local chair = furniture.findFurniture(npc, center, radius, false)
+        if chair ~= nil and not (s.avoid and s.avoid[chair.object.id]) then
+            -- GetCurrentAIProcedure 10 = eating; the food idles check which item is in hand
+            furniture.begin(npc, s, chair, { procedure = 10, usedItem = 'random', package = T.Eat }, simTime)
+            s.phase = 'furniture'
+            return
+        end
+        s.noFurniture = true
+    end
+    roam(npc, s, { position = dest.position, radius = 512 })
+end
+
+local startPackage
+
+-- Runs the furniture use; true while the NPC is busy with it.
+local function tickFurniture(npc, s)
+    if not furniture.inUse(s) then return false end
+    local phase = furniture.tick(npc, s, simTime)
+    if phase == 'done' or phase == 'failed' then
+        if phase == 'failed' then
+            s.avoid = s.avoid or {}
+            local target = s.lastTarget
+            if target ~= nil then s.avoid[target] = true end
+        end
+        if s.pending ~= nil then
+            local pending = s.pending
+            s.pending = nil
+            startPackage(npc, s, pending.pkg)
+            return true
+        end
+        s.phase = 'wait'
+        s.waitUntil = simTime + 2 + math.random() * 4
+        return false
+    end
+    if s.furn ~= nil and s.furn.target ~= nil then
+        s.lastTarget = s.furn.target.object.id
+    end
+    return true
 end
 
 local function tick(npc, s)
+    if tickFurniture(npc, s) then return end
     local pkg = s.package
     if pkg == nil then return end
     if pkg.type == T.Follow or pkg.type == T.Accompany or pkg.type == T.Escort then
@@ -475,29 +564,23 @@ local function tick(npc, s)
         s.anchor = npc.position
     end
     if pkg.type == T.Sandbox or pkg.type == T.Wander then
-        roam(npc, s, dest)
-    elseif dest.position == nil and pkg.type == T.Sleep then
-        local bed = s.bed or findBed(npc)
-        s.bed = bed or false
-        if bed then
-            goAndStay(npc, s, { position = bed.position, radius = 96 })
-        else
-            roam(npc, s, { radius = 512 })
-        end
-    elseif dest.position == nil and pkg.type == T.Eat then
-        roam(npc, s, { radius = 512 })
+        roam(npc, s, dest, pkg)
+    elseif pkg.type == T.Sleep then
+        sleep(npc, s, dest)
+    elseif pkg.type == T.Eat then
+        eat(npc, s, dest)
     else
         goAndStay(npc, s, dest)
     end
 end
 
-local function start(npc, s, pkg)
+startPackage = function(npc, s, pkg)
     s.package = pkg
     s.phase = nil
     s.anchor = npc.position
     s.anchorCell = npc.cell.id
-    s.bed = nil
     s.run = false
+    s.noFurniture = nil
     if pkg ~= nil then
         s.dest = resolveLocation(npc, pkg, s)
         log(('%s picked package %s (%s)'):format(npc.recordId, pkg.editorId, pkg.typeName))
@@ -505,6 +588,17 @@ local function start(npc, s, pkg)
         s.dest = nil
         ai.stop(npc)
     end
+end
+
+-- Switches package; an NPC using furniture gets up first and starts the new package once standing.
+local function start(npc, s, pkg)
+    if furniture.inUse(s) then
+        s.package = pkg
+        s.pending = { pkg = pkg }
+        furniture.leave(npc, s)
+        return
+    end
+    startPackage(npc, s, pkg)
 end
 
 local function evaluate(npc, s)
@@ -524,6 +618,40 @@ return {
     interfaceName = 'FNVAI',
     interface = {
         version = 0,
+        --- Makes an NPC (by editor id) use the nearest chair ('sit'), bed ('sleep') or idle marker
+        -- ('idle') for duration seconds, for testing from the console: I.FNVAI.use('Trudy', 'sit').
+        use = function(name, kind, duration)
+            name = (name or ''):lower()
+            for id, npc in pairs(tracked) do
+                local actor = dlg and dlg.getActor(npc)
+                local editorId = actor and actor.editorId or ''
+                if editorId:lower() == name then
+                    local s = states[id]
+                    if s == nil then
+                        log(editorId .. ': not updated yet')
+                        return false
+                    end
+                    local target
+                    if kind == 'idle' then
+                        target = furniture.findIdleMarker(npc, npc.position, 4096)
+                    else
+                        target = furniture.findFurniture(npc, npc.position, 4096, kind == 'sleep')
+                    end
+                    if target == nil then
+                        log(editorId .. ': nothing to use nearby')
+                        return false
+                    end
+                    ai.stop(npc)
+                    s.phase = 'furniture'
+                    furniture.begin(npc, s, target, { sleep = kind == 'sleep', duration = duration or 30,
+                        procedure = kind == 'eat' and 10 or nil, usedItem = kind == 'eat' and 'random' or nil },
+                        simTime)
+                    return true
+                end
+            end
+            log(name .. ': not tracked (' .. tostring(next(tracked)) .. ')')
+            return false
+        end,
         --- Prints an NPC's packages, whether each one applies now, and the running one.
         debug = function(name)
             name = (name or ''):lower()
@@ -539,7 +667,8 @@ return {
                     end
                     local s = states[id]
                     log('  running: ' .. tostring(s and s.package and s.package.editorId) .. ', phase '
-                        .. tostring(s and s.phase) .. ', move ' .. ai.status(npc))
+                        .. tostring(s and s.phase) .. ', move ' .. ai.status(npc) .. ', furniture '
+                        .. tostring(s and s.furn and s.furn.phase) .. '/' .. ai.useStatus(npc))
                 end
             end
         end,
@@ -557,6 +686,7 @@ return {
             for id, npc in pairs(tracked) do
                 if not npc:isValid() or not ai.isInScene(npc) or not npc.enabled then
                     tracked[id] = nil
+                    if states[id] ~= nil then furniture.release(states[id]) end
                     states[id] = nil
                 else
                     local s = states[id]

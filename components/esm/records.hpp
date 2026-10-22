@@ -62,6 +62,8 @@
 #include <components/esm4/loadfurn.hpp>
 #include <components/esm4/loadhair.hpp>
 #include <components/esm4/loadhdpt.hpp>
+#include <components/esm4/loadidle.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadinfo.hpp>
 #include <components/esm4/loadingr.hpp>

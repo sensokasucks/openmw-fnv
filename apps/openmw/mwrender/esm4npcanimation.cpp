@@ -9,6 +9,10 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrace.hpp>
 
+#include <algorithm>
+#include <optional>
+#include <set>
+
 #include <osg/Material>
 #include <osg/io_utils>
 #include <osg/Texture2D>
@@ -56,7 +60,7 @@ namespace MWRender
         else if (traits->mIsFONV)
         {
             updatePartsFONV(*traits);
-            playIdleFONV();
+            playStandingIdleFONV();
         }
         else
         {
@@ -352,16 +356,32 @@ namespace MWRender
         private:
             osg::Vec3f mRest;
         };
+        // Sequence time counted from the frame the sequence started on, so one-shot sequences (furniture entries,
+        // special idles) begin at their first key.
+        class RelativeTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (!mStart)
+                    mStart = now;
+                return static_cast<float>(now - *mStart);
+            }
+
+        private:
+            std::optional<double> mStart;
+        };
     }
 
-    void ESM4NpcAnimation::playIdleFONV()
+    void ESM4NpcAnimation::playStandingIdleFONV()
     {
         playLoopFONV("mtidle.kf", false);
     }
 
-    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
+    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion, bool force)
     {
-        if (locomotion == mLocomotion)
+        if (locomotion == mLocomotion && !force)
             return;
         mLocomotion = locomotion;
         switch (locomotion)
@@ -398,10 +418,21 @@ namespace MWRender
             dir + (MWClass::ESM4Npc::isFemale(mPtr) ? "female/" : "male/") + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
+        playSequenceFONV(path, stripRootMotion);
+    }
+
+    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion)
+    {
+        const VFS::Path::Normalized path = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model));
+        return playSequenceFONV(path, !keepRootMotion);
+    }
+
+    float ESM4NpcAnimation::playSequenceFONV(const VFS::Path::Normalized& path, bool stripRootMotion)
+    {
         if (!mResourceSystem->getVFS()->exists(path))
         {
             Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
-            return;
+            return 0.f;
         }
 
         osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
@@ -412,20 +443,30 @@ namespace MWRender
             node->removeUpdateCallback(callback);
         mLoopCallbacks.clear();
 
-        const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
+        const auto source = std::make_shared<RelativeTimeSource>();
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
         mLocomotionSpeed = 0.f;
+        mRootMotion = osg::Vec3f();
+        float length = 0.f;
+        std::set<const osg::Node*> animated;
         for (const auto& [name, controller] : keyframes->mKeyframeControllers)
         {
             // Without movement accumulation, "Bip01 NonAccum" carries the whole root offset, so it belongs on the
             // accumulation root that holds the pelvis height in the skeleton.
-            const std::string_view target = !hasAccumRootTrack && name == "Bip01 NonAccum" ? "Bip01" : name;
+            const std::string target = !hasAccumRootTrack && name == "Bip01 NonAccum" ? std::string("Bip01") : name;
             auto found = nodeMap.find(target);
             if (found == nodeMap.end())
+            {
+                Log(Debug::Verbose) << "No bone " << target << " for track " << name << " of " << path;
                 continue;
+            }
             auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(found->second.get());
             if (transform == nullptr)
+            {
+                Log(Debug::Verbose) << "Bone " << target << " is a " << found->second->className() << " in "
+                                    << mPtr.getCellRef().getRefId();
                 continue;
+            }
             // The skeleton's own transform controllers have no time source and would reset the bone every frame.
             osg::Callback* callback = transform->getUpdateCallback();
             while (callback != nullptr)
@@ -435,35 +476,55 @@ namespace MWRender
                     transform->removeUpdateCallback(callback);
                 callback = next;
             }
-            if (!mRestTranslations.contains(transform))
-                mRestTranslations[transform] = transform->getMatrix().getTrans();
+            if (!mRestPoses.contains(transform))
+                mRestPoses[transform] = { transform->getMatrix().getTrans(), transform->getMatrix().getRotate() };
+            animated.insert(transform);
 
             osg::ref_ptr<SceneUtil::KeyframeController> cloned = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
             cloned->setSource(source);
             transform->addUpdateCallback(cloned->getAsCallback());
             mLoopCallbacks.emplace_back(transform, cloned->getAsCallback());
 
-            if (stripRootMotion && target == "Bip01")
+            if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                length = std::max(length, function->getMaximum());
+
+            if (target == "Bip01")
             {
-                // Speed of the cycle, so feet don't slide: distance the root covers over one loop
-                if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                // Distance the root covers over the sequence: the speed of a locomotion cycle (so feet don't slide),
+                // or where a furniture entry leaves the actor
+                const float duration = cloned->getFunction() ? cloned->getFunction()->getMaximum() : 0.f;
+                if (duration > 0.f)
                 {
-                    const float duration = function->getMaximum();
-                    if (duration > 0.f)
-                    {
-                        osg::Vec3f delta = controller->getTranslation(duration) - controller->getTranslation(0.f);
-                        delta.z() = 0.f;
-                        mLocomotionSpeed = delta.length() / duration;
-                        Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << duration;
-                    }
+                    osg::Vec3f delta = controller->getTranslation(duration) - controller->getTranslation(0.f);
+                    delta.z() = 0.f;
+                    mRootMotion = delta;
+                    mLocomotionSpeed = stripRootMotion ? delta.length() / duration : 0.f;
+                    Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << duration;
                 }
-                osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestTranslations[transform]);
-                transform->addUpdateCallback(strip);
-                mLoopCallbacks.emplace_back(transform, strip);
+                if (stripRootMotion)
+                {
+                    osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestPoses[transform].mTranslation);
+                    transform->addUpdateCallback(strip);
+                    mLoopCallbacks.emplace_back(transform, strip);
+                }
+            }
+        }
+        // Bones the sequence leaves alone would keep their last pose: a furniture entry leaves the accumulation
+        // root on the seat and "Bip01 NonAccum" turned around, while the seated loop (which only drives the latter,
+        // retargeted to the root) expects both at rest.
+        for (const auto& [node, rest] : mRestPoses)
+        {
+            if (animated.contains(node))
+                continue;
+            if (auto* transform = const_cast<NifOsg::MatrixTransform*>(dynamic_cast<const NifOsg::MatrixTransform*>(node)))
+            {
+                transform->setRotation(rest.mRotation);
+                transform->setTranslation(rest.mTranslation);
             }
         }
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ", speed "
-                            << mLocomotionSpeed;
+                            << mLocomotionSpeed << ", length " << length;
+        return length;
     }
 
     void ESM4NpcAnimation::insertHeadParts(

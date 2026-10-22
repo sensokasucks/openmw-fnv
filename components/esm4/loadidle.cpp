@@ -80,11 +80,51 @@ void ESM4::IdleAnimation::load(ESM4::Reader& reader)
             case ESM::fourCC("MODB"):
                 reader.get(mBoundRadius);
                 break;
-            case ESM::fourCC("CTDA"): // formId
+            case ESM::fourCC("CTDA"):
+            {
+                // FO3 (20 bytes) and FONV (28 bytes, with a reference); TES4/TES5 layouts are skipped
+                if (subHdr.dataSize == 20)
+                {
+                    TargetCondition condition{};
+                    reader.get(&condition, 20);
+                    addDialogCondition(reader, mConditions, condition, false);
+                }
+                else if (subHdr.dataSize == 28)
+                {
+                    TargetCondition condition{};
+                    reader.get(condition);
+                    if (condition.reference)
+                        reader.adjustFormId(condition.reference);
+                    addDialogCondition(reader, mConditions, condition, true);
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            }
+            case ESM::fourCC("DATA"):
+            {
+                // FO3/FONV: group section, looping min, looping max, unused, replay delay (int16), flags, unused
+                if (subHdr.dataSize == 6 || subHdr.dataSize == 8)
+                {
+                    std::uint8_t unused = 0;
+                    reader.get(mGroupSection);
+                    reader.get(mLoopMin);
+                    reader.get(mLoopMax);
+                    reader.get(unused);
+                    reader.get(mReplayDelay);
+                    if (subHdr.dataSize == 8)
+                    {
+                        reader.get(mIdleFlags);
+                        reader.get(unused);
+                    }
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            }
             case ESM::fourCC("CTDT"):
             case ESM::fourCC("CIS1"):
             case ESM::fourCC("CIS2"):
-            case ESM::fourCC("DATA"):
             case ESM::fourCC("MODD"):
             case ESM::fourCC("MODS"):
             case ESM::fourCC("MODT"):

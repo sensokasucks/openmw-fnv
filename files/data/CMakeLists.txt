@@ -178,6 +178,8 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvdialogue/global.lua
     scripts/omw/fnvdialogue/player.lua
     scripts/omw/fnvai/global.lua
+    scripts/omw/fnvai/idles.lua
+    scripts/omw/fnvai/furniture.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx

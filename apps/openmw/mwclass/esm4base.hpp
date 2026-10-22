@@ -2,6 +2,7 @@
 #define GAME_MWCLASS_ESM4BASE_H
 
 #include <components/esm4/inventory.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadtree.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -133,6 +134,19 @@ namespace MWClass
             : MWWorld::RegisteredClass<ESM4Static, ESM4Base<ESM4::Static>>(ESM4::Static::sRecordId)
         {
         }
+    };
+
+    // FO3/FONV idle markers: invisible spots where AI packages play the marker's idle animations.
+    class ESM4IdleMarker final : public MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>
+    {
+        friend MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>;
+        ESM4IdleMarker()
+            : MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>(ESM4::IdleMarker::sRecordId)
+        {
+        }
+
+    public:
+        VFS::Path::NormalizedView getModel(const MWWorld::ConstPtr& ptr) const override { return {}; }
     };
 
     class ESM4Tree final : public MWWorld::RegisteredClass<ESM4Tree, ESM4Base<ESM4::Tree>>
