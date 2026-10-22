@@ -54,6 +54,25 @@ namespace MWLua
             return ESM::RefId(id).serializeText();
         }
 
+        // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), damage, killed,
+        // position }
+        void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon,
+            const Combat::HitResult& hit)
+        {
+            context.mLua->protectedCall([&](LuaUtil::LuaView& view) {
+                sol::table data = view.newTable();
+                data["attacker"] = GObject(attacker);
+                data["weapon"] = formIdText(weapon.mId);
+                if (!hit.mTarget.isEmpty())
+                    data["target"] = GObject(hit.mTarget);
+                data["damage"] = hit.mDamage;
+                data["killed"] = hit.mKilled;
+                data["position"] = hit.mPosition;
+                context.mLuaEvents->addGlobalEvent(
+                    { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
+            });
+        }
+
         sol::table makeWeapon(sol::state_view& lua, const ESM4::Weapon& weapon)
         {
             sol::table t(lua, sol::create);
@@ -173,18 +192,7 @@ namespace MWLua
                     }
 
                     const Combat::HitResult hit = Combat::fire(attackerPtr, *weapon, origin, direction);
-                    context.mLua->protectedCall([&](LuaUtil::LuaView& view) {
-                        sol::table data = view.newTable();
-                        data["attacker"] = GObject(attackerPtr);
-                        data["weapon"] = formIdText(weapon->mId);
-                        if (!hit.mTarget.isEmpty())
-                            data["target"] = GObject(hit.mTarget);
-                        data["damage"] = hit.mDamage;
-                        data["killed"] = hit.mKilled;
-                        data["position"] = hit.mPosition;
-                        context.mLuaEvents->addGlobalEvent(
-                            { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
-                    });
+                    sendShot(context, attackerPtr, *weapon, hit);
                 },
                 "obscriptCombatFireAction");
         };
@@ -202,6 +210,47 @@ namespace MWLua
         api["isActing"]
             = [](const Object& actor) { return MWMechanics::ESM4Actors::get().isActing(actor.ptr()); };
         api["getUnarmedDamage"] = [](const Object& actor) { return Combat::getUnarmedDamage(actor.ptr()); };
+
+        // The weapon an NPC fights with (a gun if it has one), as getWeapon returns it; nil if it has none.
+        api["getActorWeapon"] = [](const Object& actor, sol::this_state s) -> sol::object {
+            const ESM4::Weapon* weapon = Combat::getActorWeapon(actor.ptr());
+            if (weapon == nullptr)
+                return sol::nil;
+            sol::state_view lua(s);
+            sol::table t = makeWeapon(lua, *weapon);
+            t["isGun"] = Combat::isGun(*weapon);
+            return t;
+        };
+
+        // Shows the NPC's weapon in its hand and aims it (true), or puts it away.
+        api["drawWeapon"] = [context](const Object& actor, bool drawn) {
+            context.mLuaManager->addAction(
+                [actor = Object(actor), drawn] { Combat::drawWeapon(actor.ptr(), drawn); },
+                "obscriptCombatDrawWeaponAction");
+        };
+
+        // The NPC fires its gun at the target (attack sequence, sound, one shot with skill-based aim error).
+        // Global scripts then receive "FNVCombat_Shot" as for fire.
+        api["shoot"] = [context](const Object& actor, const Object& target) {
+            context.mLuaManager->addAction(
+                [context, actor = Object(actor), target = Object(target)] {
+                    Combat::HitResult hit;
+                    if (Combat::shoot(actor.ptr(), target.ptr(), hit))
+                        sendShot(context, actor.ptr(), *Combat::getActorWeapon(actor.ptr()), hit);
+                },
+                "obscriptCombatShootAction");
+        };
+
+        // Whether nothing solid stands between the actor's eyes and the target's upper body.
+        api["hasLineOfFire"] = [](const Object& actor, const Object& target) {
+            return Combat::hasLineOfFire(actor.ptr(), target.ptr());
+        };
+
+        // Plays the NPC's reload sequence.
+        api["reload"] = [context](const Object& actor) {
+            context.mLuaManager->addAction(
+                [actor = Object(actor)] { Combat::reload(actor.ptr()); }, "obscriptCombatReloadAction");
+        };
 
         // Damages the target's health directly (melee hits, scripted damage); kills it when health runs out.
         api["hit"] = [context](const Object& target, sol::optional<Object> attacker, float damage) {

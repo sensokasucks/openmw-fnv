@@ -52,6 +52,23 @@ namespace MWMechanics::ESM4Combat
     };
     Reaction getReactionToPlayer(const MWWorld::Ptr& actor);
 
+    // The weapon an FO3/FONV NPC fights with (from its inventory), nullptr for creatures and the unarmed.
+    const ESM4::Weapon* getActorWeapon(const MWWorld::Ptr& actor);
+    bool isGun(const ESM4::Weapon& weapon);
+
+    // Takes the actor's weapon in hand and aims it (true), or puts it away.
+    void drawWeapon(const MWWorld::Ptr& actor, bool drawn);
+
+    // The actor fires its gun at the target: the weapon's attack sequence and sound, and one shot whose aim wanders
+    // more the worse the actor's weapon skill is. False if it can't shoot now.
+    bool shoot(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, HitResult& result);
+
+    // Whether nothing solid stands between the attacker's eyes and the target's upper body.
+    bool hasLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
+
+    // Plays the weapon's reload sequence; returns how long it takes (the weapon's reload time if longer).
+    float reload(const MWWorld::Ptr& actor);
+
     // Lays the actor down and stops it moving.
     void kill(const MWWorld::Ptr& actor, bool instant = false);
 

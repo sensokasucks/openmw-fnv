@@ -137,6 +137,7 @@ void ESM4::Weapon::load(ESM4::Reader& reader)
                 get(36, projectile);
                 d.projectile = ESM::FormId::fromUint32(projectile);
                 reader.adjustFormId(d.projectile);
+                get(41, d.attackAnim);
                 get(42, d.projectileCount);
                 get(44, d.minRange);
                 get(48, d.maxRange);
