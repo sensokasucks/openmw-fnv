@@ -517,9 +517,19 @@ namespace MWRender
         osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
         const NodeMap& nodeMap = getNodeMap();
 
-        // Drop the sequence played before
+        // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
+        // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which
+        // lifts "Bip01" instead) takes over, leaving the NPC floating.
         for (auto& [node, callback] : mLoopCallbacks)
+        {
             node->removeUpdateCallback(callback);
+            if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
+            {
+                transform->setRotation(transform->mRotationScale);
+                if (auto rest = mRestTranslations.find(transform); rest != mRestTranslations.end())
+                    transform->setTranslation(rest->second);
+            }
+        }
         mLoopCallbacks.clear();
 
         const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
