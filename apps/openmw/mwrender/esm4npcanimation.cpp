@@ -28,9 +28,13 @@
 #include <components/sceneutil/riggeometry.hpp>
 #include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
+#include <components/vfs/manager.hpp>
+#include <components/vfs/recursivedirectoryiterator.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "esm4facegen.hpp"
+#include "../mwclass/esm4creature.hpp"
+#include "../mwmechanics/esm4combat.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwworld/esmstore.hpp"
 
@@ -42,12 +46,20 @@ namespace MWRender
     {
         setObjectRoot(mPtr.getClass().getCorrectedModel(mPtr), true, true, false);
         updateParts();
+        if (MWMechanics::ESM4Combat::isDead(mPtr))
+            playDeath(true);
     }
 
     void ESM4NpcAnimation::updateParts()
     {
         if (mObjectRoot == nullptr)
             return;
+        if (mPtr.getType() == ESM::REC_CREA4)
+        {
+            updatePartsCreature();
+            playIdleFONV();
+            return;
+        }
         const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(mPtr);
         if (traits == nullptr)
             return;
@@ -65,6 +77,20 @@ namespace MWRender
             // only lead to the NPC not being rendered.
             updatePartsTES5(*traits);
         }
+    }
+
+    void ESM4NpcAnimation::updatePartsCreature()
+    {
+        const ESM4::Creature* rec = MWClass::ESM4Creature::getModelRecord(mPtr);
+        if (rec == nullptr)
+            return;
+        // The body parts sit next to the skeleton
+        const std::string_view skeleton = rec->mModel.getNormalized().value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        const std::string dir = slash == std::string_view::npos ? std::string() : std::string(skeleton.substr(0, slash + 1));
+        for (const std::string& part : rec->mNif)
+            if (!part.empty())
+                attachPart(dir + part);
     }
 
     void ESM4NpcAnimation::insertPart(std::string_view model)
@@ -361,7 +387,7 @@ namespace MWRender
 
     void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
     {
-        if (locomotion == mLocomotion)
+        if (locomotion == mLocomotion || mDead)
             return;
         mLocomotion = locomotion;
         switch (locomotion)
@@ -376,6 +402,77 @@ namespace MWRender
                 playLoopFONV("mtfastforward.kf", true);
                 break;
         }
+    }
+
+    namespace
+    {
+        // Plays a sequence once, backwards when asked, and holds the frame it ends on.
+        class OnceTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            OnceTimeSource(bool reverse, bool skipToEnd)
+                : mReverse(reverse)
+                , mSkipToEnd(skipToEnd)
+            {
+            }
+
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (!mStart)
+                    mStart = now;
+                const float elapsed
+                    = mSkipToEnd ? mDuration : std::min(mDuration, static_cast<float>(now - *mStart));
+                return mReverse ? mDuration - elapsed : elapsed;
+            }
+
+            float mDuration = 0.f;
+
+        private:
+            bool mReverse;
+            bool mSkipToEnd;
+            std::optional<double> mStart;
+        };
+    }
+
+    void ESM4NpcAnimation::playDeath(bool instant)
+    {
+        if (mDead)
+            return;
+        mDead = true;
+        // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
+        // lays it down; humans have death poses.
+        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const std::string_view skeleton = skeletonPath.value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return;
+        const std::string idles = std::string(skeleton.substr(0, slash)) + "/idleanims/";
+        std::optional<VFS::Path::Normalized> getUp;
+        std::optional<VFS::Path::Normalized> pose;
+        for (const VFS::Path::Normalized& file : mResourceSystem->getVFS()->getRecursiveDirectoryIterator(idles))
+        {
+            const std::string_view name = file.value().substr(idles.size());
+            if (!name.ends_with(".kf") || name.find('/') != std::string_view::npos)
+                continue;
+            if (name.find("getup") != std::string_view::npos && name.find("1stperson") == std::string_view::npos
+                && name.find("pushups") == std::string_view::npos && (!getUp || name.find("faceup") != std::string_view::npos))
+                getUp = file;
+            else if (name.starts_with("deathpose") && !pose)
+                pose = file;
+        }
+        if (!getUp && !pose)
+        {
+            Log(Debug::Verbose) << "No death sequence for " << mPtr.getCellRef().getRefId();
+            return;
+        }
+        const auto source = std::make_shared<OnceTimeSource>(getUp.has_value(), instant);
+        source->mDuration = playKeyframesFONV(getUp ? *getUp : *pose, source, false);
+    }
+
+    bool ESM4NpcAnimation::isFemale() const
+    {
+        return mPtr.getType() == ESM::REC_NPC_4 && MWClass::ESM4Npc::isFemale(mPtr);
     }
 
     float ESM4NpcAnimation::getLocomotionSpeed() const
@@ -395,7 +492,7 @@ namespace MWRender
         // Walks and runs are per sex (locomotion/male, locomotion/female), the idle is shared
         const std::string dir = std::string(skeleton.substr(0, slash)) + "/locomotion/";
         VFS::Path::Normalized path(
-            dir + (MWClass::ESM4Npc::isFemale(mPtr) ? "female/" : "male/") + std::string(file));
+            dir + (isFemale() ? "female/" : "male/") + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
@@ -404,15 +501,21 @@ namespace MWRender
             return;
         }
 
+        playKeyframesFONV(path, std::make_shared<SceneUtil::FrameTimeSource>(), stripRootMotion);
+    }
+
+    float ESM4NpcAnimation::playKeyframesFONV(const VFS::Path::Normalized& path,
+        std::shared_ptr<SceneUtil::ControllerSource> source, bool stripRootMotion)
+    {
         osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
         const NodeMap& nodeMap = getNodeMap();
+        float duration = 0.f;
 
         // Drop the sequence played before
         for (auto& [node, callback] : mLoopCallbacks)
             node->removeUpdateCallback(callback);
         mLoopCallbacks.clear();
 
-        const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
         mLocomotionSpeed = 0.f;
         std::size_t bound = 0;
@@ -451,19 +554,21 @@ namespace MWRender
             transform->addUpdateCallback(cloned->getAsCallback());
             mLoopCallbacks.emplace_back(transform, cloned->getAsCallback());
             ++bound;
+            if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                duration = std::max(duration, function->getMaximum());
 
             if (stripRootMotion && target == "Bip01")
             {
                 // Speed of the cycle, so feet don't slide: distance the root covers over one loop
                 if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
                 {
-                    const float duration = function->getMaximum();
-                    if (duration > 0.f)
+                    const float cycle = function->getMaximum();
+                    if (cycle > 0.f)
                     {
-                        osg::Vec3f delta = controller->getTranslation(duration) - controller->getTranslation(0.f);
+                        osg::Vec3f delta = controller->getTranslation(cycle) - controller->getTranslation(0.f);
                         delta.z() = 0.f;
-                        mLocomotionSpeed = delta.length() / duration;
-                        Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << duration;
+                        mLocomotionSpeed = delta.length() / cycle;
+                        Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << cycle;
                     }
                 }
                 osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestTranslations[transform]);
@@ -474,6 +579,7 @@ namespace MWRender
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
                             << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
                             << hasAccumRootTrack << ", speed " << mLocomotionSpeed;
+        return duration;
     }
 
     void ESM4NpcAnimation::insertHeadParts(

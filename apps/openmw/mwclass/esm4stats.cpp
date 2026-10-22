@@ -20,6 +20,7 @@
 #include "../mwworld/livecellref.hpp"
 #include "../mwworld/ptr.hpp"
 
+#include "esm4creature.hpp"
 #include "esm4npc.hpp"
 
 namespace MWClass::ESM4Stats
@@ -186,8 +187,46 @@ namespace MWClass::ESM4Stats
             return ESM4Npc::getStatsRecord(actor);
         }
 
+        // FO3/FONV creatures: health and SPECIAL come straight from DATA; the combat skill stands for every weapon
+        // skill and the stealth skill for Sneak.
+        float creatureBase(const MWWorld::Ptr& actor, int av)
+        {
+            const ESM4::Creature* record = ESM4Creature::getStatsRecord(actor);
+            if (record == nullptr || !record->mHasFO3Data)
+                return 0;
+            const ESM4::Creature::DataFO3& data = record->mFO3Data;
+            if (av >= Strength && av <= Luck)
+                return data.special[av - Strength];
+            switch (av)
+            {
+                case BigGuns:
+                case EnergyWeapons:
+                case Explosives:
+                case MeleeWeapons:
+                case Guns:
+                case Unarmed:
+                    return data.combat;
+                case Sneak:
+                    return data.stealth;
+                case Health:
+                    return data.health;
+                case ActionPoints:
+                    return record->mBaseConfig.fo3.fatigue;
+                case SpeedMult:
+                    return record->mBaseConfig.fo3.speedMultiplier;
+                case MeleeDamage:
+                    return data.damage;
+                case CritChance:
+                    return data.special[Luck - Strength];
+                default:
+                    return 0;
+            }
+        }
+
         float recordBase(const MWWorld::Ptr& actor, int av)
         {
+            if (actor.getType() == ESM::REC_CREA4)
+                return creatureBase(actor, av);
             const ESM4::Npc* record = statsRecord(actor);
             const bool player = isPlayer(actor);
 
@@ -293,7 +332,8 @@ namespace MWClass::ESM4Stats
 
     bool hasActorValues(const MWWorld::Ptr& actor)
     {
-        return !actor.isEmpty() && (isPlayer(actor) || actor.getType() == ESM::REC_NPC_4);
+        return !actor.isEmpty()
+            && (isPlayer(actor) || actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4);
     }
 
     float getBase(const MWWorld::Ptr& actor, int av)

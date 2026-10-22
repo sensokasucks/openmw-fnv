@@ -92,8 +92,16 @@ void ESM4::Creature::load(ESM4::Reader& reader)
                     reader.get(&mBaseConfig, 16); // TES4
                 break;
             case ESM::fourCC("DATA"):
-                if (subHdr.dataSize == 17) // FO3
-                    reader.skipSubRecordData();
+                if (subHdr.dataSize == 17) // FO3/FONV
+                {
+                    reader.get(mFO3Data);
+                    mHasFO3Data = true;
+                    mData.combat = mFO3Data.combat;
+                    mData.magic = mFO3Data.magic;
+                    mData.stealth = mFO3Data.stealth;
+                    mData.health = mFO3Data.health;
+                    mData.damage = mFO3Data.damage;
+                }
                 else
                     reader.get(mData);
                 break;

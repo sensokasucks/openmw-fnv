@@ -105,6 +105,19 @@ namespace ESM4
             std::uint16_t damage;
             AttributeValues attribs;
         };
+
+        // FO3/FONV DATA
+        struct DataFO3
+        {
+            std::uint8_t type; // 0 animal, 1 mutated animal, 2 mutated insect, 3 abomination, 4 super mutant, ...
+            std::uint8_t combat;
+            std::uint8_t magic;
+            std::uint8_t stealth;
+            std::uint16_t health;
+            std::uint16_t unused;
+            std::uint16_t damage;
+            std::uint8_t special[7]; // strength, perception, endurance, charisma, intelligence, agility, luck
+        };
 #pragma pack(pop)
 
         ESM::FormId mId; // from the header
@@ -123,6 +136,8 @@ namespace ESM4
         ActorBaseConfig mBaseConfig;
         ActorFaction mFaction;
         Data mData;
+        DataFO3 mFO3Data{};
+        bool mHasFO3Data = false;
         ESM::FormId mCombatStyle;
         ESM::FormId mSoundBase;
         ESM::FormId mSound;

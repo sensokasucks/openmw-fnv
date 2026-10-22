@@ -17,6 +17,8 @@
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/worldmodel.hpp"
 
+#include "esm4combat.hpp"
+
 namespace MWMechanics
 {
     namespace
@@ -79,6 +81,8 @@ namespace MWMechanics
 
     bool ESM4Actors::moveTo(const MWWorld::Ptr& ptr, const osg::Vec3f& target, const MoveOptions& options)
     {
+        if (ESM4Combat::isDead(ptr))
+            return false;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         state.mOptions = options;
         state.mTarget = target;
@@ -119,6 +123,8 @@ namespace MWMechanics
 
     void ESM4Actors::face(const MWWorld::Ptr& ptr, float yaw)
     {
+        if (ESM4Combat::isDead(ptr))
+            return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mStatus == Status::Moving)
             return;

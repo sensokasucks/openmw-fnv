@@ -64,7 +64,7 @@ add_openmw_dir (mwlua
     mwscriptbindings camerabindings vfsbindings uibindings soundbindings inputbindings nearbybindings dialoguebindings
     postprocessingbindings stats recordstore debugbindings corebindings worldbindings worker landbindings magicbindings factionbindings
     classbindings itemdata inputprocessor animationbindings birthsignbindings racebindings markupbindings weatherbindings regionbindings 
-    obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptstatsbindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
+    obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptcombatbindings obscriptstatsbindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
     types/bodypart types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
     types/potion types/ingredient types/misc types/repair types/armor types/light types/static
     types/clothing types/levelledlist types/terminal types/furniture types/note magictypebindings
@@ -95,7 +95,7 @@ add_openmw_dir (mwphysics
 add_openmw_dir (mwclass
     classes activator creature npc weapon armor potion apparatus book clothing container door esm4lock
     ingredient creaturelevlist itemlevlist light lockpick misc probe repair static actor bodypart
-    esm4base esm4container esm4door esm4item esm4npc esm4stats light4
+    esm4base esm4container esm4creature esm4door esm4item esm4npc esm4stats light4
     )
 
 add_openmw_dir (mwmechanics
@@ -104,7 +104,7 @@ add_openmw_dir (mwmechanics
     aicast aiescort aiface aiactivate aicombat recharge repair enchanting pathfinding pathgrid security spellcasting spellresistance
     disease pickpocket levelledlist combat steering obstacle autocalcspell difficultyscaling aicombataction summoning
     character actors objects aistate weaponpriority spellpriority weapontype spellutil
-    spelleffects esm4navigation esm4actors
+    spelleffects esm4navigation esm4actors esm4combat
     )
 
 add_openmw_dir (mwstate
