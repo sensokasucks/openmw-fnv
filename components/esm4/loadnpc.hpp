@@ -206,6 +206,7 @@ namespace ESM4
         std::vector<ESM::FormId> mAIPackages; // seems to be in priority order, 0 = highest priority
         ActorBaseConfig mBaseConfig; // union
         ActorFaction mFaction;
+        std::vector<ActorFaction> mFactions; // every SNAM
         Data mData;
 
         // FO3/FONV stats from DATA, DNAM and AIDT. SPECIAL is Strength..Luck and the skills

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <random>
 
 #include <osg/ComputeBoundsVisitor>
@@ -10,18 +11,23 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm4/loadcrea.hpp>
+#include <components/esm4/loadfact.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadweap.hpp>
+#include <components/misc/strings/algorithm.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwclass/esm4creature.hpp"
+#include "../mwclass/esm4npc.hpp"
 #include "../mwclass/esm4stats.hpp"
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/raycasting.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/esmstore.hpp"
 #include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -149,6 +155,84 @@ namespace MWMechanics::ESM4Combat
                 return true;
             });
         }
+    }
+
+    namespace
+    {
+        const std::vector<ESM4::ActorFaction>* factionsOf(const MWWorld::Ptr& actor)
+        {
+            if (actor.getType() == ESM::REC_NPC_4)
+            {
+                const ESM4::Npc* rec = MWClass::ESM4Npc::getFactionsRecord(actor);
+                return rec ? &rec->mFactions : nullptr;
+            }
+            if (actor.getType() == ESM::REC_CREA4)
+            {
+                const ESM4::Creature* rec = MWClass::ESM4Creature::getFactionsRecord(actor);
+                return rec ? &rec->mFactions : nullptr;
+            }
+            return nullptr;
+        }
+
+        // FNV's PlayerFaction, found by editor id since form ids depend on load order
+        const ESM4::Faction* playerFaction()
+        {
+            static const MWWorld::ESMStore* cachedStore = nullptr;
+            static const ESM4::Faction* cached = nullptr;
+            const MWWorld::ESMStore* store = MWBase::Environment::get().getESMStore();
+            if (store != cachedStore)
+            {
+                cachedStore = store;
+                cached = nullptr;
+                for (const ESM4::Faction& faction : store->get<ESM4::Faction>())
+                    if (Misc::StringUtils::ciEqual(faction.mEditorId, "PlayerFaction"))
+                    {
+                        cached = &faction;
+                        break;
+                    }
+            }
+            return cached;
+        }
+
+        std::optional<std::uint32_t> findReaction(const ESM4::Faction& from, ESM::FormId to)
+        {
+            for (const ESM4::Faction::Relation& relation : from.mRelations)
+                if (relation.mFaction == to)
+                    return relation.mReaction;
+            return std::nullopt;
+        }
+    }
+
+    Reaction getReactionToPlayer(const MWWorld::Ptr& actor)
+    {
+        const std::vector<ESM4::ActorFaction>* factions = factionsOf(actor);
+        const ESM4::Faction* player = playerFaction();
+        if (factions == nullptr || player == nullptr)
+            return Reaction::Neutral;
+        const MWWorld::Store<ESM4::Faction>& store = MWBase::Environment::get().getESMStore()->get<ESM4::Faction>();
+        bool ally = false;
+        bool friendly = false;
+        for (const ESM4::ActorFaction& membership : *factions)
+        {
+            const ESM::FormId id = ESM::FormId::fromUint32(membership.faction);
+            if (id == player->mId)
+                return Reaction::Friend; // followers
+            std::optional<std::uint32_t> reactions[2] = { findReaction(*player, id), std::nullopt };
+            if (const ESM4::Faction* faction = store.search(id))
+                reactions[1] = findReaction(*faction, player->mId);
+            for (const std::optional<std::uint32_t>& reaction : reactions)
+            {
+                if (!reaction)
+                    continue;
+                if (*reaction == ESM4::Faction::Reaction_Enemy)
+                    return Reaction::Enemy;
+                ally = ally || *reaction == ESM4::Faction::Reaction_Ally;
+                friendly = friendly || *reaction == ESM4::Faction::Reaction_Friend;
+            }
+        }
+        if (ally)
+            return Reaction::Ally;
+        return friendly ? Reaction::Friend : Reaction::Neutral;
     }
 
     bool canBeHit(const MWWorld::Ptr& actor)

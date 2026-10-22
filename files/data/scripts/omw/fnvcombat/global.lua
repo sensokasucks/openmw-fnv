@@ -7,11 +7,13 @@
 -- Health is the FNV actor value (see scripts/omw/fnvstats.lua), so damage is
 -- saved with the game.
 --
--- Combat AI, following the AI data of the actor's record:
---   * Creatures with Aggression 1 or more attack the player when they come
---     close; creatures with an aggro radius do so inside that radius. NPCs
---     attack the player on sight only when Very Aggressive or Frenzied (no
---     faction relations yet). Anyone shot fights back.
+-- Combat AI, following the AI data of the actor's record and its factions'
+-- relations with the player's (FACT combat reactions, either way round):
+--   * Aggressive actors attack the player on sight when their factions are
+--     enemies of the player's, Very Aggressive ones also when neutral,
+--     Frenzied ones always. Creatures with an aggro radius attack inside it
+--     unless friendly. Allies and friends only fight when attacked. Anyone
+--     shot fights back.
 --   * Actors with Assistance help others of their kind (same name) nearby.
 --   * Confidence decides when an actor runs away: Cowardly at once,
 --     Cautious below half health, Average below a quarter, Brave below a
@@ -103,15 +105,19 @@ end
 
 local function wantsFight(actor, player)
     local distance = (player.position - actor.position):length()
+    if distance > NOTICE_DISTANCE then return false end
     local aggression = stats.get(actor, 'Aggression')
+    if aggression >= 3 then return true end
+    local reaction = combat.getReaction(actor)
+    if reaction == 'ally' or reaction == 'friend' then return false end
     if types.ESM4Creature.objectIsInstance(actor) then
         local aggro = combat.getAggroRadius(actor)
         if aggro and aggro.enabled and aggro.radius > 0 and distance <= aggro.radius then
             return true
         end
-        return aggression >= 1 and distance <= NOTICE_DISTANCE
     end
-    return aggression >= 2 and distance <= NOTICE_DISTANCE
+    if reaction == 'enemy' then return aggression >= 1 end
+    return aggression >= 2
 end
 
 local function yawTo(from, to)
