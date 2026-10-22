@@ -158,7 +158,14 @@ namespace MWRender
             const_cast<osg::Node*>(templateNode.get())->accept(collect);
             osg::ref_ptr<osg::Group> handle = new osg::Group;
             for (const osg::Node* shape : collect.mShapes)
-                handle->addChild(sceneManager->getInstance(shape));
+            {
+                osg::ref_ptr<osg::Node> instance = sceneManager->getInstance(shape);
+                // Skinned vertices are placed by the bones alone; a skinned shape's own transform (creature parts
+                // often carry one) is not applied on top.
+                if (auto* transform = dynamic_cast<osg::MatrixTransform*>(instance.get()))
+                    transform->setMatrix(osg::Matrix::identity());
+                handle->addChild(instance);
+            }
             handle->getOrCreateUserDataContainer()->addUserObject(new Resource::TemplateRef(templateNode));
             mObjectRoot->addChild(handle);
             return handle;
@@ -508,6 +515,9 @@ namespace MWRender
             dir + (MWClass::ESM4Npc::isFemale(mPtr) ? "female/" : "male/") + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
+        // Creatures keep their idle next to the skeleton (creatures/nvgecko/mtidle.kf)
+        if (!mResourceSystem->getVFS()->exists(path))
+            path = VFS::Path::Normalized(std::string(skeleton.substr(0, slash + 1)) + std::string(file));
         if (!mResourceSystem->getVFS()->exists(path))
         {
             Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
