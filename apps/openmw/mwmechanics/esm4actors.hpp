@@ -38,6 +38,7 @@ namespace MWMechanics
             float mTolerance = 32.f; // how close counts as arrived
             std::optional<float> mFinalYaw; // radians, turned to on arrival
             bool mDirect = false; // without a navmesh route, go straight there
+            bool mStraight = false; // go straight there, ignoring the navmesh
         };
 
         static ESM4Actors& get();

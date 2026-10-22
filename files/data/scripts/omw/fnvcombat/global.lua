@@ -41,6 +41,7 @@ local NOTICE_DISTANCE = 1500 -- how close aggressive actors notice the player
 local GIVE_UP_DISTANCE = 6000 -- combat ends when the target gets this far
 local ASSIST_DISTANCE = 1500
 local REACH = 150 -- unarmed and creature attacks
+local STRAIGHT_DISTANCE = 600 -- closer than this, attackers leave the navmesh and go straight for the target
 local FLEE_DISTANCE = 2000 -- how far a fleeing actor runs from its attacker
 local FLEE_HEALTH = { [0] = 1.01, [1] = 0.5, [2] = 0.25, [3] = 0.1, [4] = 0 } -- by Confidence
 
@@ -151,12 +152,22 @@ local function fight(s)
 
     if combat.isActing(actor) then return end
     if distance > REACH then
-        if simTime >= s.nextMove or ai.status(actor) ~= 'moving' then
+        -- The navmesh ends where the target may not (rocks, furniture): when the route runs out short of the
+        -- target, or it is close, go straight for it.
+        local status = ai.status(actor)
+        if status == 'arrived' or status == 'nopath' or distance < STRAIGHT_DISTANCE then
+            s.straight = true
+        end
+        local moved = s.goal == nil or (s.goal - target.position):length() > 64
+        if status ~= 'moving' or (moved and simTime >= s.nextMove) then
             s.nextMove = simTime + 0.5
-            ai.moveTo(actor, target.position, { run = true, direct = true, tolerance = REACH * 0.7 })
+            s.goal = target.position
+            ai.moveTo(actor, target.position,
+                { run = true, direct = true, straight = s.straight, tolerance = REACH * 0.7 })
         end
         return
     end
+    s.straight = false
     if ai.status(actor) == 'moving' then
         ai.stop(actor)
     end

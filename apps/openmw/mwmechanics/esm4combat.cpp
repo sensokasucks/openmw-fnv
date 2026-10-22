@@ -124,12 +124,17 @@ namespace MWMechanics::ESM4Combat
             return generator;
         }
 
-        // The player is a Morrowind actor: blows take its Morrowind health, so that death works as usual.
+        // The player is a Morrowind actor: blows take its Morrowind health, so that death works as usual. The damage
+        // is scaled from the player's FNV health to the Morrowind one, so fights last as long as in FNV.
         void hurtPlayer(const MWWorld::Ptr& player, float damage)
         {
             MWMechanics::CreatureStats& stats = player.getClass().getCreatureStats(player);
             MWMechanics::DynamicStat<float> health = stats.getHealth();
-            health.setCurrent(health.getCurrent() - damage);
+            const float fnvHealth = Stats::getPermanent(player, Stats::Health);
+            const float scale = fnvHealth > 0.f ? health.getModified() / fnvHealth : 1.f;
+            health.setCurrent(health.getCurrent() - damage * scale);
+            Log(Debug::Verbose) << "ESM4 hit player for " << damage << " FNV damage (" << damage * scale
+                                << " health), health " << health.getCurrent();
             stats.setHealth(health);
             Stats::damage(player, Stats::Health, damage);
             MWBase::Environment::get().getWindowManager()->activateHitOverlay();

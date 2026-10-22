@@ -96,9 +96,9 @@ namespace MWMechanics
         const std::optional<ESM::FormId> cell = getCellFormId(ptr);
         const osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
         std::optional<ESM4Navigation::Path> path;
-        if (cell)
+        if (cell && !options.mStraight)
             path = mNavigation.findPath(*cell, position, target);
-        if (!path && options.mDirect)
+        if (!path && (options.mDirect || options.mStraight))
         {
             path = ESM4Navigation::Path();
             path->mPoints.push_back(target);
@@ -200,6 +200,12 @@ namespace MWMechanics
 
         osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
         float remaining = speed * duration;
+        // Close enough to the goal counts as there (attackers stop at arm's length)
+        const osg::Vec2f toGoal(state.mTarget.x() - position.x(), state.mTarget.y() - position.y());
+        if (toGoal.length() <= state.mOptions.mTolerance)
+            state.mNextPoint = state.mPath.mPoints.size();
+        else if (state.mNextPoint + 1 == state.mPath.mPoints.size())
+            remaining = std::min(remaining, toGoal.length() - state.mOptions.mTolerance);
         osg::Vec3f direction;
         while (remaining > 0.f && state.mNextPoint < state.mPath.mPoints.size())
         {

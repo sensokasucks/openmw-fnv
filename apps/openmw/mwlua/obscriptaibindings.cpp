@@ -223,8 +223,8 @@ namespace MWLua
         };
 
         // Walks the NPC to the position along the navmesh. options: run (bool), tolerance (units), yaw (radians to
-        // face on arrival), direct (go straight there when the navmesh has no route). The move starts with the
-        // next frame; status() reports how it goes.
+        // face on arrival), direct (go straight there when the navmesh has no route), straight (go straight there,
+        // ignoring the navmesh). The move starts with the next frame; status() reports how it goes.
         api["moveTo"] = [context](const Object& object, const osg::Vec3f& target, sol::optional<sol::table> options) {
             MWMechanics::ESM4Actors::MoveOptions moveOptions;
             if (options)
@@ -232,6 +232,7 @@ namespace MWLua
                 moveOptions.mRun = options->get_or("run", false);
                 moveOptions.mTolerance = options->get_or("tolerance", moveOptions.mTolerance);
                 moveOptions.mDirect = options->get_or("direct", false);
+                moveOptions.mStraight = options->get_or("straight", false);
                 if (sol::optional<float> yaw = options->get<sol::optional<float>>("yaw"))
                     moveOptions.mFinalYaw = *yaw;
             }

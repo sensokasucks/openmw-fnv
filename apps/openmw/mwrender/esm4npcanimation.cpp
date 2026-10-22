@@ -9,6 +9,8 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrace.hpp>
 
+#include <span>
+
 #include <osg/Material>
 #include <osg/io_utils>
 #include <osg/Texture2D>
@@ -29,7 +31,6 @@
 #include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
 #include <components/vfs/manager.hpp>
-#include <components/vfs/recursivedirectoryiterator.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "esm4facegen.hpp"
@@ -490,19 +491,22 @@ namespace MWRender
         if (slash == std::string_view::npos)
             return;
         const std::string idles = std::string(skeleton.substr(0, slash)) + "/idleanims/";
-        std::optional<VFS::Path::Normalized> getUp;
-        std::optional<VFS::Path::Normalized> pose;
-        for (const VFS::Path::Normalized& file : mResourceSystem->getVFS()->getRecursiveDirectoryIterator(idles))
-        {
-            const std::string_view name = file.value().substr(idles.size());
-            if (!name.ends_with(".kf") || name.find('/') != std::string_view::npos)
-                continue;
-            if (name.find("getup") != std::string_view::npos && name.find("1stperson") == std::string_view::npos
-                && name.find("pushups") == std::string_view::npos && (!getUp || name.find("faceup") != std::string_view::npos))
-                getUp = file;
-            else if (name.starts_with("deathpose") && !pose)
-                pose = file;
-        }
+        // Get-up sequences start lying down; death poses are the lying pose itself.
+        static constexpr std::string_view getUpFiles[] = { "getup.kf", "specialidle_getupfaceup.kf",
+            "specialidle_getup.kf", "getupleft.kf", "mtspecialidle_getupleft.kf", "specialidle_getupleft.kf" };
+        static constexpr std::string_view poseFiles[] = { "deathpose1.kf", "deathpose2.kf" };
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        auto findFile = [&](std::span<const std::string_view> names) -> std::optional<VFS::Path::Normalized> {
+            for (std::string_view name : names)
+            {
+                VFS::Path::Normalized path(idles + std::string(name));
+                if (vfs.exists(path))
+                    return path;
+            }
+            return std::nullopt;
+        };
+        const std::optional<VFS::Path::Normalized> getUp = findFile(getUpFiles);
+        const std::optional<VFS::Path::Normalized> pose = getUp ? std::nullopt : findFile(poseFiles);
         if (!getUp && !pose)
         {
             Log(Debug::Verbose) << "No death sequence for " << mPtr.getCellRef().getRefId();
