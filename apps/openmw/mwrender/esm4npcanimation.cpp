@@ -1,5 +1,7 @@
 #include "esm4npcanimation.hpp"
 
+#include <algorithm>
+
 #include <components/esm4/loadarma.hpp>
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadeyes.hpp>
@@ -171,6 +173,14 @@ namespace MWRender
         return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, attachNode, sceneManager);
     }
 
+    // Parts are instances of cached meshes whose state sets are shared between NPCs, so copy before changing one.
+    static osg::StateSet* getUniqueStateSet(osg::Node& node)
+    {
+        if (const osg::StateSet* shared = node.getStateSet())
+            node.setStateSet(osg::clone(shared, osg::CopyOp::SHALLOW_COPY));
+        return node.getOrCreateStateSet();
+    }
+
     static void tintHair(osg::Node& node, const ESM4::Npc::HairColour& colour)
     {
         // FO3/FONV hair textures are grey; the game colours them with the NPC's hair colour.
@@ -179,7 +189,7 @@ namespace MWRender
         material->setColorMode(osg::Material::OFF);
         material->setDiffuse(osg::Material::FRONT_AND_BACK, tint);
         material->setAmbient(osg::Material::FRONT_AND_BACK, tint);
-        osg::StateSet* stateset = node.getOrCreateStateSet();
+        osg::StateSet* stateset = getUniqueStateSet(node);
         stateset->setAttributeAndModes(material, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
         stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
@@ -206,7 +216,7 @@ namespace MWRender
         texture2d->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
         texture2d->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
         // The base texture of a BSShaderTextureSet is always bound to the first unit.
-        node.getOrCreateStateSet()->setTextureAttributeAndModes(
+        getUniqueStateSet(node)->setTextureAttributeAndModes(
             0, texture2d, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
@@ -214,6 +224,47 @@ namespace MWRender
     {
         applyFaceGenShape(node, model, traits.mSymShapeModeCoefficients, traits.mAsymShapeModeCoefficients,
             *mResourceSystem->getVFS());
+    }
+
+    namespace
+    {
+        // Finds the skin-shaded shapes of an outfit, tagged by the NIF loader.
+        class CollectSkinVisitor : public osg::NodeVisitor
+        {
+        public:
+            CollectSkinVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                bool skin = false;
+                if (node.getUserValue("bsSkin", skin) && skin)
+                    mNodes.push_back(&node);
+                traverse(node);
+            }
+
+            std::vector<osg::Node*> mNodes;
+        };
+
+        // FO3/FONV hand FaceGen files follow the body's: UpperBodyHumanOldFemale.egt -> LeftHandOldFemale.egt
+        std::string handEgt(std::string_view bodyEgt, std::string_view side)
+        {
+            std::string path = Misc::StringUtils::lowerCase(bodyEgt);
+            std::replace(path.begin(), path.end(), '/', '\\');
+            const size_t slash = path.find_last_of('\\');
+            std::string name = path.substr(slash == std::string::npos ? 0 : slash + 1);
+            for (std::string_view prefix : { "upperbodyhuman", "upperbody" })
+            {
+                if (name.starts_with(prefix))
+                {
+                    name.erase(0, prefix.size());
+                    return path.substr(0, slash + 1) + std::string(side) + name;
+                }
+            }
+            return {};
+        }
     }
 
     void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
@@ -228,6 +279,24 @@ namespace MWRender
         if (findHeadAnims.mFoundNode)
             findHeadAnims.mFoundNode->setNodeMask(0);
 
+        // Every human race shares the same skin textures; the NPC's FaceGen texture modes give it its colour, on the
+        // body and hands as on the face. Race body parts: 0 upper body, 1 left hand, 2 right hand, 3 body .egt
+        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        auto skinTexture = [&](std::string_view texture, std::string_view egt) {
+            osg::ref_ptr<osg::Image> base = getTexture(texture);
+            if (!base || egt.empty())
+                return base;
+            osg::ref_ptr<osg::Image> skin = makeFaceGenTexture(*base, egt, traits.mSymTextureModeCoefficients, vfs);
+            return skin ? skin : base;
+        };
+        const std::string_view bodyEgt = bodyParts.size() > 3 ? std::string_view(bodyParts[3].mesh) : std::string_view();
+        osg::ref_ptr<osg::Image> bodySkin = bodyParts.size() > 0 ? skinTexture(bodyParts[0].texture, bodyEgt) : nullptr;
+        osg::ref_ptr<osg::Image> leftHandSkin
+            = bodyParts.size() > 1 ? skinTexture(bodyParts[1].texture, handEgt(bodyEgt, "lefthand")) : nullptr;
+        osg::ref_ptr<osg::Image> rightHandSkin
+            = bodyParts.size() > 2 ? skinTexture(bodyParts[2].texture, handEgt(bodyEgt, "righthand")) : nullptr;
+
         // Equip at most one armor per biped slot, in inventory order.
         uint32_t usedSlots = 0;
         for (const ESM4::Armor* armor : MWClass::ESM4Npc::getEquippedArmor(mPtr))
@@ -240,20 +309,36 @@ namespace MWRender
             if (model.empty())
                 continue;
             usedSlots |= slots;
-            attachPart(model.getOriginal());
+            osg::ref_ptr<osg::Node> node = attachPart(model.getOriginal());
+            if (!node)
+                continue;
+            // Bare skin in outfits is painted with the generic body or hand texture; use the NPC's instead.
+            CollectSkinVisitor collectSkin;
+            node->accept(collectSkin);
+            for (osg::Node* skinNode : collectSkin.mNodes)
+            {
+                const osg::StateSet* stateset = skinNode->getStateSet();
+                const osg::Texture* texture = stateset ? dynamic_cast<const osg::Texture*>(
+                                                  stateset->getTextureAttribute(0, osg::StateAttribute::TEXTURE))
+                                                       : nullptr;
+                const osg::Image* image = texture ? texture->getImage(0) : nullptr;
+                const std::string name = image ? Misc::StringUtils::lowerCase(image->getFileName()) : std::string();
+                if (name.find("hand") != std::string::npos)
+                    overrideDiffuse(*skinNode, leftHandSkin);
+                else if (name.find("upperbody") != std::string::npos)
+                    overrideDiffuse(*skinNode, bodySkin);
+            }
         }
 
-        // Race body: 0 upper body, 1 left hand, 2 right hand, 3 body texture (.egt)
-        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        const osg::ref_ptr<osg::Image> bodySkins[] = { bodySkin, leftHandSkin, rightHandSkin };
         constexpr uint32_t bodySlots[] = { ESM4::Armor::FO3_UpperBody, ESM4::Armor::FO3_LeftHand,
             ESM4::Armor::FO3_RightHand };
         for (size_t i = 0; i < bodyParts.size() && i < std::size(bodySlots); ++i)
         {
             if (usedSlots & bodySlots[i])
                 continue;
-            // Races share body meshes and set their own skin with the part's texture
             if (osg::ref_ptr<osg::Node> node = attachPart(bodyParts[i].mesh))
-                overrideDiffuse(*node, bodyParts[i].texture);
+                overrideDiffuse(*node, bodySkins[i]);
         }
 
         if (usedSlots & ESM4::Armor::FO3_Head)

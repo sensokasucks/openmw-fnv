@@ -2803,6 +2803,9 @@ namespace NifOsg
                 {
                     auto texprop = static_cast<const Nif::BSShaderPPLightingProperty*>(property);
                     node->setUserValue("shaderPrefix", std::string(getBSShaderPrefix(texprop->mType)));
+                    // FO3/FONV swap the NPC's own skin into skin-shaded shapes (bare arms and necks of outfits).
+                    if (texprop->mType == static_cast<unsigned int>(Nif::BSShaderType::ShaderType_Skin))
+                        node->setUserValue("bsSkin", true);
                     osg::StateSet* stateset = node->getOrCreateStateSet();
                     clearBoundTextures(stateset, boundTextures);
                     if (!texprop->mTextureSet.empty())
