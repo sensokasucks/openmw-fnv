@@ -189,13 +189,21 @@ namespace MWRender
         stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
-    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, std::string_view texture)
+    osg::ref_ptr<osg::Image> ESM4NpcAnimation::getTexture(std::string_view texture)
     {
         if (texture.empty())
-            return;
-        Resource::ImageManager* imageManager = mResourceSystem->getImageManager();
-        osg::ref_ptr<osg::Image> image = imageManager->getImage(Misc::ResourceHelpers::correctTexturePath(
-            VFS::Path::toNormalized(texture), *mResourceSystem->getVFS()));
+            return nullptr;
+        return mResourceSystem->getImageManager()->getImage(
+            Misc::ResourceHelpers::correctTexturePath(VFS::Path::toNormalized(texture), *mResourceSystem->getVFS()));
+    }
+
+    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, std::string_view texture)
+    {
+        overrideDiffuse(node, getTexture(texture));
+    }
+
+    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, osg::ref_ptr<osg::Image> image)
+    {
         if (!image)
             return;
         osg::ref_ptr<osg::Texture2D> texture2d = new osg::Texture2D(image);
@@ -269,8 +277,13 @@ namespace MWRender
             // eye colour.
             if (eyes && (i == 6 || i == 7))
                 overrideDiffuse(*node, eyes->mIcon);
-            else
-                overrideDiffuse(*node, headParts[i].texture);
+            else if (osg::ref_ptr<osg::Image> skin = getTexture(headParts[i].texture))
+            {
+                // The NPC's complexion is morphed onto the race's face texture.
+                osg::ref_ptr<osg::Image> face = makeFaceGenTexture(
+                    *skin, headParts[i].mesh, traits.mSymTextureModeCoefficients, *mResourceSystem->getVFS());
+                overrideDiffuse(*node, face ? face : skin);
+            }
         }
 
         for (ESM::FormId partId : traits.mHeadParts)
