@@ -376,6 +376,8 @@ namespace NifOsg
 
     public:
         AlphaController(const Nif::NiAlphaController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial);
         AlphaController();
         AlphaController(const AlphaController& copy, const osg::CopyOp& copyop);
 
@@ -390,6 +392,9 @@ namespace NifOsg
     {
     public:
         MaterialColorController(const Nif::NiMaterialColorController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        MaterialColorController(Nif::Vector3KeyMapPtr keys, Nif::NiMaterialColorController::TargetColor targetColor,
+            const osg::Material* baseMaterial);
         MaterialColorController();
         MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop);
 

@@ -148,6 +148,8 @@ namespace Nif
         if (nif->getVersion() >= NIFStream::generateVersion(10, 1, 0, 104)
             && nif->getVersion() <= NIFStream::generateVersion(10, 1, 0, 108))
             nif->read(mManagerControlled);
+        else if (nif->getVersion() > NIFStream::generateVersion(10, 1, 0, 108))
+            mManagerControlled = (mFlags & Flag_ManagerControlled) != 0;
     }
 
     void NiSingleInterpController::read(NIFStream* nif)

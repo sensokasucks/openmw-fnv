@@ -552,6 +552,12 @@ namespace NifOsg
             mData = FloatInterpolator(ctrl->mData->mKeyList, 1.f);
     }
 
+    AlphaController::AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial)
+        : mData(std::move(keys), 1.f)
+        , mBaseMaterial(baseMaterial)
+    {
+    }
+
     AlphaController::AlphaController(const AlphaController& copy, const osg::CopyOp& copyop)
         : StateSetUpdater(copy, copyop)
         , Controller(copy)
@@ -592,6 +598,14 @@ namespace NifOsg
         }
         else if (!ctrl->mData.empty())
             mData = Vec3Interpolator(ctrl->mData->mKeyList, osg::Vec3f(1, 1, 1));
+    }
+
+    MaterialColorController::MaterialColorController(Nif::Vector3KeyMapPtr keys,
+        Nif::NiMaterialColorController::TargetColor targetColor, const osg::Material* baseMaterial)
+        : mData(std::move(keys), osg::Vec3f(1, 1, 1))
+        , mTargetColor(targetColor)
+        , mBaseMaterial(baseMaterial)
+    {
     }
 
     MaterialColorController::MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop)
