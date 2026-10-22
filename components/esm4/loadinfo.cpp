@@ -35,9 +35,9 @@
 #include "reader.hpp"
 // #include "writer.hpp"
 
-namespace
+namespace ESM4
 {
-    void addCondition(ESM4::Reader& reader, std::vector<ESM4::DialogCondition>& conditions,
+    void addDialogCondition(ESM4::Reader& reader, std::vector<ESM4::DialogCondition>& conditions,
         const ESM4::TargetCondition& data, bool hasReference)
     {
         ESM4::DialogCondition& cond = conditions.emplace_back();
@@ -121,20 +121,20 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 {
                     mTargetCondition = {};
                     reader.get(&mTargetCondition, 24);
-                    addCondition(reader, mConditions, mTargetCondition, false);
+                    addDialogCondition(reader, mConditions, mTargetCondition, false);
                 }
                 else if (subHdr.dataSize == 20) // FO3
                 {
                     mTargetCondition = {};
                     reader.get(&mTargetCondition, 20);
-                    addCondition(reader, mConditions, mTargetCondition, false);
+                    addDialogCondition(reader, mConditions, mTargetCondition, false);
                 }
                 else if (subHdr.dataSize == 28)
                 {
                     reader.get(mTargetCondition); // FO3/FONV
                     if (mTargetCondition.reference)
                         reader.adjustFormId(mTargetCondition.reference);
-                    addCondition(reader, mConditions, mTargetCondition, true);
+                    addDialogCondition(reader, mConditions, mTargetCondition, true);
                 }
                 else // TES5
                 {

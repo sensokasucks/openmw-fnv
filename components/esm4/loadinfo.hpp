@@ -66,6 +66,16 @@ namespace ESM4
         ESM::FormId mGlobal; // comparison value when CTF_UseGlobal is set
     };
 
+    // Appends one CTDA (already read into data) to conditions, adjusting its form arguments for the load order.
+    // When hasReference is set, data.reference must already be adjusted.
+    void addDialogCondition(
+        Reader& reader, std::vector<DialogCondition>& conditions, const TargetCondition& data, bool hasReference);
+
+    // Appends one CTDA (already read into data) to conditions, adjusting its form arguments for the load order.
+    // When hasReference is set, data.reference must already be adjusted.
+    void addDialogCondition(
+        Reader& reader, std::vector<DialogCondition>& conditions, const TargetCondition& data, bool hasReference);
+
     // One spoken line (TRDT + NAM1 + NAM2) of an INFO; an INFO can have several.
     struct DialogResponse
     {

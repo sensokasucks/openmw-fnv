@@ -47,56 +47,104 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
                 break;
             case ESM::fourCC("PKDT"):
             {
-                if (subHdr.dataSize != sizeof(PKDT) && subHdr.dataSize == 4)
+                if (subHdr.dataSize == 12) // FO3/FONV
                 {
-                    // std::cout << "skip fallout" << mEditorId << std::endl; // FIXME
+                    std::uint8_t type = 0;
+                    std::uint8_t unused = 0;
+                    std::uint16_t padding = 0;
+                    reader.get(mData.flags);
+                    reader.get(type);
+                    reader.get(unused);
+                    reader.get(mBehaviourFlags);
+                    reader.get(mSpecificFlags);
+                    reader.get(padding);
+                    mData.type = type;
+                }
+                else if (subHdr.dataSize == sizeof(mData))
+                    reader.get(mData);
+                else if (subHdr.dataSize == 4)
+                {
                     reader.get(mData.flags);
                     mData.type = 0; // FIXME
                 }
-                else if (subHdr.dataSize != sizeof(mData))
-                    reader.skipSubRecordData(); // FIXME: FO3
                 else
-                    reader.get(mData);
+                    reader.skipSubRecordData();
 
                 break;
             }
-            case ESM::fourCC("PSDT"): // reader.get(mSchedule); break;
+            case ESM::fourCC("PSDT"):
             {
                 if (subHdr.dataSize != sizeof(mSchedule))
-                    reader.skipSubRecordData(); // FIXME:
+                    reader.skipSubRecordData(); // FIXME: TES5
                 else
-                    reader.get(mSchedule); // TES4
+                    reader.get(mSchedule);
 
                 break;
             }
             case ESM::fourCC("PLDT"):
+            case ESM::fourCC("PLD2"):
             {
-                if (subHdr.dataSize != sizeof(mLocation))
+                if (subHdr.dataSize != sizeof(PLDT))
+                {
                     reader.skipSubRecordData(); // FIXME:
+                    break;
+                }
+                PLDT data;
+                reader.get(data);
+                // Location types 4 (object id) and 5 (object type) mean the same in TES4 and FO3/FONV.
+                Location& location = mLocations[subHdr.typeId == ESM::fourCC("PLD2") ? 1 : 0];
+                location.type = data.type;
+                location.radius = data.radius;
+                if (data.type == Location_ObjectType)
+                    location.objectType = data.location;
                 else
                 {
-                    reader.get(mLocation); // TES4
-                    if (mLocation.type != 5)
-                        reader.adjustFormId(mLocation.location);
+                    location.location = ESM::FormId::fromUint32(data.location);
+                    reader.adjustFormId(location.location);
+                    data.location = location.location.toUint32();
                 }
+                if (subHdr.typeId == ESM::fourCC("PLDT"))
+                    mLocation = data;
 
                 break;
             }
             case ESM::fourCC("PTDT"):
+            case ESM::fourCC("PTD2"):
             {
-                if (subHdr.dataSize != sizeof(mTarget))
-                    reader.skipSubRecordData(); // FIXME: FO3
-                else
+                if (subHdr.dataSize == sizeof(mTarget)) // TES4
                 {
-                    reader.get(mTarget); // TES4
-                    if (mLocation.type != 2)
+                    reader.get(mTarget);
+                    if (mTarget.type != 2)
                         reader.adjustFormId(mTarget.target);
                 }
+                else if (subHdr.dataSize == 16) // FO3/FONV
+                {
+                    Target& target = mTargets[subHdr.typeId == ESM::fourCC("PTD2") ? 1 : 0];
+                    std::uint32_t form = 0;
+                    reader.get(target.type);
+                    reader.get(form);
+                    reader.get(target.count);
+                    reader.get(target.unknown);
+                    target.target = ESM::FormId::fromUint32(form);
+                    if (target.type != 2)
+                        reader.adjustFormId(target.target);
+                }
+                else
+                    reader.skipSubRecordData();
 
                 break;
             }
             case ESM::fourCC("CTDA"):
             {
+                if (subHdr.dataSize == 28) // FO3/FONV
+                {
+                    TargetCondition condition;
+                    reader.get(condition);
+                    if (condition.reference)
+                        reader.adjustFormId(condition.reference);
+                    addDialogCondition(reader, mFoConditions, condition, true);
+                    break;
+                }
                 if (subHdr.dataSize != sizeof(CTDA))
                 {
                     reader.skipSubRecordData(); // FIXME: FO3
@@ -135,8 +183,6 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
             case ESM::fourCC("PKAM"): // FO3
             case ESM::fourCC("PUID"): // FO3
             case ESM::fourCC("PKW3"): // FO3
-            case ESM::fourCC("PTD2"): // FO3
-            case ESM::fourCC("PLD2"): // FO3
             case ESM::fourCC("PKFD"): // FO3
             case ESM::fourCC("SLSD"): // FO3
             case ESM::fourCC("SCVR"): // FO3

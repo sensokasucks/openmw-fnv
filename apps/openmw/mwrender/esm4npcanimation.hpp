@@ -3,7 +3,11 @@
 
 #include "animation.hpp"
 
+#include <map>
 #include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <osg/Quat>
 
@@ -20,7 +24,24 @@ namespace MWRender
         ESM4NpcAnimation(
             const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem);
 
+        enum class Locomotion
+        {
+            Idle,
+            Walk,
+            Run,
+        };
+
+        // FO3/FONV: loops the standing idle or a forward locomotion sequence.
+        void setLocomotion(Locomotion locomotion);
+        // Ground speed of the current locomotion sequence (units per second), 0 when standing or unknown.
+        float getLocomotionSpeed() const;
+
     private:
+        Locomotion mLocomotion = Locomotion::Idle;
+        float mLocomotionSpeed = 0.f;
+        std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
+        std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
+
         // FO3/FONV: rotation that puts rigid head parts upright under the head bone
         std::optional<osg::Quat> mHeadAttitude;
 
@@ -39,6 +60,8 @@ namespace MWRender
         void updatePartsTES5(const ESM4::Npc& traits);
         void updatePartsFONV(const ESM4::Npc& traits);
         void playIdleFONV();
+        // stripRootMotion: keep the accumulation root in place, the AI moves the actor
+        void playLoopFONV(std::string_view file, bool stripRootMotion);
     };
 }
 

@@ -799,6 +799,13 @@ return {
             local quest = getQuest(q)
             if quest then setStage(quest, stage) end
         end,
+        --- Evaluates a CTDA list (as built by core.obscript) with subject as
+        -- the running object and the player as target; used by AI packages.
+        -- @return passed, failed condition, its value
+        checkConditions = function(list, subject)
+            initState()
+            return conditions.evaluate(list, makeContext(subject, world.players[1]))
+        end,
     },
     eventHandlers = {
         FNVDialogueChoose = function(data)

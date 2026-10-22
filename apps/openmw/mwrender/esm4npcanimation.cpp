@@ -10,9 +10,11 @@
 #include <components/esm4/loadrace.hpp>
 
 #include <osg/Material>
+#include <osg/io_utils>
 #include <osg/Texture2D>
 #include <osg/Transform>
 
+#include <components/debug/debuglog.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -326,44 +328,142 @@ namespace MWRender
         }
     }
 
+    namespace
+    {
+        // Holds a bone at its rest position in the horizontal plane. Locomotion sequences move the accumulation root
+        // ("Bip01") forward over a cycle; the actor itself is moved by the AI instead.
+        class StripHorizontalMotion : public SceneUtil::NodeCallback<StripHorizontalMotion, NifOsg::MatrixTransform*>
+        {
+        public:
+            explicit StripHorizontalMotion(const osg::Vec3f& rest)
+                : mRest(rest)
+            {
+            }
+
+            void operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                osg::Vec3f translation = node->getMatrix().getTrans();
+                translation.x() = mRest.x();
+                translation.y() = mRest.y();
+                node->setTranslation(translation);
+                traverse(node, nv);
+            }
+
+        private:
+            osg::Vec3f mRest;
+        };
+    }
+
     void ESM4NpcAnimation::playIdleFONV()
     {
+        playLoopFONV("mtidle.kf", false);
+    }
+
+    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
+    {
+        if (locomotion == mLocomotion)
+            return;
+        mLocomotion = locomotion;
+        switch (locomotion)
+        {
+            case Locomotion::Idle:
+                playLoopFONV("mtidle.kf", false);
+                break;
+            case Locomotion::Walk:
+                playLoopFONV("mtforward.kf", true);
+                break;
+            case Locomotion::Run:
+                playLoopFONV("mtfastforward.kf", true);
+                break;
+        }
+    }
+
+    float ESM4NpcAnimation::getLocomotionSpeed() const
+    {
+        return mLocomotionSpeed;
+    }
+
+    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    {
         // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
-        // standing idle that sits next to the skeleton so NPCs don't stand in the bind pose.
+        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
         const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
         const std::string_view skeleton = skeletonPath.value();
         const size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
             return;
-        const VFS::Path::Normalized idle(std::string(skeleton.substr(0, slash)) + "/locomotion/mtidle.kf");
-        if (!mResourceSystem->getVFS()->exists(idle))
+        // Walks and runs are per sex (locomotion/male, locomotion/female), the idle is shared
+        const std::string dir = std::string(skeleton.substr(0, slash)) + "/locomotion/";
+        VFS::Path::Normalized path(
+            dir + (MWClass::ESM4Npc::isFemale(mPtr) ? "female/" : "male/") + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+            path = VFS::Path::Normalized(dir + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+        {
+            Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
             return;
+        }
 
-        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(idle);
+        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
         const NodeMap& nodeMap = getNodeMap();
+
+        // Drop the sequence played before
+        for (auto& [node, callback] : mLoopCallbacks)
+            node->removeUpdateCallback(callback);
+        mLoopCallbacks.clear();
+
         const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
+        mLocomotionSpeed = 0.f;
         for (const auto& [name, controller] : keyframes->mKeyframeControllers)
         {
             // Without movement accumulation, "Bip01 NonAccum" carries the whole root offset, so it belongs on the
             // accumulation root that holds the pelvis height in the skeleton.
             const std::string_view target = !hasAccumRootTrack && name == "Bip01 NonAccum" ? "Bip01" : name;
             auto found = nodeMap.find(target);
-            if (found == nodeMap.end() || !dynamic_cast<NifOsg::MatrixTransform*>(found->second.get()))
+            if (found == nodeMap.end())
+                continue;
+            auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(found->second.get());
+            if (transform == nullptr)
                 continue;
             // The skeleton's own transform controllers have no time source and would reset the bone every frame.
-            osg::Callback* callback = found->second->getUpdateCallback();
+            osg::Callback* callback = transform->getUpdateCallback();
             while (callback != nullptr)
             {
                 osg::Callback* next = callback->getNestedCallback();
                 if (dynamic_cast<SceneUtil::KeyframeController*>(callback))
-                    found->second->removeUpdateCallback(callback);
+                    transform->removeUpdateCallback(callback);
                 callback = next;
             }
+            if (!mRestTranslations.contains(transform))
+                mRestTranslations[transform] = transform->getMatrix().getTrans();
+
             osg::ref_ptr<SceneUtil::KeyframeController> cloned = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
             cloned->setSource(source);
-            found->second->addUpdateCallback(cloned->getAsCallback());
+            transform->addUpdateCallback(cloned->getAsCallback());
+            mLoopCallbacks.emplace_back(transform, cloned->getAsCallback());
+
+            if (stripRootMotion && target == "Bip01")
+            {
+                // Speed of the cycle, so feet don't slide: distance the root covers over one loop
+                if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                {
+                    const float duration = function->getMaximum();
+                    if (duration > 0.f)
+                    {
+                        osg::Vec3f delta = controller->getTranslation(duration) - controller->getTranslation(0.f);
+                        delta.z() = 0.f;
+                        mLocomotionSpeed = delta.length() / duration;
+                        Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << duration;
+                    }
+                }
+                osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestTranslations[transform]);
+                transform->addUpdateCallback(strip);
+                mLoopCallbacks.emplace_back(transform, strip);
+            }
         }
+        Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ", speed "
+                            << mLocomotionSpeed;
     }
 
     void ESM4NpcAnimation::insertHeadParts(

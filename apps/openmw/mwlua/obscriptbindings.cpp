@@ -39,6 +39,7 @@
 #include "context.hpp"
 #include "luamanagerimp.hpp"
 #include "object.hpp"
+#include "obscriptaibindings.hpp"
 #include "obscriptdialoguebindings.hpp"
 
 namespace sol
@@ -247,6 +248,7 @@ namespace MWLua
         }();
 
         api["dialogue"] = initObScriptDialogueBindings(context);
+        api["ai"] = initObScriptAIBindings(context);
 
         return LuaUtil::makeReadOnly(api);
     }

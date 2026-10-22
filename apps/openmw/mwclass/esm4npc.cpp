@@ -63,6 +63,7 @@ namespace MWClass
         const ESM4::Npc* mTraits;
         const ESM4::Npc* mBaseData;
         const ESM4::Npc* mModel; // FO3/FONV: the record that provides the skeleton
+        const ESM4::Npc* mAIPackages; // the record whose package list the NPC runs
         const ESM4::Race* mRace;
         bool mIsFemale;
 
@@ -105,6 +106,7 @@ namespace MWClass
                                 << ESM::RefId(base->mId) << ")";
 
         data->mModel = chooseTemplate(npcRecs, ESM4::Npc::Template_UseModel);
+        data->mAIPackages = chooseTemplate(npcRecs, ESM4::Npc::Template_UseAIPackage);
 
         if (data->mTraits != nullptr)
         {
@@ -166,6 +168,11 @@ namespace MWClass
     const ESM4::Npc* ESM4Npc::getTraitsRecord(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mTraits;
+    }
+
+    const ESM4::Npc* ESM4Npc::getAIPackagesRecord(const MWWorld::Ptr& ptr)
+    {
+        return getCustomData(ptr).mAIPackages;
     }
 
     const ESM4::Race* ESM4Npc::getRace(const MWWorld::Ptr& ptr)

@@ -316,6 +316,11 @@ namespace MWLua
         }
     }
 
+    sol::table makeObScriptConditions(sol::state_view& lua, const std::vector<ESM4::DialogCondition>& conditions)
+    {
+        return makeConditions(lua, conditions);
+    }
+
     sol::table initObScriptDialogueBindings(const Context& context)
     {
         sol::state_view lua = context.sol();

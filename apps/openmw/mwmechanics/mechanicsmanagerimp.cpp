@@ -1,5 +1,7 @@
 #include "mechanicsmanagerimp.hpp"
 
+#include "esm4actors.hpp"
+
 #include <cassert>
 
 #include <osg/Stats>
@@ -324,6 +326,7 @@ namespace MWMechanics
 
         mActors.update(duration, paused);
         mObjects.update(duration, paused);
+        ESM4Actors::get().update(duration, paused);
     }
 
     void MechanicsManager::processChangedSettings(const Settings::CategorySettingVector& changed)
@@ -1845,6 +1848,7 @@ namespace MWMechanics
     void MechanicsManager::clear()
     {
         mActors.clear();
+        ESM4Actors::get().clear();
         mStolenItems.clear();
         mClassSelected = false;
         mRaceSelected = false;

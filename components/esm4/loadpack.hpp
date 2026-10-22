@@ -34,6 +34,8 @@
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
 
+#include "loadinfo.hpp" // DialogCondition
+
 namespace ESM4
 {
     class Reader;
@@ -88,16 +90,75 @@ namespace ESM4
         };
 #pragma pack(pop)
 
+        // FO3/FONV package types (PKDT type)
+        enum Type : std::int32_t
+        {
+            Type_Find = 0,
+            Type_Follow = 1,
+            Type_Escort = 2,
+            Type_Eat = 3,
+            Type_Sleep = 4,
+            Type_Wander = 5,
+            Type_Travel = 6,
+            Type_Accompany = 7,
+            Type_UseItemAt = 8,
+            Type_Ambush = 9,
+            Type_FleeNotCombat = 10,
+            Type_CastMagic = 11,
+            Type_Sandbox = 12,
+            Type_Patrol = 13,
+            Type_Guard = 14,
+            Type_Dialogue = 15,
+            Type_UseWeapon = 16,
+        };
+
+        // FO3/FONV location types (PLDT/PLD2 type)
+        enum LocationType : std::int32_t
+        {
+            Location_NearReference = 0,
+            Location_InCell = 1,
+            Location_NearCurrentLocation = 2,
+            Location_NearEditorLocation = 3,
+            Location_ObjectId = 4,
+            Location_ObjectType = 5,
+            Location_NearLinkedReference = 6,
+            Location_AtPackageLocation = 7,
+            Location_None = 0xff,
+        };
+
+        // FO3/FONV target (PTDT/PTD2): 0 specific reference, 1 object id, 2 object type, 3 linked reference
+        struct Target
+        {
+            std::int32_t type = 0xff;
+            ESM::FormId target; // raw object type for type 2
+            std::int32_t count = 0; // count or distance
+            float unknown = 0.f;
+        };
+
+        // FO3/FONV location (PLDT/PLD2); the object type of type 5 is kept raw in objectType
+        struct Location
+        {
+            std::int32_t type = Location_None;
+            ESM::FormId location;
+            std::uint32_t objectType = 0;
+            std::int32_t radius = 0;
+        };
+
         ESM::FormId mId; // from the header
         std::uint32_t mFlags; // from the header, see enum type RecordFlag for details
 
         std::string mEditorId;
 
         PKDT mData;
+        std::uint16_t mBehaviourFlags = 0; // FO3/FONV
+        std::uint16_t mSpecificFlags = 0; // FO3/FONV, meaning depends on the package type
         PSDT mSchedule;
-        PLDT mLocation;
-        PTDT mTarget;
-        std::vector<CTDA> mConditions;
+        PLDT mLocation; // TES4
+        PTDT mTarget; // TES4
+        std::vector<CTDA> mConditions; // TES4
+        Location mLocations[2]; // FO3/FONV: PLDT, PLD2
+        Target mTargets[2]; // FO3/FONV: PTDT, PTD2
+        std::vector<DialogCondition> mFoConditions; // FO3/FONV, in order
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;
