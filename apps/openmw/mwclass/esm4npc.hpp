@@ -63,6 +63,8 @@ namespace MWClass
         static bool isFemale(const MWWorld::Ptr& ptr);
         // The record that holds the NPC's level, SPECIAL and skills (following "use stats" templates).
         static const ESM4::Npc* getStatsRecord(const MWWorld::Ptr& ptr);
+        // The record whose factions the NPC belongs to (following "use factions" templates).
+        static const ESM4::Npc* getFactionsRecord(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Armor*>& getEquippedArmor(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Clothing*>& getEquippedClothing(const MWWorld::Ptr& ptr);
 

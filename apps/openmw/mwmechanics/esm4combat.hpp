@@ -42,6 +42,16 @@ namespace MWMechanics::ESM4Combat
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
         const osg::Vec3f& direction);
 
+    // How the actor's factions (FACT relations, both ways) feel about the player's: FNV combat reactions.
+    enum class Reaction
+    {
+        Neutral,
+        Enemy,
+        Ally,
+        Friend,
+    };
+    Reaction getReactionToPlayer(const MWWorld::Ptr& actor);
+
     // Lays the actor down and stops it moving.
     void kill(const MWWorld::Ptr& actor, bool instant = false);
 

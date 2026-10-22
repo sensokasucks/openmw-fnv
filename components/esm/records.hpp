@@ -57,6 +57,7 @@
 #include <components/esm4/loaddial.hpp>
 #include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadeyes.hpp>
+#include <components/esm4/loadfact.hpp>
 #include <components/esm4/loadflor.hpp>
 #include <components/esm4/loadglob.hpp>
 #include <components/esm4/loadfurn.hpp>

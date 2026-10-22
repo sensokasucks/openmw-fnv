@@ -40,6 +40,7 @@ namespace MWClass
         static const ESM4::Creature* getAIDataRecord(const MWWorld::ConstPtr& ptr);
         static const ESM4::Creature* getAIPackagesRecord(const MWWorld::ConstPtr& ptr);
         static const ESM4::Creature* getBaseDataRecord(const MWWorld::ConstPtr& ptr);
+        static const ESM4::Creature* getFactionsRecord(const MWWorld::ConstPtr& ptr);
     };
 }
 
