@@ -162,20 +162,13 @@ namespace MWRender
         }
 
         // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) hang off the head bone, which
-        // is their "Prn" parent in FO3/FONV, but are modelled upright in skeleton axes like the skinned head.
+        // is their "Prn" parent in FO3/FONV. They are modelled in the head bone's animated frame, so they only sit
+        // upright once the idle plays; the skeleton's bind pose has the head bone turned sideways.
         constexpr std::string_view headBone = "Bip01 Head";
         const NodeMap& nodeMap = getNodeMap();
         auto found = nodeMap.find(headBone);
-        if (found == nodeMap.end())
-            return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
-        if (!mHeadAttitude)
-        {
-            // The skeleton is still in its bind pose here.
-            const osg::NodePathList paths = found->second->getParentalNodePaths(mObjectRoot);
-            mHeadAttitude = paths.empty() ? osg::Quat() : osg::computeLocalToWorld(paths.front()).getRotate().inverse();
-        }
-        return SceneUtil::attach(
-            std::move(templateNode), mObjectRoot, {}, found->second, sceneManager, &*mHeadAttitude);
+        osg::Group* attachNode = found != nodeMap.end() ? found->second.get() : mObjectRoot.get();
+        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, attachNode, sceneManager);
     }
 
     static void tintHair(osg::Node& node, const ESM4::Npc::HairColour& colour)

@@ -4,12 +4,10 @@
 #include "animation.hpp"
 
 #include <map>
-#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include <osg/Quat>
 
 namespace ESM4
 {
@@ -41,9 +39,6 @@ namespace MWRender
         float mLocomotionSpeed = 0.f;
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
-
-        // FO3/FONV: rotation that puts rigid head parts upright under the head bone
-        std::optional<osg::Quat> mHeadAttitude;
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
