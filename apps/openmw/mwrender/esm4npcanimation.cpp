@@ -415,17 +415,25 @@ namespace MWRender
         const auto source = std::make_shared<SceneUtil::FrameTimeSource>();
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
         mLocomotionSpeed = 0.f;
+        std::size_t bound = 0;
         for (const auto& [name, controller] : keyframes->mKeyframeControllers)
         {
             // Without movement accumulation, "Bip01 NonAccum" carries the whole root offset, so it belongs on the
             // accumulation root that holds the pelvis height in the skeleton.
-            const std::string_view target = !hasAccumRootTrack && name == "Bip01 NonAccum" ? "Bip01" : name;
+            const std::string_view target
+                = !hasAccumRootTrack && name == "Bip01 NonAccum" ? std::string_view("Bip01") : std::string_view(name);
             auto found = nodeMap.find(target);
             if (found == nodeMap.end())
+            {
+                Log(Debug::Verbose) << "  no node " << target;
                 continue;
+            }
             auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(found->second.get());
             if (transform == nullptr)
+            {
+                Log(Debug::Verbose) << "  not a NIF transform: " << target << " " << found->second->className();
                 continue;
+            }
             // The skeleton's own transform controllers have no time source and would reset the bone every frame.
             osg::Callback* callback = transform->getUpdateCallback();
             while (callback != nullptr)
@@ -442,6 +450,7 @@ namespace MWRender
             cloned->setSource(source);
             transform->addUpdateCallback(cloned->getAsCallback());
             mLoopCallbacks.emplace_back(transform, cloned->getAsCallback());
+            ++bound;
 
             if (stripRootMotion && target == "Bip01")
             {
@@ -462,8 +471,9 @@ namespace MWRender
                 mLoopCallbacks.emplace_back(transform, strip);
             }
         }
-        Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ", speed "
-                            << mLocomotionSpeed;
+        Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
+                            << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
+                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed;
     }
 
     void ESM4NpcAnimation::insertHeadParts(
