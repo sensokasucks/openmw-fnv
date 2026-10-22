@@ -1,6 +1,7 @@
 #include "nifloader.hpp"
 
 #include <mutex>
+#include <set>
 #include <string_view>
 
 #include <osg/Array>
@@ -79,6 +80,27 @@ namespace
         }
 
         void apply(osg::Drawable& node) override { traverse(node); }
+    };
+
+    // Keeps the named nodes away from the scene optimizer.
+    struct KeepNodesVisitor : osg::NodeVisitor
+    {
+        explicit KeepNodesVisitor(const std::set<std::string>& names)
+            : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            , mNames(names)
+        {
+        }
+
+        void apply(osg::Node& node) override
+        {
+            if (mNames.contains(node.getName()))
+                node.setDataVariance(osg::Object::DYNAMIC);
+            traverse(node);
+        }
+
+        void apply(osg::Drawable& node) override {}
+
+        const std::set<std::string>& mNames;
     };
 
     struct RemoveLodOverlapVisitor : public osg::NodeVisitor
@@ -352,6 +374,10 @@ namespace NifOsg
         bool mHasHerbalismLabel = false;
         // The embedded "Idle" sequence, which also drives manager-controlled morphers (e.g. hanging flags)
         const Nif::NiControllerSequence* mIdleSequence = nullptr;
+        // Skin roots of FO3/FONV skinned shapes. The skin transform of such a shape already maps from its skin root
+        // to the shape, so RigGeometry must find the root by name; the optimizer would otherwise remove it if it has
+        // an identity transform (e.g. "Scene Root" of flags), and the shape would be offset by its own transform.
+        std::set<std::string> mSkinRoots;
         bool mHasStencilProperty = false;
 
         const Nif::NiSortAdjustNode* mPushedSorter = nullptr;
@@ -504,6 +530,12 @@ namespace NifOsg
 
             // Attach particle emitters to their nodes which should all be loaded by now.
             handleQueuedParticleEmitters(created, nif);
+
+            if (!mSkinRoots.empty())
+            {
+                KeepNodesVisitor keepSkinRoots(mSkinRoots);
+                created->accept(keepSkinRoots);
+            }
 
             RemoveLodOverlapVisitor removeLodOverlaps;
             created->accept(removeLodOverlaps);
@@ -1751,7 +1783,11 @@ namespace NifOsg
                 rig->setInfluences(influences);
                 rig->setTransform(data->mTransform.toMatrix());
                 if (const Nif::NiAVObject* rootBone = skin->mRoot.getPtr())
+                {
                     rig->setRootBone(rootBone->mName);
+                    if (mBethVersion >= Nif::NIFFile::BethVersion::BETHVER_FO3)
+                        mSkinRoots.insert(rootBone->mName);
+                }
 
                 drawable = rig;
             }
