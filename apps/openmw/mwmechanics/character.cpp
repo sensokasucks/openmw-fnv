@@ -537,6 +537,15 @@ namespace MWMechanics
 
     bool CharacterController::onOpen() const
     {
+        // ESM4 containers play the "Open" sequence embedded in their model, and the container window opens at once.
+        if (mPtr.getType() == ESM4::Container::sRecordId && mAnimation)
+        {
+            if (mAnimation->hasAnimation("open"))
+                mAnimation->play("open", Priority_Scripted, MWRender::BlendMask_All, false, 1.0f, "start", "stop",
+                    getStartPointAfter("close"), 0);
+            return true;
+        }
+
         if (mPtr.getType() == ESM::Container::sRecordId && mAnimation)
         {
             if (!mAnimation->hasAnimation("containeropen"))
@@ -557,8 +566,25 @@ namespace MWMechanics
         return true;
     }
 
+    float CharacterController::getStartPointAfter(std::string_view otherGroup) const
+    {
+        // Start where the other one of an open/close pair is, so a lid that is still moving does not jump.
+        float complete;
+        if (mAnimation->getInfo(otherGroup, &complete))
+            return 1.f - complete;
+        return 0.f;
+    }
+
     void CharacterController::onClose() const
     {
+        if (mPtr.getType() == ESM4::Container::sRecordId)
+        {
+            if (mAnimation && mAnimation->hasAnimation("close"))
+                mAnimation->play("close", Priority_Scripted, MWRender::BlendMask_All, false, 1.0f, "start", "stop",
+                    getStartPointAfter("open"), 0);
+            return;
+        }
+
         if (mPtr.getType() == ESM::Container::sRecordId)
         {
             if (!mAnimation || !mAnimation->hasAnimation("containerclose"))

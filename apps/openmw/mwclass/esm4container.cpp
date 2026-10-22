@@ -76,6 +76,8 @@ namespace MWClass
         if (ptr.getCellRef().isLocked())
             return std::make_unique<MWWorld::FailedAction>("Locked", ptr);
 
+        // The "open" sequence of the model plays as the container opens, see CharacterController::onOpen.
+        ESM4Impl::prepareEmbeddedAnimation(ptr, "open");
         std::unique_ptr<MWWorld::Action> action = std::make_unique<MWWorld::ActionOpen>(ptr);
         action->setSound(ptr.get<ESM4::Container>()->mBase->mOpenSound);
         return action;
