@@ -28,6 +28,7 @@
 #include <components/sceneutil/visitor.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "esm4facegen.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwworld/esmstore.hpp"
 
@@ -206,6 +207,12 @@ namespace MWRender
             0, texture2d, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
     }
 
+    void ESM4NpcAnimation::applyFaceGen(osg::Node& node, std::string_view model, const ESM4::Npc& traits)
+    {
+        applyFaceGenShape(node, model, traits.mSymShapeModeCoefficients, traits.mAsymShapeModeCoefficients,
+            *mResourceSystem->getVFS());
+    }
+
     void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
     {
         const MWWorld::ESMStore* store = MWBase::Environment::get().getESMStore();
@@ -238,8 +245,13 @@ namespace MWRender
         constexpr uint32_t bodySlots[] = { ESM4::Armor::FO3_UpperBody, ESM4::Armor::FO3_LeftHand,
             ESM4::Armor::FO3_RightHand };
         for (size_t i = 0; i < bodyParts.size() && i < std::size(bodySlots); ++i)
-            if (!(usedSlots & bodySlots[i]))
-                attachPart(bodyParts[i].mesh);
+        {
+            if (usedSlots & bodySlots[i])
+                continue;
+            // Races share body meshes and set their own skin with the part's texture
+            if (osg::ref_ptr<osg::Node> node = attachPart(bodyParts[i].mesh))
+                overrideDiffuse(*node, bodyParts[i].texture);
+        }
 
         if (usedSlots & ESM4::Armor::FO3_Head)
             return;
@@ -250,9 +262,15 @@ namespace MWRender
         for (size_t i = 0; i < headParts.size(); ++i)
         {
             osg::ref_ptr<osg::Node> node = attachPart(headParts[i].mesh);
-            // The eye meshes default to a generic texture; the NPC's EYES record picks the colour.
-            if (node && eyes && (i == 6 || i == 7))
+            if (!node)
+                continue;
+            applyFaceGen(*node, headParts[i].mesh, traits);
+            // The race picks the skin (old races have their own head texture); the NPC's EYES record picks the
+            // eye colour.
+            if (eyes && (i == 6 || i == 7))
                 overrideDiffuse(*node, eyes->mIcon);
+            else
+                overrideDiffuse(*node, headParts[i].texture);
         }
 
         for (ESM::FormId partId : traits.mHeadParts)
@@ -266,8 +284,11 @@ namespace MWRender
                 continue;
             }
             osg::ref_ptr<osg::Node> node = attachPart(part->mModel.getOriginal());
+            if (!node)
+                continue;
+            applyFaceGen(*node, part->mModel.getOriginal(), traits);
             // Eyebrows and beards live next to the hair meshes and take the hair colour too.
-            if (node && part->mModel.getNormalized().value().starts_with("characters/hair/"))
+            if (part->mModel.getNormalized().value().starts_with("characters/hair/"))
                 tintHair(*node, traits.mHairColour);
         }
 
@@ -278,6 +299,7 @@ namespace MWRender
                 Log(Debug::Error) << "Hair not found: " << ESM::RefId(traits.mHair);
             else if (osg::ref_ptr<osg::Node> node = attachPart(hair->mModel.getOriginal()))
             {
+                applyFaceGen(*node, hair->mModel.getOriginal(), traits);
                 // Hair meshes carry a full and a trimmed variant; show the one that fits under a hat.
                 const bool hat = usedSlots & ESM4::Armor::FO3_Hat;
                 SceneUtil::FindByNameVisitor findHidden(hat ? "NoHat" : "Hat");

@@ -859,6 +859,10 @@ namespace Resource
         if (filename.find("characters/hair/") != std::string_view::npos)
             return false;
 
+        // FaceGen morphs address head part vertices by their order in the file.
+        if (filename.find("characters/head/") != std::string_view::npos)
+            return false;
+
         // For spell VFX, DummyXX nodes must remain intact. Not adding those to reservedNames to avoid being overly
         // cautious - instead, decide on filename
         if (filename.find("vfx_pattern") != std::string_view::npos)
