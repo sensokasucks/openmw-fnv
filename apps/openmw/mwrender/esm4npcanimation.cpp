@@ -184,15 +184,10 @@ namespace MWRender
             CollectRigsVisitor collect;
             const_cast<osg::Node*>(templateNode.get())->accept(collect);
             osg::ref_ptr<osg::Group> handle = new osg::Group;
+            // The shape's own transform stays: the loader pairs it with the skin transform (head meshes sit at
+            // +112 on their node and -112 in their skin data), so dropping either one moves the part.
             for (const osg::Node* shape : collect.mShapes)
-            {
-                osg::ref_ptr<osg::Node> instance = sceneManager->getInstance(shape);
-                // Skinned vertices are placed by the bones alone; a skinned shape's own transform (creature parts
-                // often carry one) is not applied on top.
-                if (auto* transform = dynamic_cast<osg::MatrixTransform*>(instance.get()))
-                    transform->setMatrix(osg::Matrix::identity());
-                handle->addChild(instance);
-            }
+                handle->addChild(sceneManager->getInstance(shape));
             handle->getOrCreateUserDataContainer()->addUserObject(new Resource::TemplateRef(templateNode));
             mObjectRoot->addChild(handle);
             return handle;

@@ -106,6 +106,14 @@ namespace MWClass
                                 << ESM::RefId(base->mId) << ")";
 
         data->mModel = chooseTemplate(npcRecs, ESM4::Npc::Template_UseModel);
+        {
+            std::string chain;
+            for (const ESM4::Npc* rec : npcRecs)
+                chain += " " + rec->mEditorId + "(flags=" + std::to_string(rec->mBaseConfig.fo3.templateFlags) + ")";
+            Log(Debug::Verbose) << "ESM4 NPC " << base->mEditorId << " chain:" << chain
+                                << " traits=" << (data->mTraits ? data->mTraits->mEditorId : "none")
+                                << " model=" << (data->mModel ? data->mModel->mEditorId : "none");
+        }
         data->mAIPackages = chooseTemplate(npcRecs, ESM4::Npc::Template_UseAIPackage);
 
         if (data->mTraits != nullptr)
