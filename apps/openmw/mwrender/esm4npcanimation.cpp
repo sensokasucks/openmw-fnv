@@ -12,6 +12,7 @@
 #include <components/esm4/loadrace.hpp>
 
 #include <osg/Material>
+#include <osg/MatrixTransform>
 #include <osg/io_utils>
 #include <osg/Texture2D>
 #include <osg/Transform>
@@ -163,14 +164,41 @@ namespace MWRender
             return handle;
         }
 
-        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth...) hang off the head bone, which
-        // is their "Prn" parent in FO3/FONV. They are modelled in the head bone's animated frame, so they only sit
-        // upright once the idle plays; the skeleton's bind pose has the head bone turned sideways.
+        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth, hats...) hang off the head bone,
+        // their "Prn" parent in FO3/FONV, and are modelled in the same space as the skinned head mesh. Place them
+        // with the head mesh's own binding to that bone so they follow it exactly like the skinned head does.
         constexpr std::string_view headBone = "Bip01 Head";
         const NodeMap& nodeMap = getNodeMap();
         auto found = nodeMap.find(headBone);
-        osg::Group* attachNode = found != nodeMap.end() ? found->second.get() : mObjectRoot.get();
-        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, attachNode, sceneManager);
+        if (found == nodeMap.end())
+            return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
+        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(mHeadBinding);
+        found->second->addChild(binding);
+        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
+    }
+
+    void ESM4NpcAnimation::initHeadBinding(std::string_view headModel)
+    {
+        mHeadBinding = osg::Matrixf();
+        if (headModel.empty())
+            return;
+        osg::ref_ptr<const osg::Node> head = mResourceSystem->getSceneManager()->getTemplate(
+            Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(headModel)));
+        CollectRigsVisitor collect;
+        const_cast<osg::Node*>(head.get())->accept(collect);
+        for (const osg::Node* shape : collect.mShapes)
+        {
+            const osg::Group* group = shape->asGroup();
+            for (unsigned int i = 0; group && i < group->getNumChildren(); ++i)
+            {
+                const auto* rig = dynamic_cast<const SceneUtil::RigGeometry*>(group->getChild(i));
+                if (const osg::Matrixf* bind = rig ? rig->getInvBindMatrix("Bip01 Head") : nullptr)
+                {
+                    mHeadBinding = *bind;
+                    return;
+                }
+            }
+        }
     }
 
     // Parts are instances of cached meshes whose state sets are shared between NPCs, so copy before changing one.
@@ -278,6 +306,10 @@ namespace MWRender
         mObjectRoot->accept(findHeadAnims);
         if (findHeadAnims.mFoundNode)
             findHeadAnims.mFoundNode->setNodeMask(0);
+
+        initHeadBinding(race->mHeadParts.empty() ? std::string_view()
+                                                 : std::string_view((isFemale ? race->mHeadPartsFemale
+                                                                              : race->mHeadParts)[0].mesh));
 
         // Every human race shares the same skin textures; the NPC's FaceGen texture modes give it its colour, on the
         // body and hands as on the face. Race body parts: 0 upper body, 1 left hand, 2 right hand, 3 body .egt
