@@ -374,10 +374,12 @@ namespace NifOsg
         bool mHasHerbalismLabel = false;
         // The embedded "Idle" sequence, which also drives manager-controlled morphers (e.g. hanging flags)
         const Nif::NiControllerSequence* mIdleSequence = nullptr;
-        // Skin roots of FO3/FONV skinned shapes. The skin transform of such a shape already maps from its skin root
-        // to the shape, so RigGeometry must find the root by name; the optimizer would otherwise remove it if it has
-        // an identity transform (e.g. "Scene Root" of flags), and the shape would be offset by its own transform.
-        std::set<std::string> mSkinRoots;
+        // Nodes the optimizer must leave alone:
+        // - Skin roots of FO3/FONV skinned shapes. The skin transform of such a shape already maps from its skin root
+        //   to the shape, so RigGeometry must find the root by name; the optimizer would otherwise remove it if it has
+        //   an identity transform (e.g. "Scene Root" of flags), and the shape would be offset by its own transform.
+        // - Nodes animated by the embedded sequences (fan blades, gates), which get their controllers after loading.
+        std::set<std::string> mKeptNodes;
         bool mHasStencilProperty = false;
 
         const Nif::NiSortAdjustNode* mPushedSorter = nullptr;
@@ -512,6 +514,16 @@ namespace NifOsg
             osg::ref_ptr<SceneUtil::TextKeyMapHolder> textkeys(new SceneUtil::TextKeyMapHolder);
 
             mIdleSequence = findEmbeddedIdle(nif);
+            if (const Nif::NiControllerManager* manager = findControllerManager(nif))
+            {
+                for (const auto& sequence : manager->mSequences)
+                {
+                    if (sequence.empty())
+                        continue;
+                    for (const Nif::ControlledBlock& block : sequence->mControlledBlocks)
+                        mKeptNodes.insert(block.mNodeName.empty() ? block.mTargetName : block.mNodeName);
+                }
+            }
 
             osg::ref_ptr<osg::Group> created(new osg::Group);
             created->setDataVariance(osg::Object::STATIC);
@@ -531,10 +543,10 @@ namespace NifOsg
             // Attach particle emitters to their nodes which should all be loaded by now.
             handleQueuedParticleEmitters(created, nif);
 
-            if (!mSkinRoots.empty())
+            if (!mKeptNodes.empty())
             {
-                KeepNodesVisitor keepSkinRoots(mSkinRoots);
-                created->accept(keepSkinRoots);
+                KeepNodesVisitor keepNodes(mKeptNodes);
+                created->accept(keepNodes);
             }
 
             RemoveLodOverlapVisitor removeLodOverlaps;
@@ -1786,7 +1798,7 @@ namespace NifOsg
                 {
                     rig->setRootBone(rootBone->mName);
                     if (mBethVersion >= Nif::NIFFile::BethVersion::BETHVER_FO3)
-                        mSkinRoots.insert(rootBone->mName);
+                        mKeptNodes.insert(rootBone->mName);
                 }
 
                 drawable = rig;
