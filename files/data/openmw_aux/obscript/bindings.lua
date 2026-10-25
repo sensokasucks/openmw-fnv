@@ -234,6 +234,7 @@ end)
 -- The player's FNV weapon, mirrored by scripts/omw/fnvcombat into storage.globalSection('FNVPlayerWeapon');
 -- other actors' weapons are not tracked yet.
 local playerWeapon = storage.globalSection('FNVPlayerWeapon')
+local playerApparel = storage.globalSection('FNVPlayerApparel')
 obs.bind('IsWeaponOut', function(...)
     local obj = refAndArgs(...)
     if obj == nil or not types.Player.objectIsInstance(obj) then return 0 end
@@ -249,7 +250,12 @@ obs.bind('GetEquipped', function(...)
     local obj, item = refAndArgs(...)
     if obj == nil or type(item) ~= 'string' or not types.Player.objectIsInstance(obj) then return 0 end
     local editorId, weapon = playerWeapon:get('editorId'), playerWeapon:get('weapon')
-    if (editorId and editorId:lower() == item:lower()) or (weapon and weapon:lower() == item:lower()) then return 1 end
+    item = item:lower()
+    if (editorId and editorId:lower() == item) or (weapon and weapon:lower() == item) then return 1 end
+    -- apparel the player wears (scripts/omw/fnvpipboy/global.lua)
+    for _, w in ipairs(playerApparel:get('worn') or {}) do
+        if w.recordId:lower() == item or w.editorId:lower() == item then return 1 end
+    end
     return 0
 end)
 -- Destroyed objects ignore activation in the original; nothing here reads the flag yet.

@@ -221,7 +221,7 @@ namespace MWLua
             return res;
         };
 
-        // FO3/FONV perks and traits (PERK): a list of { id, editorId, name, description, isTrait, minLevel,
+        // FO3/FONV perks and traits (PERK): a list of { id, editorId, name, description, icon, isTrait, minLevel,
         // ranks, playable, hidden, conditions (CTDA requirements, as core.obscript.dialogue builds them),
         // entries = { { type = 'quest'|'ability'|'entryPoint', rank, quest, stage, spell, entryPoint,
         // func, values } } }.
@@ -237,6 +237,7 @@ namespace MWLua
                 t["editorId"] = perk.mEditorId;
                 t["name"] = perk.mFullName;
                 t["description"] = perk.mDesc;
+                t["icon"] = perk.mIcon;
                 t["isTrait"] = perk.mIsTrait;
                 t["minLevel"] = perk.mMinLevel;
                 t["ranks"] = std::max<int>(1, perk.mRanks);

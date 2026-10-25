@@ -182,6 +182,10 @@ namespace ESM4
         std::vector<ESM::FormId> mAddOns; // TES5 ARMA
         Data mData;
 
+        // FO3/FONV DNAM
+        float mDamageResistance = 0.f;
+        float mDamageThreshold = 0.f;
+
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;
 

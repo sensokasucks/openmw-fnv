@@ -428,7 +428,9 @@ namespace MWLua
             return ESM::RefId(ref->mMerchantContainer).serializeText();
         };
 
-        // What the barter and inventory menus show for an item: { name, value (caps, one item), weight, count }.
+        // What the barter and inventory menus show for an item: { name, value (caps, one item), weight, count,
+        // recordId, editorId, icon (texture path under textures\, may be empty), category ('weapon', 'apparel',
+        // 'aid', 'ammo' or 'misc') }. Apparel adds { slots (BMDT biped flags), dr, dt, powerArmor, playable }.
         api["itemInfo"] = [](const Object& object, sol::this_state s) -> sol::table {
             sol::state_view lua(s);
             sol::table res(lua, sol::create);
@@ -438,6 +440,67 @@ namespace MWLua
             res["value"] = cls.getValue(ptr);
             res["weight"] = cls.getWeight(ptr);
             res["count"] = ptr.getCellRef().getCount();
+            res["recordId"] = ptr.getCellRef().getRefId().serializeText();
+            std::string_view category = "misc";
+            auto describe = [&](const auto& rec, const std::string& icon) {
+                res["editorId"] = rec.mEditorId;
+                res["icon"] = icon;
+            };
+            switch (ptr.getType())
+            {
+                case ESM::REC_WEAP4:
+                    category = "weapon";
+                    describe(*ptr.get<ESM4::Weapon>()->mBase, ptr.get<ESM4::Weapon>()->mBase->mIcon);
+                    break;
+                case ESM::REC_ARMO4:
+                {
+                    category = "apparel";
+                    const ESM4::Armor& armor = *ptr.get<ESM4::Armor>()->mBase;
+                    describe(armor, armor.mIconMale.empty() ? armor.mIconFemale : armor.mIconMale);
+                    res["slots"] = armor.mArmorFlags;
+                    res["dr"] = armor.mDamageResistance;
+                    res["dt"] = armor.mDamageThreshold;
+                    res["powerArmor"] = (armor.mGeneralFlags & ESM4::Armor::FO3_PowerArmor) != 0;
+                    res["playable"] = (armor.mGeneralFlags & ESM4::Armor::FO3_NonPlayable) == 0;
+                    break;
+                }
+                case ESM::REC_CLOT4:
+                {
+                    category = "apparel";
+                    const ESM4::Clothing& clothing = *ptr.get<ESM4::Clothing>()->mBase;
+                    describe(clothing, clothing.mIconMale);
+                    res["slots"] = clothing.mClothingFlags;
+                    res["dr"] = 0;
+                    res["dt"] = 0;
+                    res["powerArmor"] = false;
+                    res["playable"] = true;
+                    break;
+                }
+                case ESM::REC_ALCH4:
+                    category = "aid";
+                    describe(*ptr.get<ESM4::Potion>()->mBase, ptr.get<ESM4::Potion>()->mBase->mIcon);
+                    break;
+                case ESM::REC_INGR4:
+                    category = "aid";
+                    describe(*ptr.get<ESM4::Ingredient>()->mBase, ptr.get<ESM4::Ingredient>()->mBase->mIcon);
+                    break;
+                case ESM::REC_AMMO4:
+                    category = "ammo";
+                    describe(*ptr.get<ESM4::Ammunition>()->mBase, ptr.get<ESM4::Ammunition>()->mBase->mIcon);
+                    break;
+                case ESM::REC_MISC4:
+                    describe(*ptr.get<ESM4::MiscItem>()->mBase, ptr.get<ESM4::MiscItem>()->mBase->mIcon);
+                    break;
+                case ESM::REC_KEYM4:
+                    describe(*ptr.get<ESM4::Key>()->mBase, ptr.get<ESM4::Key>()->mBase->mIcon);
+                    break;
+                case ESM::REC_BOOK4:
+                    describe(*ptr.get<ESM4::Book>()->mBase, ptr.get<ESM4::Book>()->mBase->mIcon);
+                    break;
+                default:
+                    break;
+            }
+            res["category"] = category;
             return res;
         };
 

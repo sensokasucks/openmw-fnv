@@ -37,6 +37,8 @@ GLOBAL: scripts/omw/fnvbarter/global.lua
 PLAYER: scripts/omw/fnvbarter/player.lua
 GLOBAL: scripts/omw/fnvcrafting/global.lua
 PLAYER: scripts/omw/fnvcrafting/player.lua
+GLOBAL: scripts/omw/fnvpipboy/global.lua
+PLAYER: scripts/omw/fnvpipboy/player.lua
 PLAYER: scripts/omw/camera/camera.lua
 PLAYER: scripts/omw/input/actionbindings.lua
 PLAYER: scripts/omw/input/smoothmovement.lua
