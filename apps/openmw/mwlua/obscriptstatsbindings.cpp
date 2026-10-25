@@ -85,6 +85,8 @@ namespace MWLua
                 if (fits(bp))
                     return bp.mId;
             return current;
+        }
+
         std::string formIdText(ESM::FormId id)
         {
             if (id.isZeroOrUnset())
@@ -187,6 +189,8 @@ namespace MWLua
                     world->renderPlayer();
                 },
                 "setPlayerSex");
+        };
+
         // The player's level (the engine level GetLevel reads); for the leveling in scripts/omw/fnvcharacter.lua.
         api["_setPlayerLevel"] = [context](int level) {
             context.mLuaManager->addAction(
