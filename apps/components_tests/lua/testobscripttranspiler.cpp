@@ -133,13 +133,7 @@ namespace
     TEST_F(ObScriptTranspilerTest, OrBindsTighterThanAnd)
     {
         // the original compiler makes `a || b && c` mean `(a || b) && c`
-        const std::string lua = transpile("scn S
-short a
-begin GameMode
-if a == 1 || a == 2 && a == 3
-endif
-end
-");
+        const std::string lua = transpile("scn S\nshort a\nbegin GameMode\nif a == 1 || a == 2 && a == 3\nendif\nend\n");
         EXPECT_THAT(lua,
             HasSubstr("obs.b((obs.b((obs.b((S.a == 1)) or obs.b((S.a == 2)))) and obs.b((S.a == 3))))"));
     }
