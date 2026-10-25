@@ -8,6 +8,7 @@
 #include <sol/table.hpp>
 
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadidle.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadpack.hpp>
 #include <components/lua/luastate.hpp>
@@ -141,6 +142,22 @@ namespace MWLua
             return res;
         }
 
+        std::string_view usePhaseName(MWMechanics::ESM4Actors::UsePhase phase)
+        {
+            switch (phase)
+            {
+                case MWMechanics::ESM4Actors::UsePhase::None:
+                    return "none";
+                case MWMechanics::ESM4Actors::UsePhase::Entering:
+                    return "entering";
+                case MWMechanics::ESM4Actors::UsePhase::Using:
+                    return "using";
+                case MWMechanics::ESM4Actors::UsePhase::Leaving:
+                    return "leaving";
+            }
+            return "none";
+        }
+
         std::string_view statusName(MWMechanics::ESM4Actors::Status status)
         {
             switch (status)
@@ -265,6 +282,75 @@ namespace MWLua
         // "none", "moving", "arrived" or "nopath"
         api["status"] = [](const Object& object) -> std::string_view {
             return statusName(MWMechanics::ESM4Actors::get().getStatus(object.ptr()));
+        };
+
+        // All IDLE records, keyed by form id: { id, editorId, model (KF under meshes/, or the folder of a branch),
+        // parent, previous (sibling), groupSection, loopMin, loopMax, replayDelay, flags, conditions }. The idle
+        // tree is rebuilt from parent/previous in Lua (scripts/omw/fnvai/idles.lua).
+        api["getIdles"] = [](sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            for (const ESM4::IdleAnimation& idle : MWBase::Environment::get().getESMStore()->get<ESM4::IdleAnimation>())
+            {
+                sol::table t(lua, sol::create);
+                t["id"] = formIdText(idle.mId);
+                t["editorId"] = idle.mEditorId;
+                t["model"] = idle.mModel.getOriginal();
+                t["parent"] = formIdText(idle.mParent);
+                t["previous"] = formIdText(idle.mPrevious);
+                t["groupSection"] = idle.mAnimGroupSection;
+                t["loopMin"] = idle.mLoopMin;
+                t["loopMax"] = idle.mLoopMax;
+                t["replayDelay"] = idle.mReplayDelay;
+                t["flags"] = idle.mIdleFlags;
+                t["conditions"] = makeObScriptConditions(lua, idle.mConditions);
+                res[formIdText(idle.mId)] = t;
+            }
+            return res;
+        };
+
+        // Sits down on, lies in or leans on furniture. options: position (world position of the furniture marker),
+        // yaw (radians the actor faces there), offset (vector3: seat relative to the marker, x right, y forward),
+        // headingDelta (radians turned once seated), enter/loop/exit (KF models under meshes/, as IDLE records
+        // name them; enter and exit may be nil). useStatus() follows the entry, use and exit.
+        api["useFurniture"] = [context](const Object& object, const sol::table& options) {
+            MWMechanics::ESM4Actors::FurnitureUse use;
+            use.mMarker = options.get<osg::Vec3f>("position");
+            use.mHeading = options.get_or("yaw", 0.f);
+            if (sol::optional<osg::Vec3f> offset = options.get<sol::optional<osg::Vec3f>>("offset"))
+                use.mOffset = *offset;
+            use.mHeadingDelta = options.get_or("headingDelta", 0.f);
+            use.mEnter = options.get_or("enter", std::string());
+            use.mLoop = options.get_or("loop", std::string());
+            use.mExit = options.get_or("exit", std::string());
+            context.mLuaManager->addAction(
+                [object = Object(object), use] { MWMechanics::ESM4Actors::get().useFurniture(object.ptr(), use); },
+                "obscriptAIUseFurnitureAction");
+        };
+
+        api["leaveFurniture"] = [context](const Object& object) {
+            context.mLuaManager->addAction(
+                [object = Object(object)] { MWMechanics::ESM4Actors::get().leaveFurniture(object.ptr()); },
+                "obscriptAILeaveFurnitureAction");
+        };
+
+        // "none", "entering", "using" or "leaving"
+        api["useStatus"] = [](const Object& object) -> std::string_view {
+            return usePhaseName(MWMechanics::ESM4Actors::get().getUsePhase(object.ptr()));
+        };
+
+        // Plays an idle sequence (KF model under meshes/) once, standing or seated; the idle or seated loop
+        // resumes after it. isIdlePlaying() tells when it is over.
+        api["playIdle"] = [context](const Object& object, std::string model) {
+            context.mLuaManager->addAction(
+                [object = Object(object), model = std::move(model)] {
+                    MWMechanics::ESM4Actors::get().playIdle(object.ptr(), model);
+                },
+                "obscriptAIPlayIdleAction");
+        };
+
+        api["isIdlePlaying"] = [](const Object& object) -> bool {
+            return MWMechanics::ESM4Actors::get().isIdlePlaying(object.ptr());
         };
 
         return LuaUtil::makeReadOnly(api);

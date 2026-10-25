@@ -67,7 +67,7 @@ add_openmw_dir (mwlua
     obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptcombatbindings obscriptstatsbindings obscripteffectbindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
     types/bodypart types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
     types/potion types/ingredient types/misc types/repair types/armor types/light types/static
-    types/clothing types/levelledlist types/terminal types/furniture types/note magictypebindings
+    types/clothing types/levelledlist types/terminal types/furniture types/idlemarker types/note magictypebindings
     )
 
 add_openmw_dir (mwsound

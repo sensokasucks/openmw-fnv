@@ -50,10 +50,10 @@ namespace ESM4
         std::string mEditorId;
         std::string mCollision;
         std::string mEvent;
-        ESM::Path mModel;
+        ESM::Path mModel; // relative to meshes/; a folder for the branch nodes of the idle tree
 
         ESM::FormId mParent; // IDLE or AACT
-        ESM::FormId mPrevious;
+        ESM::FormId mPrevious; // previous sibling, which gives the order among the parent's children
 
         float mBoundRadius;
 

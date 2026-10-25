@@ -4,6 +4,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <string>
 #include <string_view>
 
 #include <osg/Vec3f>
@@ -41,6 +42,29 @@ namespace MWMechanics
             bool mStraight = false; // go straight there, ignoring the navmesh
         };
 
+        // How a piece of furniture is used, as the original engine does it: the actor stands on the furniture
+        // marker facing its heading, the entry sequence carries its skeleton onto the seat, then the actor itself is
+        // moved there (marker + offset, turned by headingDelta) for the seated loop, and the exit sequence brings it
+        // back from the seat to the marker.
+        struct FurnitureUse
+        {
+            osg::Vec3f mMarker; // world position of the marker
+            float mHeading = 0.f; // yaw (radians) the actor faces at the marker
+            osg::Vec3f mOffset; // seat relative to the marker, in marker space (x right, y along the heading)
+            float mHeadingDelta = 0.f; // yaw added once seated
+            std::string mEnter; // KF models under meshes/, empty for none
+            std::string mLoop;
+            std::string mExit;
+        };
+
+        enum class UsePhase
+        {
+            None,
+            Entering,
+            Using,
+            Leaving,
+        };
+
         static ESM4Actors& get();
 
         ESM4Navigation& getNavigation() { return mNavigation; }
@@ -66,6 +90,15 @@ namespace MWMechanics
         float playAction(const MWWorld::Ptr& ptr, std::string_view file);
         bool isActing(const MWWorld::Ptr& ptr) const;
 
+        // Starts using furniture: the actor is placed on the marker and plays the entry sequence. Any movement stops.
+        void useFurniture(const MWWorld::Ptr& ptr, const FurnitureUse& use);
+        // Plays the exit sequence; the actor stands on the marker again once it ends.
+        void leaveFurniture(const MWWorld::Ptr& ptr);
+        UsePhase getUsePhase(const MWWorld::Ptr& ptr) const;
+        // Plays an idle sequence once (standing or seated), then returns to the idle or seated loop.
+        void playIdle(const MWWorld::Ptr& ptr, const std::string& model);
+        bool isIdlePlaying(const MWWorld::Ptr& ptr) const;
+
         void update(float duration, bool paused);
         void clear();
 
@@ -81,10 +114,19 @@ namespace MWMechanics
             std::optional<float> mTurnTo;
             float mStuckTime = 0.f;
             float mActionTime = 0.f; // left of the one-off sequence playing
+
+            UsePhase mUsePhase = UsePhase::None;
+            FurnitureUse mFurniture;
+            float mPhaseTimer = 0.f; // seconds left in the entry or exit sequence
+            float mIdleTimer = 0.f; // seconds left in a one-shot idle, 0 when none plays
         };
 
         // Returns false when the actor is done with this state (stopped, arrived and turned).
         bool updateActor(const MWWorld::Ptr& ptr, State& state, float duration);
+        void startUsing(const MWWorld::Ptr& ptr, State& state);
+        void finishUsing(const MWWorld::Ptr& ptr, State& state);
+        // Resumes the loop an idle interrupted: the seated loop or the standing idle.
+        void resumeLoop(const MWWorld::Ptr& ptr, State& state);
 
         ESM4Navigation mNavigation;
         std::map<ESM::RefNum, State> mStates;

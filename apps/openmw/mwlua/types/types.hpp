@@ -80,6 +80,7 @@ namespace MWLua
     void addESM4NoteBindings(sol::table note, const Context& context);
     void addESM4TerminalBindings(sol::table term, const Context& context);
     void addESM4FurnitureBindings(sol::table furn, const Context& context);
+    void addESM4IdleMarkerBindings(sol::table idlm, const Context& context);
 }
 
 #endif // MWLUA_TYPES_H

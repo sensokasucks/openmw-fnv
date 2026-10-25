@@ -61,7 +61,7 @@ namespace MWRender
         if (mPtr.getType() == ESM::REC_CREA4)
         {
             updatePartsCreature();
-            playIdleFONV();
+            playStandingIdleFONV();
             return;
         }
         const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(mPtr);
@@ -72,7 +72,7 @@ namespace MWRender
         else if (traits->mIsFONV)
         {
             updatePartsFONV(*traits);
-            playIdleFONV();
+            playStandingIdleFONV();
         }
         else
         {
@@ -549,19 +549,59 @@ namespace MWRender
         };
     }
 
-    void ESM4NpcAnimation::playIdleFONV()
+    namespace
+    {
+        // Sequence time counted from the frame the sequence started on, so one-shot sequences (furniture entries,
+        // special idles) begin at their first key; looping ones cycle on from there.
+        class RelativeTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (!mStart)
+                    mStart = now;
+                return static_cast<float>(now - *mStart);
+            }
+
+        private:
+            std::optional<double> mStart;
+        };
+    }
+
+    void ESM4NpcAnimation::playStandingIdleFONV()
     {
         playLoopFONV("mtidle.kf", false);
     }
 
-    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion)
+    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion, bool force)
     {
-        if (locomotion == mLocomotion || mDead)
+        if (mDead)
+            return;
+        if (locomotion == mLocomotion && !force)
             return;
         mLocomotion = locomotion;
+        // Forcing cuts a one-off sequence short (a furniture or idle sequence is over)
+        if (force)
+            mInAction = false;
         // An attack or other one-off sequence finishes first, resumeLocomotion picks the loop up again.
         if (!mInAction)
             playLocomotion();
+    }
+
+    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion)
+    {
+        if (mDead)
+            return 0.f;
+        const VFS::Path::Normalized path = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model));
+        if (!mResourceSystem->getVFS()->exists(path))
+        {
+            Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
+            return 0.f;
+        }
+        // Replaces any attack in progress; the caller resumes the locomotion when it is done
+        mInAction = false;
+        return playKeyframesFONV(path, std::make_shared<RelativeTimeSource>(), !keepRootMotion);
     }
 
     void ESM4NpcAnimation::resumeLocomotion()
@@ -761,15 +801,21 @@ namespace MWRender
             node->removeUpdateCallback(callback);
             if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
             {
-                transform->setRotation(transform->mRotationScale);
-                if (auto rest = mRestTranslations.find(transform); rest != mRestTranslations.end())
-                    transform->setTranslation(rest->second);
+                // Rotation too: a furniture entry leaves "Bip01 NonAccum" turned around
+                if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
+                {
+                    transform->setRotation(rest->second.mRotation);
+                    transform->setTranslation(rest->second.mTranslation);
+                }
+                else
+                    transform->setRotation(transform->mRotationScale);
             }
         }
         mLoopCallbacks.clear();
 
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
         mLocomotionSpeed = 0.f;
+        mRootMotion = osg::Vec3f();
         std::size_t bound = 0;
         for (const auto& [name, controller] : keyframes->mKeyframeControllers)
         {
@@ -798,8 +844,8 @@ namespace MWRender
                     transform->removeUpdateCallback(callback);
                 callback = next;
             }
-            if (!mRestTranslations.contains(transform))
-                mRestTranslations[transform] = transform->getMatrix().getTrans();
+            if (!mRestPoses.contains(transform))
+                mRestPoses[transform] = { transform->getMatrix().getTrans(), transform->getMatrix().getRotate() };
 
             osg::ref_ptr<SceneUtil::KeyframeController> cloned = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
             cloned->setSource(source);
@@ -809,9 +855,10 @@ namespace MWRender
             if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
                 duration = std::max(duration, function->getMaximum());
 
-            if (stripRootMotion && target == "Bip01")
+            if (target == "Bip01")
             {
-                // Speed of the cycle, so feet don't slide: distance the root covers over one loop
+                // Distance the root covers over the sequence: the speed of a locomotion cycle (so feet don't
+                // slide), or where a furniture entry leaves the actor
                 if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
                 {
                     const float cycle = function->getMaximum();
@@ -819,13 +866,18 @@ namespace MWRender
                     {
                         osg::Vec3f delta = controller->getTranslation(cycle) - controller->getTranslation(0.f);
                         delta.z() = 0.f;
-                        mLocomotionSpeed = delta.length() / cycle;
+                        mRootMotion = delta;
+                        if (stripRootMotion)
+                            mLocomotionSpeed = delta.length() / cycle;
                         Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << cycle;
                     }
                 }
-                osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestTranslations[transform]);
-                transform->addUpdateCallback(strip);
-                mLoopCallbacks.emplace_back(transform, strip);
+                if (stripRootMotion)
+                {
+                    osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestPoses[transform].mTranslation);
+                    transform->addUpdateCallback(strip);
+                    mLoopCallbacks.emplace_back(transform, strip);
+                }
             }
         }
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"

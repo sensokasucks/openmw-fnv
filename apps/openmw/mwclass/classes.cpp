@@ -11,6 +11,7 @@
 #include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadflor.hpp>
 #include <components/esm4/loadfurn.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadkeym.hpp>
@@ -91,6 +92,7 @@ namespace MWClass
         ESM4Door::registerSelf();
         ESM4Named<ESM4::Flora>::registerSelf();
         ESM4Named<ESM4::Furniture>::registerSelf();
+        ESM4IdleMarker::registerSelf();
         ESM4Item<ESM4::Ingredient>::registerSelf();
         ESM4Item<ESM4::ItemMod>::registerSelf();
         ESM4Light::registerSelf();

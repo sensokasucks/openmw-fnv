@@ -460,9 +460,15 @@ end
 
 local missingFunctions = {}
 
-local function makeContext(subject, target)
+-- overrides: optional function index -> function(cond, subject) returning the value, for callers that know
+-- better than the engine (the AI's idle picker answers GetSitting and GetFurnitureMarkerID itself).
+local function makeContext(subject, target, overrides)
     return {
         call = function(cond)
+            if overrides ~= nil and overrides[cond.func] ~= nil then
+                local value = overrides[cond.func](cond, subject)
+                if value ~= nil then return value end
+            end
             local fn = functions[cond.func]
             if fn == nil then
                 if not missingFunctions[cond.func] then
@@ -2106,10 +2112,12 @@ return {
         end,
         --- Evaluates a CTDA list (as built by core.obscript) with subject as
         -- the running object and the player as target; used by AI packages.
+        -- overrides: optional function index -> function(cond, subject) answering
+        -- in place of the engine (nil falls through).
         -- @return passed, failed condition, its value
-        checkConditions = function(list, subject)
+        checkConditions = function(list, subject, overrides)
             initState()
-            return conditions.evaluate(list, makeContext(subject, world.players[1]))
+            return conditions.evaluate(list, makeContext(subject, world.players[1], overrides))
         end,
         --- Runs an effect script (SCPT type 0x100, by form id or editor id) once
         -- on `subject` with `locals` (a table owned by the caller, updated in

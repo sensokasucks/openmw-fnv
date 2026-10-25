@@ -182,6 +182,8 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvdialogue/player.lua
     scripts/omw/fnvchargen/player.lua
     scripts/omw/fnvai/global.lua
+    scripts/omw/fnvai/idles.lua
+    scripts/omw/fnvai/furniture.lua
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
     scripts/omw/fnvhud/global.lua

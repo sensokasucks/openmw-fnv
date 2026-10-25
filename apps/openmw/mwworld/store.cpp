@@ -1259,6 +1259,7 @@ template class MWWorld::TypedDynamicStore<ESM4::Faction>;
 template class MWWorld::TypedDynamicStore<ESM4::GlobalVariable>;
 template class MWWorld::TypedDynamicStore<ESM4::Hair>;
 template class MWWorld::TypedDynamicStore<ESM4::HeadPart>;
+template class MWWorld::TypedDynamicStore<ESM4::IdleMarker>;
 template class MWWorld::TypedDynamicStore<ESM4::Ingredient>;
 template class MWWorld::TypedDynamicStore<ESM4::ItemMod>;
 template class MWWorld::TypedDynamicStore<ESM4::Key>;
