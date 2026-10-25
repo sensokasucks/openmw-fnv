@@ -122,6 +122,7 @@ namespace ESM4
     struct PlacedGrenade;
     struct PlacedMissile;
     struct Potion;
+    struct Projectile;
     struct Quest;
     struct Race;
     struct Reference;
@@ -175,7 +176,7 @@ namespace MWWorld
             Store<ESM4::StaticCollection>, Store<ESM4::Terminal>, Store<ESM4::TextureSet>, Store<ESM4::Tree>,
             Store<ESM4::Weapon>, Store<ESM4::World>, Store<ESM4::GameSetting>, Store<ESM4::FormIdList>,
             Store<ESM4::IdleAnimation>, Store<ESM4::Class>, Store<ESM4::DefaultObj>, Store<ESM4::LightingTemplate>,
-            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>>;
+            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::Projectile>>;
 
     private:
         template <typename T>

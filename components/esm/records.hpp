@@ -89,6 +89,7 @@
 #include <components/esm4/loadotft.hpp>
 #include <components/esm4/loadpack.hpp>
 #include <components/esm4/loadpgre.hpp>
+#include <components/esm4/loadproj.hpp>
 #include <components/esm4/loadqust.hpp>
 #include <components/esm4/loadrace.hpp>
 #include <components/esm4/loadrefr.hpp>
