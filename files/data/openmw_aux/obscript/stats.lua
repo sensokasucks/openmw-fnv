@@ -20,6 +20,9 @@ function M.install(obs, env)
     local stats = core.obscript and core.obscript.stats
     if stats == nil then return end
 
+    -- Global scripts change the player at once; local ones ask scripts/omw/fnvstats.lua.
+    local isGlobal = pcall(require, 'openmw.world')
+
     local warned = {}
     local function warnOnce(key, msg)
         if warned[key] then return end
@@ -111,6 +114,68 @@ function M.install(obs, env)
     end)
     obs.bind('GetPCIsSex', function(a, b)
         return isSex(env.resolve('player'), b or a)
+    end)
+
+    -- `player.SexChange Male|Female 1` (VCG01's sex choice at stage 17). Only the player's sex can change.
+    obs.bind('SexChange', function(a, b)
+        local ref, sex = nil, a
+        if type(a) == 'string' and a:lower() ~= 'male' and a:lower() ~= 'female' then
+            ref, sex = a, b
+        end
+        local obj = ref == nil and env.subject() or env.resolve(ref)
+        if obj == nil or obj ~= env.resolve('player') or type(sex) ~= 'string' then
+            warnOnce('sexchange:' .. tostring(ref), 'SexChange: only the player is supported')
+            return 0
+        end
+        local female = sex:lower() == 'female'
+        if isGlobal then
+            stats._setPlayerSex(female)
+        else
+            core.sendGlobalEvent('FNVChargenSetSex', { female = female })
+        end
+        return 0
+    end)
+
+    -- The player's tag skills. `SetPlayerTagSkill Skill slot` puts a skill in tag slot 0, 1, 2, ...;
+    -- VCG01TestSCRIPT fills the slots with the psych test's suggestions before `SetTagSkills 3 1`
+    -- shows them. A global script changes them at once (the quest script reads them back with
+    -- IsPlayerTagSkill in the same run).
+    local function tagSkill(av, command)
+        local index = actorValue(av, command)
+        if not index then return nil end
+        if index < stats.actorValue('Barter') or index > stats.actorValue('Unarmed') then
+            warnOnce('tag:' .. tostring(av), command .. ': not a skill: ' .. tostring(av))
+            return nil
+        end
+        return index
+    end
+    obs.bind('IsPlayerTagSkill', function(av)
+        local index = tagSkill(av, 'IsPlayerTagSkill')
+        if not index then return 0 end
+        for _, tagged in ipairs(stats.getTagSkills()) do
+            if tagged == index then return 1 end
+        end
+        return 0
+    end)
+    obs.bind('SetPlayerTagSkill', function(av, slot)
+        local index = tagSkill(av, 'SetPlayerTagSkill')
+        if not index then return 0 end
+        local tags = {}
+        for _, tagged in ipairs(stats.getTagSkills()) do
+            if tagged ~= index then tags[#tags + 1] = tagged end
+        end
+        slot = math.max(0, math.floor(tonumber(slot) or 0))
+        if slot < #tags then
+            tags[slot + 1] = index
+        else
+            tags[#tags + 1] = index
+        end
+        if isGlobal then
+            stats._setTagSkills(tags)
+        else
+            core.sendGlobalEvent('FNVChargenSetTagSkills', { skills = tags })
+        end
+        return 0
     end)
 end
 
