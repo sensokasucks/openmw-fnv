@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
@@ -49,12 +50,19 @@ namespace ESM4
             float weight;
         };
 
+        enum ItemFlags : std::uint32_t // ENIT flags (FO3/FONV)
+        {
+            Item_NoAutoCalc = 0x01,
+            Item_Food = 0x02,
+            Item_Medicine = 0x04,
+        };
+
         struct EnchantedItem
         {
             std::int32_t value;
-            std::uint32_t flags;
-            ESM::FormId32 withdrawl;
-            float chanceAddition;
+            std::uint32_t flags; // low byte; see ItemFlags
+            ESM::FormId32 withdrawl; // SPEL (addiction)
+            float chanceAddition; // addiction chance
             ESM::FormId32 sound;
         };
 #pragma pack(pop)
@@ -72,12 +80,13 @@ namespace ESM4
         ESM::FormId mDropSound;
 
         ESM::FormId mScriptId;
-        ScriptEffect mEffect;
+        ScriptEffect mEffect; // TES4
+        std::vector<EffectItem> mEffects; // FO3/FONV
 
         float mBoundRadius;
 
-        Data mData;
-        EnchantedItem mItem;
+        Data mData{};
+        EnchantedItem mItem{};
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

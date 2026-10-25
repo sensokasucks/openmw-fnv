@@ -502,4 +502,14 @@ require('openmw_aux.obscript.character').install(obs, {
     end,
 })
 
+-- CastImmediateOnSelf, AddSpell, IsSpellTarget, ... (openmw_aux.obscript.effects)
+require('openmw_aux.obscript.effects').install(obs, {
+    subject = function() return self.object end,
+    resolve = function(ref)
+        if isObject(ref) then return ref end
+        if type(ref) == 'string' and (ref:lower() == 'player' or ref:lower() == 'playerref') then return player() end
+        return nil
+    end,
+})
+
 return obs
