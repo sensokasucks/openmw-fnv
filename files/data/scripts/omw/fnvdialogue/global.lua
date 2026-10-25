@@ -981,6 +981,40 @@ local function stopSpeaking(obj)
     speaking = still
 end
 
+-- ------------------------------------------------ greetings (Hello barks)
+-- An NPC that is not busy says a HELLO line when the player comes within
+-- fAIMinGreetingDistance, at most once per fAIGreetingTimer seconds
+-- (thresholds from the game settings; the exact trigger is inferred).
+local function gmst(name, fallback)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    return type(value) == 'number' and value or fallback
+end
+
+local lastHello = {} -- npc id -> simulation time of its last greeting
+local helloCheck = 0
+local simTime = 0
+
+local function tickGreetings(dt)
+    simTime = simTime + dt
+    helloCheck = helloCheck - dt
+    if helloCheck > 0 or session then return end
+    helloCheck = 0.5
+    local player = world.players[1]
+    if player == nil then return end
+    local distance = gmst('fAIMinGreetingDistance', 150)
+    local cooldown = gmst('fAIGreetingTimer', 20)
+    for _, npc in ipairs(world.activeActors) do
+        if types.ESM4NPC.objectIsInstance(npc) and npc.cell == player.cell
+            and (npc.position - player.position):length() <= distance
+            and simTime - (lastHello[npc.id] or -cooldown) >= cooldown
+            and not isSpeaking(npc) and not isDead(npc)
+            and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
+            lastHello[npc.id] = simTime
+            if sayLine(npc, player, 'HELLO') then return end
+        end
+    end
+end
+
 -- ------------------------------------------------ menus the engine doesn't have yet
 -- Character creation menus (race, name, SPECIAL, tag skills, traits) are
 -- player scripts that register here with the global event
@@ -1788,6 +1822,7 @@ return {
             tickMenus()
             tickQuestScripts(dt)
             tickSpeaking(dt)
+            tickGreetings(dt)
             trackDeaths(dt)
             flushQuests()
         end,
