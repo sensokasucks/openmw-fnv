@@ -1,6 +1,7 @@
 #include "classes.hpp"
 
 #include <components/esm4/loadacti.hpp>
+#include <components/esm4/loadproj.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
@@ -102,6 +103,7 @@ namespace MWClass
         ESM4Named<ESM4::Note>::registerSelf();
         ESM4Npc::registerSelf();
         ESM4Item<ESM4::Potion>::registerSelf();
+        ESM4Named<ESM4::Projectile>::registerSelf();
         ESM4Static::registerSelf();
         ESM4Named<ESM4::StaticCollection>::registerSelf();
         ESM4Named<ESM4::Terminal>::registerSelf();

@@ -378,6 +378,7 @@ namespace MWWorld
             case ESM::REC_MSTT4:
             case ESM::REC_NOTE4:
             case ESM::REC_NPC_4:
+            case ESM::REC_PROJ4:
             case ESM::REC_SCOL4:
             case ESM::REC_STAT4:
             case ESM::REC_TERM4:
@@ -530,6 +531,26 @@ namespace MWWorld
         getWritable<ESM::Skill>().setUp(get<ESM::GameSetting>());
         getWritable<ESM::Attribute>().setUp(get<ESM::GameSetting>());
         getWritable<ESM4::Land>().updateLandPositions(get<ESM4::Cell>());
+        // Placed grenades and missiles (how FNV places mines) sit in cells like REFRs whose base is a PROJ
+        auto addPlacedProjectile = [this](const ESM4::PlacedProjectile& placed) {
+            ESM4::Reference ref;
+            ref.mId = placed.mId;
+            ref.mParent = ESM::RefId(placed.mParent);
+            ref.mFlags = placed.mFlags;
+            ref.mEditorId = placed.mEditorId;
+            ref.mBaseObj = placed.mBaseObj;
+            ref.mPos = placed.mPos;
+            ref.mScale = placed.mScale;
+            ref.mOwner = placed.mOwner;
+            ref.mFactionRank = placed.mFactionRank;
+            ref.mMapMarker = 0;
+            ref.mEsp = placed.mEsp;
+            getWritable<ESM4::Reference>().insertStatic(ref);
+        };
+        for (const ESM4::PlacedGrenade& placed : get<ESM4::PlacedGrenade>())
+            addPlacedProjectile(placed);
+        for (const ESM4::PlacedMissile& placed : get<ESM4::PlacedMissile>())
+            addPlacedProjectile(placed);
         getWritable<ESM4::Reference>().preprocessReferences(get<ESM4::Cell>());
         getWritable<ESM4::ActorCharacter>().preprocessReferences(get<ESM4::Cell>());
         getWritable<ESM4::ActorCreature>().preprocessReferences(get<ESM4::Cell>());

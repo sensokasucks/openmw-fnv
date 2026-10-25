@@ -10,6 +10,7 @@
 #include <components/files/conversion.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/strings/algorithm.hpp>
+#include <components/nif/controller.hpp>
 #include <components/nif/extra.hpp>
 #include <components/nif/nifstream.hpp>
 #include <components/nif/node.hpp>
@@ -36,6 +37,7 @@ namespace NifBullet
 
         mCompoundShape.reset();
         mAvoidCompoundShape.reset();
+        mAnimatedTargets.clear();
 
         mShape->mFileHash = nif.getHash();
 
@@ -200,10 +202,20 @@ namespace NifBullet
                 case Nif::RC_NiRollController:
                     args.mAnimated = true;
                     break;
+                case Nif::RC_NiMultiTargetTransformController:
+                    // Usually on the root of FO3/FNV doors and gates; the nodes it moves are its extra targets
+                    for (const auto& target : static_cast<const Nif::NiMultiTargetTransformController&>(ctrl.get())
+                                                  .mExtraTargets)
+                        if (!target.empty())
+                            mAnimatedTargets.insert(target.getPtr());
+                    break;
                 default:
                     continue;
             }
         }
+
+        if (mAnimatedTargets.contains(&node))
+            args.mAnimated = true;
 
         if (node.mRecordType == Nif::RC_RootCollisionNode)
         {

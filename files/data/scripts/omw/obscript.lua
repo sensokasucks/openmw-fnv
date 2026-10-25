@@ -31,6 +31,11 @@ end
 
 local function activate(obj, actor, runOnActivateBlock)
     if obj == nil or actor == nil then return end
+    -- The activation handlers and activateBy expect an OpenMW actor. FO3/FNV
+    -- NPCs and creatures (which trigger volumes report as the action ref) are
+    -- not, and use doors through their AI, so an Activate on their behalf is
+    -- skipped.
+    if not types.Actor.objectIsInstance(actor) then return end
     if runOnActivateBlock then
         obj:activateBy(actor)
     else

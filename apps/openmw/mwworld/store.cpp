@@ -1305,3 +1305,4 @@ template class MWWorld::TypedDynamicStore<ESM4::PlacedMissile>;
 template class MWWorld::TypedDynamicStore<ESM4::VoiceType>;
 template class MWWorld::TypedDynamicStore<ESM4::Perk>;
 template class MWWorld::TypedDynamicStore<ESM4::Reputation>;
+template class MWWorld::TypedDynamicStore<ESM4::Projectile>;
