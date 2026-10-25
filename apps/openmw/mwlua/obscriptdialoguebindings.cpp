@@ -520,6 +520,10 @@ namespace MWLua
             res["class"] = formIdText(traits->mClass);
             res["faction"] = formIdText(ESM::FormId::fromUint32(base->mFaction.faction));
             res["factionRank"] = base->mFaction.rank;
+            sol::table factions(lua, sol::create); // faction form id -> rank, every SNAM
+            for (const ESM4::ActorFaction& f : base->mFactions)
+                factions[formIdText(ESM::FormId::fromUint32(f.faction))] = f.rank;
+            res["factions"] = factions;
             res["isFemale"] = MWClass::ESM4Npc::isFemale(ptr);
             res["script"] = formIdText(base->mScriptId);
             res["voiceType"] = formIdText(base->mVoiceType);

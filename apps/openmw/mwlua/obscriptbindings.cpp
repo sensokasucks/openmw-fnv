@@ -25,6 +25,7 @@
 #include <components/esm4/loadcont.hpp>
 #include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddoor.hpp>
+#include <components/esm4/loadfact.hpp>
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadligh.hpp>
@@ -177,6 +178,23 @@ namespace MWLua
                 addAll(store.get<ESM4::Light>());
                 addAll(store.get<ESM4::Static>());
                 addAll(store.get<ESM4::MovableStatic>());
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // Factions, for `AddToFaction <EditorId> <rank>` and friends.
+        api["resolveFactionEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::Faction>& factions
+                    = MWBase::Environment::get().getESMStore()->get<ESM4::Faction>();
+                for (size_t i = 0; i < factions.getSize(); ++i)
+                {
+                    const ESM4::Faction& faction = *factions.at(i);
+                    if (!faction.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(faction.mEditorId), ESM::RefId(faction.mId));
+                }
                 return res;
             }();
             return resolve(index, editorId);

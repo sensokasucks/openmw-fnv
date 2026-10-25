@@ -56,6 +56,7 @@ local state = {
     quests = {},
     saidOnce = {},   -- INFO form id -> true
     saidAt = {},     -- INFO form id -> game time (s) it was last said, for Say Once a Day
+    factions = {},    -- reference form id -> { [faction form id] = rank, or false when removed }
     knownTopics = {}, -- topic form id -> true: topics from AddTopic and INFO add-topics (top-level ones are always known)
     talkedTo = {},   -- NPC reference form id -> true
 }
@@ -312,14 +313,23 @@ functions[68] = function(cond, obj) -- GetIsClass
     local a = actorData(obj)
     return a ~= nil and a.class == cond.param1Form
 end
-functions[71] = function(cond, obj) -- GetInFaction (only the first faction is loaded)
+-- An NPC's rank in a faction: its record's ranks, changed by AddToFaction,
+-- RemoveFromFaction and SetFactionRank; nil when not a member.
+local function factionRank(a, factionId)
+    local changes = state.factions[a.reference]
+    local changed = changes and changes[factionId]
+    if changed ~= nil then
+        return changed or nil
+    end
+    return a.factions[factionId]
+end
+functions[71] = function(cond, obj) -- GetInFaction
     local a = actorData(obj)
-    return a ~= nil and a.faction == cond.param1Form
+    return a ~= nil and factionRank(a, cond.param1Form) ~= nil
 end
 functions[73] = function(cond, obj) -- GetFactionRank
     local a = actorData(obj)
-    if a ~= nil and a.faction == cond.param1Form then return a.factionRank end
-    return -1
+    return a ~= nil and factionRank(a, cond.param1Form) or -1
 end
 functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
@@ -1553,6 +1563,51 @@ obs.bind('RemoveScriptPackage', function(...)
     return 0
 end)
 
+-- `Ref.AddToFaction Faction rank`, `Ref.RemoveFromFaction Faction`,
+-- `Ref.SetFactionRank Faction rank` (-1 removes), `GetInFaction`, `GetFactionRank`.
+local function setFactionRank(npc, faction, rank)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    if a == nil or not factionId then
+        tlog('faction change: unknown NPC or faction ' .. tostring(faction))
+        return
+    end
+    local changes = state.factions[a.reference] or {}
+    state.factions[a.reference] = changes
+    if rank == nil or rank < 0 then
+        changes[factionId] = false
+    else
+        changes[factionId] = math.floor(rank)
+    end
+end
+obs.bind('AddToFaction', function(...)
+    local npc, faction, rank = refAndArgs(...)
+    setFactionRank(npc, faction, tonumber(rank) or 0)
+    return 0
+end)
+obs.bind('RemoveFromFaction', function(...)
+    local npc, faction = refAndArgs(...)
+    setFactionRank(npc, faction, nil)
+    return 0
+end)
+obs.bind('SetFactionRank', function(...)
+    local npc, faction, rank = refAndArgs(...)
+    setFactionRank(npc, faction, tonumber(rank) or -1)
+    return 0
+end)
+obs.bind('GetInFaction', function(...)
+    local npc, faction = refAndArgs(...)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    return (a and factionId and factionRank(a, factionId) ~= nil) and 1 or 0
+end)
+obs.bind('GetFactionRank', function(...)
+    local npc, faction = refAndArgs(...)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    return (a and factionId and factionRank(a, factionId)) or -1
+end)
+
 -- `Ref.Lock [level]` / `Ref.Unlock`
 obs.bind('Lock', function(...)
     local obj, level = refAndArgs(...)
@@ -1827,7 +1882,8 @@ local forwardedCommands = {
     setobjectivedisplayed = true, setobjectivecompleted = true,
     sayto = true, say = true, startconversation = true, forcegreet = true, evaluatepackage = true, evp = true, resetai = true,
     disableplayercontrols = true, enableplayercontrols = true,
-    addscriptpackage = true, removescriptpackage = true, startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
+    addscriptpackage = true, removescriptpackage = true, addtofaction = true, removefromfaction = true,
+    setfactionrank = true, startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
     markfordelete = true, removeme = true, placeatme = true, moveto = true, movetomarker = true,
     movetomarkerwithfade = true, addtopic = true, showmessage = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
@@ -2011,6 +2067,7 @@ return {
             state.initialized = true
             state.saidAt = state.saidAt or {}
             state.knownTopics = state.knownTopics or {}
+            state.factions = state.factions or {}
             for k, v in pairs(data.globals or {}) do obs._globals[k] = v end
             loadScriptVars(data.vars)
             publishAllQuests()
