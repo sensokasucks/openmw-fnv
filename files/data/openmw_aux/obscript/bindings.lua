@@ -227,6 +227,15 @@ obs.bind('GetLocked', function(...)
     local ok, locked = pcall(types.Lockable.isLocked, obj)
     return (ok and locked) and 1 or 0
 end)
+-- `Ref.IsCurrentFurnitureRef Furniture`: whether the actor sits on it.
+local furniture = storage.globalSection('ESM4CurrentFurniture')
+obs.bind('IsCurrentFurnitureRef', function(...)
+    local actor, ref = refAndArgs(...)
+    local current = actor and furniture:get(tostring(actor.id))
+    local wanted = type(ref) == 'string' and core.obscript.resolveRefEditorId(ref)
+    return (current and wanted and current == wanted) and 1 or 0
+end)
+
 obs.bind('GetCurrentTime', function()
     return core.obscript.getGameDate().hour
 end)
@@ -239,7 +248,8 @@ for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 
     'AddScriptPackage', 'RemoveScriptPackage', 'AddToFaction', 'RemoveFromFaction', 'SetFactionRank', 'StartCombat', 'StopCombat', 'KillActor', 'Lock', 'Unlock', 'MarkForDelete', 'RemoveMe', 'PlaceAtMe',
     'MoveTo', 'MoveToMarker', 'MoveToMarkerWithFade', 'AddTopic',
     'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
-    'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
+    'ShowTraitMenu', 'ShowTraitSelectMenu', 'ShowLoveTesterMenu', 'ShowLoveTesterMenuParams', 'ShowSPECIALBookMenu',
+    'ShowSPECIALBookMenuParams' }) do
     obs.bind(name, function(...)
         local args = { ... }
         local n = select('#', ...)

@@ -1459,9 +1459,16 @@ obs.bind('EnablePlayerControls', function(...) return playerControls(true, ...) 
 -- Character creation menus: stand-ins (see openStandInMenu). 1036 is the
 -- race menu, as VCG01SCRIPT's `MenuMode 1036` block shows.
 obs.bind('ShowRaceMenu', function(...) openStandInMenu('ShowRaceMenu', 1036, { ... }) return 0 end)
-for _, name in ipairs({ 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
-    'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
-    obs.bind(name, function(...) openStandInMenu(name, nil, { ... }) return 0 end)
+-- Menu types from FalloutNV.exe's menu table (0x9ff970).
+local CHARGEN_MENUS = {
+    GetPlayerName = 1051, ShowNameMenu = 1051, -- TextEditMenu
+    ShowLoveTesterMenu = 1074, ShowLoveTesterMenuParams = 1074, -- the Vigor Tester (SPECIAL)
+    ShowSPECIALBookMenu = 1060, ShowSPECIALBookMenuParams = 1060,
+    SetTagSkills = 1048, ShowTagSkillMenu = 1048, -- CharGenMenu
+    ShowTraitMenu = 1084, ShowTraitSelectMenu = 1076,
+}
+for name, menuType in pairs(CHARGEN_MENUS) do
+    obs.bind(name, function(...) openStandInMenu(name, menuType, { ... }) return 0 end)
 end
 
 -- Presentation commands with no effect on script flow; logged once each.
@@ -1694,6 +1701,16 @@ obs.bind('GetItemCount', function(...)
 end)
 
 obs.bind('GetRandomPercent', function() return math.random(0, 99) end)
+
+-- `Ref.IsCurrentFurnitureRef Furniture`: whether the actor sits on it
+-- (players only so far: NPCs don't use furniture yet).
+local furnitureSection = storage.globalSection('ESM4CurrentFurniture')
+obs.bind('IsCurrentFurnitureRef', function(...)
+    local actor, furniture = refAndArgs(...)
+    local current = actor and furnitureSection:get(tostring(actor.id))
+    local wanted = type(furniture) == 'string' and core.obscript.resolveRefEditorId(furniture)
+    return (current and wanted and current == wanted) and 1 or 0
+end)
 obs.bind('GetCurrentTime', function() return clockValue('gamehour') end)
 
 -- `Ref.GetSelf`: the reference the script runs on.
@@ -1911,7 +1928,9 @@ local forwardedCommands = {
     markfordelete = true, removeme = true, placeatme = true, moveto = true, movetomarker = true,
     movetomarkerwithfade = true, addtopic = true, showmessage = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
-    showtagskillmenu = true, settagskills = true, showtraitmenu = true, showlovetestermenuparams = true,
+    showtagskillmenu = true, settagskills = true, showtraitmenu = true, showtraitselectmenu = true,
+    showlovetestermenu = true, showlovetestermenuparams = true, showspecialbookmenu = true,
+    showspecialbookmenuparams = true,
 }
 
 local function runForwardedCommand(data)

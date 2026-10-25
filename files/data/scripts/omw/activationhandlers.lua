@@ -1,5 +1,6 @@
 local async = require('openmw.async')
 local core = require('openmw.core')
+local storage = require('openmw.storage')
 local types = require('openmw.types')
 local world = require('openmw.world')
 local util = require('openmw.util')
@@ -26,6 +27,11 @@ local standingMarkerTypes = { [19] = true, [22] = true, [23] = true, [26] = true
 local centeredSeatTypes = { [11] = true, [12] = true, [15] = true }
 
 local seatedActors = {}
+
+-- The furniture each seated actor uses, for IsCurrentFurnitureRef in scripts:
+-- actor id -> furniture reference form id.
+local furnitureSection = storage.globalSection('ESM4CurrentFurniture')
+furnitureSection:setLifeTime(storage.LIFE_TIME.GameSession)
 
 local function headingVector(yaw)
     return util.vector3(math.sin(yaw), math.cos(yaw), 0)
@@ -64,6 +70,7 @@ local function standUp(actor)
         return
     end
     seatedActors[actor.id] = nil
+    furnitureSection:set(tostring(actor.id), nil)
     types.ESM4Furniture._setActorCollision(actor, true)
     actor:teleport(seated.cell, seated.position, { rotation = seated.rotation, onGround = true })
     actor:sendEvent('FurnitureStand', {})
@@ -95,7 +102,9 @@ local function ESM4FurnitureActivation(furniture, actor)
 
     local seat, yaw = seatFromMarker(best)
     local yawRotation = util.transform.rotateZ(furniture.rotation:getYaw() + yaw)
-    seatedActors[actor.id] = { cell = actor.cell, position = actor.position, rotation = actor.rotation }
+    seatedActors[actor.id] = { cell = actor.cell, position = actor.position, rotation = actor.rotation,
+        furniture = furniture }
+    furnitureSection:set(tostring(actor.id), core.obscript and core.obscript.dialogue.getReferenceId(furniture) or '')
     Furniture4._setActorCollision(actor, false)
     actor:teleport(furniture.cell, furniture.position + furniture.rotation:apply(seat * furniture.scale),
         { rotation = yawRotation, onGround = false })
