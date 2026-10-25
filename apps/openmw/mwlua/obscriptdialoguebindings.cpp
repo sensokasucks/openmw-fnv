@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -56,6 +57,8 @@ namespace MWLua
                 return *formId;
             return {};
         }
+
+        void orderByPreviousInfo(std::vector<const ESM4::DialogInfo*>& list);
 
         // Lookup tables over the dialogue records, built on first use (the
         // record stores do not change after the content files are loaded).
@@ -125,11 +128,60 @@ namespace MWLua
                             const int pb = questPriority(b->mQuest);
                             if (pa != pb)
                                 return pa > pb;
+                            if (a->mQuest != b->mQuest)
+                                return a->mQuest < b->mQuest;
                             return a->mLoadIndex < b->mLoadIndex;
                         });
+                    orderByPreviousInfo(list);
                 }
             }
         };
+
+        // Within each quest's run of INFOs, puts every INFO right after the one its PNAM names (so a plugin can
+        // insert lines anywhere); INFOs whose previous INFO is not in the run start a chain, in file order.
+        void orderByPreviousInfo(std::vector<const ESM4::DialogInfo*>& list)
+        {
+            std::vector<const ESM4::DialogInfo*> result;
+            result.reserve(list.size());
+            size_t begin = 0;
+            while (begin < list.size())
+            {
+                size_t end = begin;
+                while (end < list.size() && list[end]->mQuest == list[begin]->mQuest)
+                    ++end;
+                std::map<ESM::FormId, std::vector<const ESM4::DialogInfo*>> followers;
+                std::set<ESM::FormId> inRun;
+                for (size_t i = begin; i < end; ++i)
+                    inRun.insert(list[i]->mId);
+                std::vector<const ESM4::DialogInfo*> heads;
+                for (size_t i = begin; i < end; ++i)
+                {
+                    const ESM4::DialogInfo* info = list[i];
+                    if (!info->mPrevInfo.isZeroOrUnset() && inRun.count(info->mPrevInfo) && info->mPrevInfo != info->mId)
+                        followers[info->mPrevInfo].push_back(info);
+                    else
+                        heads.push_back(info);
+                }
+                std::set<ESM::FormId> placed;
+                std::vector<const ESM4::DialogInfo*> stack(heads.rbegin(), heads.rend());
+                while (!stack.empty())
+                {
+                    const ESM4::DialogInfo* info = stack.back();
+                    stack.pop_back();
+                    if (!placed.insert(info->mId).second)
+                        continue;
+                    result.push_back(info);
+                    auto it = followers.find(info->mId);
+                    if (it != followers.end())
+                        stack.insert(stack.end(), it->second.rbegin(), it->second.rend());
+                }
+                for (size_t i = begin; i < end; ++i) // chains that loop back on themselves
+                    if (placed.insert(list[i]->mId).second)
+                        result.push_back(list[i]);
+                begin = end;
+            }
+            list = std::move(result);
+        }
 
         const DialogueIndex& getIndex()
         {
