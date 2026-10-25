@@ -183,7 +183,15 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
                     reader.skipSubRecordData();
                     break;
                 }
-                reader.getFormId(subHdr.typeId == ESM::fourCC("INAM") ? event->mIdle : event->mTopic);
+                // 0 means none; adjusting it would turn it into a form id of this plugin
+                std::uint32_t form = 0;
+                reader.get(form);
+                if (form != 0)
+                {
+                    ESM::FormId& id = subHdr.typeId == ESM::fourCC("INAM") ? event->mIdle : event->mTopic;
+                    id = ESM::FormId::fromUint32(form);
+                    reader.adjustFormId(id);
+                }
                 break;
             }
             case ESM::fourCC("SCTX"): // FO3: the event's script source
@@ -202,7 +210,13 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
                     break;
                 }
                 reader.get(mDialogueFov);
-                reader.getFormId(mDialogueTopic);
+                std::uint32_t topic = 0;
+                reader.get(topic);
+                if (topic != 0)
+                {
+                    mDialogueTopic = ESM::FormId::fromUint32(topic);
+                    reader.adjustFormId(mDialogueTopic);
+                }
                 std::uint32_t left = subHdr.dataSize - 8;
                 if (left >= 4)
                 {
