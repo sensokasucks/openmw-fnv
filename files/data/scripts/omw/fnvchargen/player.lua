@@ -39,9 +39,8 @@ local colors = {
 local textSize = 18
 local WIDTH = 560
 
--- Menu types of the MenuMode blocks each menu runs (FNVMenuClosed). Race is 1036, as VCG01SCRIPT's
--- `MenuMode 1036` block shows; the others are the game's menu codes as NVSE lists them (not checked
--- against quest scripts yet).
+-- Menu types of the MenuMode blocks each menu runs (FNVMenuClosed), from the menu table FalloutNV.exe
+-- registers (0x9ff970). SetTagSkills opens CharGenMenu.
 local RACE_MENU = 1036
 local NAME_MENU = 1051       -- TextEditMenu
 local SPECIAL_MENU = 1060    -- SPECIALBookMenu
@@ -50,8 +49,9 @@ local TAG_SKILL_MENU = 1048  -- CharGenMenu
 local TRAIT_MENU = 1084
 
 local SPECIAL = { 'Strength', 'Perception', 'Endurance', 'Charisma', 'Intelligence', 'Agility', 'Luck' }
-local SPECIAL_TOTAL = 40     -- each stat 1..10, 40 points in all
-local SPECIAL_MIN, SPECIAL_MAX = 1, 10
+-- The Vigor Tester's points: its parameter (VCG01 calls ShowLoveTesterMenuParams 40), else 35.
+local SPECIAL_TOTAL = { ShowLoveTesterMenuParams = 40, ShowLoveTesterMenu = 35, ShowSPECIALMenu = 35 }
+local SPECIAL_MIN, SPECIAL_MAX = 1, 10 -- inferred, not traced
 local SPECIAL_TEXT = {
     Strength = 'Raw physical power. Affects carry weight and melee damage.',
     Perception = 'Awareness. Affects the compass range for enemies and Energy Weapons, Explosives and Lockpick.',
@@ -66,7 +66,7 @@ local SPECIAL_TEXT = {
 local SKILLS = { 'Barter', 'EnergyWeapons', 'Explosives', 'Guns', 'Lockpick', 'Medicine', 'MeleeWeapons',
     'Repair', 'Science', 'Sneak', 'Speech', 'Survival', 'Unarmed' }
 local SKILL_LABEL = { EnergyWeapons = 'Energy Weapons', MeleeWeapons = 'Melee Weapons' }
-local TAG_COUNT = 3
+local TAG_COUNT = 3 -- SetTagSkills 3 1
 
 -- The base game's traits. `effects` are the actor value changes this engine can apply so far.
 local TRAITS = {
@@ -105,6 +105,7 @@ local COMMANDS = {
     ShowNameMenu = 'name',
     ShowSPECIALMenu = 'special',
     ShowLoveTesterMenuParams = 'special',
+    ShowLoveTesterMenu = 'special',
     ShowTagSkillMenu = 'tags',
     SetTagSkills = 'tags',
     ShowTraitMenu = 'traits',
@@ -115,6 +116,7 @@ local DEFAULT_MENU_TYPE = {
     ShowNameMenu = NAME_MENU,
     ShowSPECIALMenu = SPECIAL_MENU,
     ShowLoveTesterMenuParams = LOVE_TESTER_MENU,
+    ShowLoveTesterMenu = LOVE_TESTER_MENU,
     ShowTagSkillMenu = TAG_SKILL_MENU,
     SetTagSkills = TAG_SKILL_MENU,
     ShowTraitMenu = TRAIT_MENU,
@@ -488,7 +490,7 @@ local menus = {
                 state.values[av], state.start[av] = value, value
                 sum = sum + value
             end
-            state.total = math.max(SPECIAL_TOTAL, sum)
+            state.total = math.max(state.points or SPECIAL_TOTAL[state.command] or 35, sum)
             state.focus = SPECIAL[1]
         end,
         render = renderSpecial,
@@ -504,7 +506,7 @@ local menus = {
                     count = count + 1
                 end
             end
-            state.count = math.max(TAG_COUNT, count)
+            state.count = math.max(state.points or TAG_COUNT, count)
         end,
         render = renderTags,
         apply = applyTags,
@@ -525,8 +527,9 @@ render = function()
     if current then menus[current.kind].render(current) end
 end
 
-local function open(kind, menuType)
-    current = { kind = kind, menuType = menuType }
+-- `points`: the command's first parameter where it has one (SPECIAL points, number of tags), if known.
+local function open(kind, menuType, command, points)
+    current = { kind = kind, menuType = menuType, command = command, points = points }
     menus[kind].init(current)
     if I.UI.getMode() ~= 'Interface' then
         setInterfaceMode()
@@ -543,7 +546,7 @@ finish = function()
     core.sendGlobalEvent('FNVMenuClosed', { menuType = menu.menuType })
     if #queue > 0 then
         local nextMenu = table.remove(queue, 1)
-        open(nextMenu.kind, nextMenu.menuType)
+        open(nextMenu.kind, nextMenu.menuType, nextMenu.command, nextMenu.points)
         return
     end
     if ownsMode then
@@ -568,14 +571,16 @@ return {
     -- @usage require('openmw.interfaces').FNVChargen.open('ShowSPECIALMenu')
     interface = {
         version = 0,
-        --- Open the menu a command opens ('ShowRaceMenu', 'ShowTraitMenu', ...), for testing.
-        open = function(command)
+        --- Open the menu a command opens ('ShowRaceMenu', 'ShowTraitMenu', ...), for testing; `points` is its
+        -- optional parameter (ShowLoveTesterMenuParams 40, SetTagSkills 3).
+        open = function(command, points)
             local kind = COMMANDS[command]
             if kind == nil then error('Unknown menu command: ' .. tostring(command)) end
+            local menu = { kind = kind, menuType = DEFAULT_MENU_TYPE[command], command = command, points = points }
             if current then
-                queue[#queue + 1] = { kind = kind, menuType = DEFAULT_MENU_TYPE[command] }
+                queue[#queue + 1] = menu
             else
-                open(kind, DEFAULT_MENU_TYPE[command])
+                open(menu.kind, menu.menuType, menu.command, menu.points)
             end
         end,
         --- The chosen trait ids ('GoodNatured', ...).
@@ -606,11 +611,15 @@ return {
                 core.sendGlobalEvent('FNVMenuClosed', { menuType = data.menuType })
                 return
             end
-            local menuType = data.menuType or DEFAULT_MENU_TYPE[data.name]
+            -- `args` if the global script passes the command's parameters
+            local points = data.args and tonumber(data.args[1])
+            if points ~= nil and points <= 0 then points = nil end
+            local menu = { kind = kind, menuType = data.menuType or DEFAULT_MENU_TYPE[data.name],
+                command = data.name, points = points }
             if current then
-                queue[#queue + 1] = { kind = kind, menuType = menuType }
+                queue[#queue + 1] = menu
             else
-                open(kind, menuType)
+                open(menu.kind, menu.menuType, menu.command, menu.points)
             end
         end,
         UiModeChanged = function(data)
