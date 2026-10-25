@@ -140,7 +140,11 @@ local function conditionsPass(pkg, npc)
     return (dialogue.checkConditions(pkg.conditions, npc))
 end
 
+local scriptPackages = {} -- npc id -> package given by AddScriptPackage; it comes first
+
 local function pickPackage(npc)
+    local forced = scriptPackages[npc.id]
+    if forced then return forced end
     local t = now()
     for _, pkg in ipairs(getPackages(npc)) do
         if scheduleMatches(pkg.schedule, t) and conditionsPass(pkg, npc) then
@@ -525,6 +529,14 @@ return {
     interfaceName = 'FNVAI',
     interface = {
         version = 0,
+        --- AddScriptPackage: the NPC runs this package (form id) ahead of its own
+        -- until RemoveScriptPackage; nil package removes it.
+        setScriptPackage = function(npc, packageId)
+            if npc == nil or not npc:isValid() then return end
+            scriptPackages[npc.id] = packageId and ai.getPackage(packageId) or nil
+            local s = states[npc.id]
+            if s then s.nextEvaluation = simTime end
+        end,
         --- EvaluatePackage: re-picks the NPC's package at its next behaviour update.
         evaluate = function(npc)
             local s = npc and states[npc.id]

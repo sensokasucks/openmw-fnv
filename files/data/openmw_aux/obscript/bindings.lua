@@ -236,7 +236,7 @@ end)
 for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 'SetQuestDelay',
     'SetObjectiveDisplayed', 'SetObjectiveCompleted', 'SayTo', 'Say', 'StartConversation', 'ForceGreet',
     'EvaluatePackage', 'EVP', 'ResetAI', 'DisablePlayerControls', 'EnablePlayerControls',
-    'StartCombat', 'StopCombat', 'KillActor', 'Lock', 'Unlock', 'MarkForDelete', 'RemoveMe', 'PlaceAtMe',
+    'AddScriptPackage', 'RemoveScriptPackage', 'StartCombat', 'StopCombat', 'KillActor', 'Lock', 'Unlock', 'MarkForDelete', 'RemoveMe', 'PlaceAtMe',
     'MoveTo', 'MoveToMarker', 'MoveToMarkerWithFade', 'AddTopic',
     'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do

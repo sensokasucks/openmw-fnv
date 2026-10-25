@@ -1432,7 +1432,7 @@ end
 
 -- Presentation commands with no effect on script flow; logged once each.
 local quietStubs = {}
-for _, name in ipairs({ 'AddScriptPackage', 'RemoveScriptPackage', 'ApplyImageSpaceModifier',
+for _, name in ipairs({ 'ApplyImageSpaceModifier',
     'RemoveImageSpaceModifier', 'SetDestroyed', 'PlayIdle', 'AutoDisplayObjectives', 'AutoSave',
     'AddAchievement', 'SexChange', 'Look', 'StopLook', 'SetScreenSplatterFade', 'PlaySound', 'PlaySound3D' }) do
     obs.bind(name, function()
@@ -1533,6 +1533,23 @@ obs.bind('KillActor', function(...)
     local actor = refAndArgs(...)
     local kill = combatApi('kill')
     if actor and kill and not isDead(actor) then kill(actor) end
+    return 0
+end)
+
+-- `Ref.AddScriptPackage Package` / `Ref.RemoveScriptPackage`
+obs.bind('AddScriptPackage', function(...)
+    local npc, package = refAndArgs(...)
+    local packageId = type(package) == 'string' and core.obscript.resolvePackageEditorId(package)
+    if npc and packageId and types.ESM4NPC.objectIsInstance(npc) and I.FNVAI and I.FNVAI.setScriptPackage then
+        I.FNVAI.setScriptPackage(npc, packageId)
+    end
+    return 0
+end)
+obs.bind('RemoveScriptPackage', function(...)
+    local npc = refAndArgs(...)
+    if npc and types.ESM4NPC.objectIsInstance(npc) and I.FNVAI and I.FNVAI.setScriptPackage then
+        I.FNVAI.setScriptPackage(npc, nil)
+    end
     return 0
 end)
 
@@ -1810,7 +1827,7 @@ local forwardedCommands = {
     setobjectivedisplayed = true, setobjectivecompleted = true,
     sayto = true, say = true, startconversation = true, forcegreet = true, evaluatepackage = true, evp = true, resetai = true,
     disableplayercontrols = true, enableplayercontrols = true,
-    startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
+    addscriptpackage = true, removescriptpackage = true, startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
     markfordelete = true, removeme = true, placeatme = true, moveto = true, movetomarker = true,
     movetomarkerwithfade = true, addtopic = true, showmessage = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,

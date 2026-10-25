@@ -35,6 +35,7 @@
 #include <components/esm4/loadmstt.hpp>
 #include <components/esm4/loadnote.hpp>
 #include <components/esm4/loadnpc.hpp>
+#include <components/esm4/loadpack.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscpt.hpp>
 #include <components/esm4/loadstat.hpp>
@@ -176,6 +177,23 @@ namespace MWLua
                 addAll(store.get<ESM4::Light>());
                 addAll(store.get<ESM4::Static>());
                 addAll(store.get<ESM4::MovableStatic>());
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // AI packages, for `AddScriptPackage <EditorId>`.
+        api["resolvePackageEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::AIPackage>& packages
+                    = MWBase::Environment::get().getESMStore()->get<ESM4::AIPackage>();
+                for (size_t i = 0; i < packages.getSize(); ++i)
+                {
+                    const ESM4::AIPackage& package = *packages.at(i);
+                    if (!package.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(package.mEditorId), ESM::RefId(package.mId));
+                }
                 return res;
             }();
             return resolve(index, editorId);
