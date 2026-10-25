@@ -28,6 +28,10 @@ namespace MWClass
             MWPhysics::PhysicsSystem& physics);
         MWGui::ToolTipInfo getToolTipInfo(std::string_view name, int count);
 
+        // Starts the object's ambient loop (ACTI/MSTT looping sound, LIGH sound) at its position. Sounds the game
+        // plays at random times (SOUN flag Play At Random) are left out.
+        void playLoopingSound(const MWWorld::Ptr& ptr, ESM::FormId sound);
+
         // Makes the sequence embedded in the object's model (e.g. "open" of a footlocker) playable through the
         // mechanics manager. Returns false if the model has no such sequence.
         bool prepareEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group);
@@ -102,6 +106,8 @@ namespace MWClass
             MWPhysics::PhysicsSystem& physics) const override
         {
             insertObjectPhysics(ptr, model, rotation, physics);
+            if constexpr (requires { ptr.get<Record>()->mBase->mLoopingSound; })
+                ESM4Impl::playLoopingSound(ptr, ptr.get<Record>()->mBase->mLoopingSound);
         }
 
         void insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,

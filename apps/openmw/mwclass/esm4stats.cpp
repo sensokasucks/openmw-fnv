@@ -7,6 +7,7 @@
 #include <map>
 
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm4/loadclas.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/misc/strings/algorithm.hpp>
 
@@ -211,6 +212,61 @@ namespace MWClass::ESM4Stats
             return ESM4Npc::getStatsRecord(actor);
         }
 
+        // The class of an AutoCalcStats NPC, which its SPECIAL and skills come from; nullptr otherwise.
+        const ESM4::Class* autoCalcClass(const MWWorld::Ptr& actor, const ESM4::Npc* record)
+        {
+            if (isPlayer(actor) || record == nullptr || !record->mIsFONV
+                || !(record->mBaseConfig.fo3.flags & ESM4::Npc::FO3_AutoCalcStats))
+                return nullptr;
+            const ESM4::Npc* traits = ESM4Npc::getTraitsRecord(actor);
+            if (traits == nullptr || traits->mClass.isZeroOrUnset())
+                return nullptr;
+            const ESM4::Class* cls = MWBase::Environment::get().getESMStore()->get<ESM4::Class>().search(traits->mClass);
+            return cls != nullptr && cls->mHasFO3Data ? cls : nullptr;
+        }
+
+        bool isTagSkill(const ESM4::Class& cls, int av)
+        {
+            return std::find(std::begin(cls.mTagSkills), std::end(cls.mTagSkills), av) != std::end(cls.mTagSkills);
+        }
+
+        // Skills of an AutoCalcStats NPC (CalcNPCAutoStatsSkills 0x603be0): each starts from its initial value;
+        // the class's tag skills get fAVDTagSkillBonus plus the level-up points (10 + Int/2 per level after the
+        // first) shared between them, what a tag skill can't take above 100 going to the next one.
+        float autoCalcSkill(const MWWorld::Ptr& actor, const ESM4::Class& cls, int av)
+        {
+            int tags = 0;
+            for (std::int32_t tag : cls.mTagSkills)
+                if (tag >= Barter && tag <= Unarmed)
+                    ++tags;
+            const int pointsPerLevel = static_cast<int>(10 + 0.5f * getPermanent(actor, Intelligence));
+            const int points = (getLevel(actor) - 1) * pointsPerLevel;
+            const float perTag = tags > 0
+                ? std::floor(static_cast<float>(points) / tags) * MWWorld::ESM4GameSettings::getInt("iSkillPointsTagSkillMult")
+                : 0.f;
+            const float luck = getPermanent(actor, Luck);
+            float overflow = 0;
+            int tagsLeft = tags - 1;
+            for (int skill = Barter; skill <= Unarmed; ++skill)
+            {
+                const int index = skill - Barter;
+                float value = gmst(sSkillBaseSettings[index])
+                    + gmst("fAVDSkillPrimaryBonusMult") * getPermanent(actor, sGoverningAttribute[index])
+                    + std::ceil(gmst("fAVDSkillLuckBonusMult") * luck);
+                if (isTagSkill(cls, skill))
+                {
+                    value += gmst("fAVDTagSkillBonus") + perTag + overflow;
+                    overflow = 0;
+                    if (value > 100 && tagsLeft != 0)
+                        overflow = (value - 100) / tagsLeft;
+                    --tagsLeft;
+                }
+                if (skill == av)
+                    return std::min(value, 100.f);
+            }
+            return 0;
+        }
+
         // FO3/FONV creatures: health and SPECIAL come straight from DATA; the combat skill stands for every weapon
         // skill and the stealth skill for Sneak.
         float creatureBase(const MWWorld::Ptr& actor, int av)
@@ -279,8 +335,11 @@ namespace MWClass::ESM4Stats
             const ESM4::Npc* record = statsRecord(actor);
             const bool player = isPlayer(actor);
 
+            const ESM4::Class* cls = autoCalcClass(actor, record);
             if (av >= Strength && av <= Luck)
             {
+                if (cls != nullptr)
+                    return std::min<float>(cls->mSpecial[av - Strength], 10);
                 if (record != nullptr && record->mFO3Stats.hasSpecial)
                     return record->mFO3Stats.special[av - Strength];
                 return 5;
@@ -288,6 +347,8 @@ namespace MWClass::ESM4Stats
             if (av >= Barter && av <= Unarmed)
             {
                 const int skill = av - Barter;
+                if (cls != nullptr)
+                    return autoCalcSkill(actor, *cls, av);
                 // The player's skills follow their SPECIAL, which character creation changes.
                 if (!player && record != nullptr && record->mFO3Stats.hasSkills)
                     return record->mFO3Stats.skills[skill];
@@ -325,6 +386,18 @@ namespace MWClass::ESM4Stats
                 case RadResist:
                     return gmst("fAVDRadResistEnduranceMult")
                         * (getPermanent(actor, Endurance) + gmst("fAVDRadResistEnduranceOffset"));
+                case HealRate: // 0x643a70
+                {
+                    const int endurance = static_cast<int>(std::lround(getPermanent(actor, Endurance)));
+                    if (endurance < 6)
+                        return 0;
+                    static constexpr std::string_view bonuses[] = { "fAVDHealRateEndurance6Bonus",
+                        "fAVDHealRateEndurance7Bonus", "fAVDHealRateEndurance8Bonus", "fAVDHealRateEndurance9Bonus",
+                        "fAVDHealRateEndurance10Bonus" };
+                    return gmst(bonuses[std::min(endurance, 10) - 6]);
+                }
+                case UnarmedDamage: // 0x643ed0
+                    return gmst("fAVDUnarmedDamageBase") + gmst("fAVDUnarmedDamageMult") * getPermanent(actor, Unarmed);
                 case Health:
                 {
                     // DATA health plus the Endurance bonus (0x6436c0). Only the player and AutoCalcStats NPCs

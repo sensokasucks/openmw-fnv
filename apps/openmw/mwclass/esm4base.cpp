@@ -3,12 +3,14 @@
 #include <MyGUI_TextIterator.h>
 #include <MyGUI_UString.h>
 
+#include <components/esm4/loadsoun.hpp>
 #include <components/misc/constants.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
 #include <components/sceneutil/util.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
+#include "../mwbase/soundmanager.hpp"
 #include "../mwbase/world.hpp"
 
 #include "../mwgui/tooltips.hpp"
@@ -23,6 +25,17 @@
 
 namespace MWClass
 {
+    void ESM4Impl::playLoopingSound(const MWWorld::Ptr& ptr, ESM::FormId sound)
+    {
+        if (sound.isZeroOrUnset())
+            return;
+        const ESM4::Sound* record = MWBase::Environment::get().getESMStore()->get<ESM4::Sound>().search(sound);
+        if (record == nullptr || (record->mData.flags & ESM4::Sound::Flag_PlayAtRandom))
+            return;
+        MWBase::Environment::get().getSoundManager()->playSound3D(
+            ptr, ESM::RefId(sound), 1.f, 1.f, MWSound::Type::Sfx, MWSound::PlayMode::Loop);
+    }
+
     void ESM4Impl::insertObjectRendering(
         const MWWorld::Ptr& ptr, const std::string& model, MWRender::RenderingInterface& renderingInterface)
     {

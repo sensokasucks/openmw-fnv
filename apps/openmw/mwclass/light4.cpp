@@ -21,4 +21,13 @@ namespace MWClass
         // Insert even if model is empty, so that the light is added
         renderingInterface.getObjects().insertModel(ptr, model, !(ref->mBase->mData.flags & ESM4::Light::OffDefault));
     }
+
+    void ESM4Light::insertObject(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
+        MWPhysics::PhysicsSystem& physics) const
+    {
+        insertObjectPhysics(ptr, model, rotation, physics);
+        const ESM4::Light& light = *ptr.get<ESM4::Light>()->mBase;
+        if (!(light.mData.flags & ESM4::Light::OffDefault))
+            ESM4Impl::playLoopingSound(ptr, light.mSound);
+    }
 }
