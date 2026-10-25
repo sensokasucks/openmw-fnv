@@ -846,11 +846,13 @@ namespace ESM4
             {
                 const std::string_view result
                     = mEncoder->getUtf8(input, ToUTF8::BufferAllocationPolicy::FitToRequiredSize, str);
-                if (str.empty() && !result.empty())
-                {
-                    str = std::move(input);
+                // getUtf8 returns a view into `input` when nothing needed converting and leaves `str` alone,
+                // which may still hold an earlier string (members reused for several subrecords, such as
+                // the response text of an INFO)
+                if (result.data() != str.data())
+                    str.assign(result.data(), result.size());
+                else
                     str.resize(result.size());
-                }
                 return true;
             }
         }

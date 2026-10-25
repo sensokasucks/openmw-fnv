@@ -1846,6 +1846,10 @@ local function sendScreen(text)
         text = text,
         options = list,
         notices = s.notices,
+        -- a Goodbye line with nothing to answer closes by itself once said (the game is
+        -- paused in the window, so the player script times it)
+        autoClose = (s.goodbye and #list == 0 and text ~= '') and lineDuration(text) or nil,
+        speakerObject = s.speaker,
     })
     s.notices = {}
 end
