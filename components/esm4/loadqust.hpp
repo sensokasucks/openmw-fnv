@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "loadinfo.hpp" // DialogCondition
 #include "script.hpp" // TargetCondition, ScriptDefinition
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
@@ -54,9 +55,16 @@ namespace ESM4
     struct QuestLogEntry
     {
         std::uint8_t mFlags = 0; // 0x01 complete quest, 0x02 fail quest (FO3/FONV)
-        std::vector<TargetCondition> mConditions;
+        std::vector<DialogCondition> mConditions; // evaluated against the player
         std::string mLogText;
         ScriptDefinition mScript; // stage result script
+    };
+
+    // One objective (QOBJ + NNAM + QSTA targets); FO3/FONV.
+    struct QuestObjective
+    {
+        std::int32_t mIndex = 0;
+        std::string mText;
     };
 
     struct QuestStage
@@ -90,6 +98,7 @@ namespace ESM4
         ScriptDefinition mScript;
 
         std::vector<QuestStage> mStages;
+        std::vector<QuestObjective> mObjectives;
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

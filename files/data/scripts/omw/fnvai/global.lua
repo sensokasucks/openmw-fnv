@@ -525,6 +525,11 @@ return {
     interfaceName = 'FNVAI',
     interface = {
         version = 0,
+        --- EvaluatePackage: re-picks the NPC's package at its next behaviour update.
+        evaluate = function(npc)
+            local s = npc and states[npc.id]
+            if s then s.nextEvaluation = simTime end
+        end,
         --- Prints an NPC's packages, whether each one applies now, and the running one.
         debug = function(name)
             name = (name or ''):lower()

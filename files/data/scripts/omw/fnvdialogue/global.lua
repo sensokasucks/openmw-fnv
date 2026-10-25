@@ -10,6 +10,7 @@
 --   I.FNVDialogue.talkTo('DocMitchell')
 
 local core = require('openmw.core')
+local storage = require('openmw.storage')
 local types = require('openmw.types')
 local util = require('openmw.util')
 local world = require('openmw.world')
@@ -47,18 +48,15 @@ end
 
 local state = {
     initialized = false,
-    quests = {},     -- quest form id -> { running, completed, stage, done = {[stage] = true}, objectives = {} }
+    -- quest form id -> { running, completed, failed, stage, done = {[stage] = true}, objectives = {},
+    --                    delay (SetQuestDelay), countdown, elapsed (quest script scheduling) }
+    quests = {},
     saidOnce = {},   -- INFO form id -> true
     talkedTo = {},   -- NPC reference form id -> true
 }
 
-local function initState()
-    if state.initialized then return end
-    state.initialized = true
-    for _, questId in ipairs(dlg.getStartGameEnabledQuests()) do
-        state.quests[questId] = state.quests[questId] or { running = true, stage = 0, done = {}, objectives = {} }
-    end
-end
+local initState -- forward; needs the quest functions below
+local isNewGame = false
 
 -- ---------------------------------------------------------------- records (cached)
 
@@ -117,21 +115,49 @@ end
 
 -- ---------------------------------------------------------------- globals
 
+-- The FNV clock globals are views of OpenMW's clock, so scripts, conditions,
+-- AI schedules and the sky agree. GameDaysPassed counts fractional days.
+local CLOCK = {
+    gamehour = 'hour', gameday = 'day', gamemonth = 'month', gameyear = 'year',
+    gamedayspassed = 'daysPassed', timescale = 'timeScale',
+}
+
+local function clockValue(key)
+    local date = core.obscript.getGameDate()
+    if key == 'gamedayspassed' then
+        return date.daysPassed + date.hour / 24
+    end
+    return date[CLOCK[key]]
+end
+
+local function setClock(key, value)
+    value = tonumber(value) or 0
+    if key == 'gamedayspassed' then
+        core.obscript.setGameDate('daysPassed', math.floor(value))
+        core.obscript.setGameDate('hour', (value - math.floor(value)) * 24)
+    else
+        core.obscript.setGameDate(CLOCK[key], value)
+    end
+end
+
 -- GLOB values: changed values live in obs._globals (shared with result
 -- scripts, saved); unchanged ones come from the records.
 local function globalValue(idOrEditorId)
     local record = dlg.getGlobal(idOrEditorId)
     if record == nil then return nil end
-    local value = rawget(obs._globals, record.editorId:lower())
+    local key = record.editorId:lower()
+    if CLOCK[key] then return clockValue(key) end
+    local value = rawget(obs._globals, key)
     if value ~= nil then return value end
     return record.value
 end
 
--- Result scripts read globals as bare names; make record values visible.
+-- Scripts read globals as bare names; make record values and the clock visible.
 do
     local baseV = obs.v
     obs.v = function(name)
         local key = name:lower()
+        if CLOCK[key] then return clockValue(key) end
         if obs._bindings[key] == nil and rawget(obs._globals, key) == nil then
             local record = dlg.getGlobal(name)
             if record then
@@ -140,34 +166,31 @@ do
         end
         return baseV(name)
     end
+    local baseSetV = obs.setv
+    obs.setv = function(name, value)
+        local key = name:lower()
+        if CLOCK[key] then
+            setClock(key, value)
+            return
+        end
+        baseSetV(name, value)
+    end
+end
+
+-- New game: the clock starts at the date FalloutNV.esm gives.
+local function seedClock()
+    for key in pairs(CLOCK) do
+        local record = key ~= 'gamedayspassed' and dlg.getGlobal(key)
+        if record then
+            setClock(key, record.value)
+        end
+    end
 end
 
 -- ---------------------------------------------------------------- quests
 
 local runScript -- forward
-
-local function setStage(quest, stage)
-    local s = questState(quest)
-    stage = math.floor(tonumber(stage) or 0)
-    s.running = true
-    s.stage = stage
-    s.done[stage] = true
-    tlog('SetStage ' .. quest.editorId .. ' ' .. stage)
-    for _, st in ipairs(quest.stages) do
-        if st.index == stage then
-            -- the first log entry runs (entry conditions are not evaluated yet)
-            local entry = st.entries[1]
-            if entry then
-                if hasFlag(entry.flags, 0x01) then
-                    s.completed = true
-                    s.running = false
-                end
-                runScript(entry.script, quest.editorId .. ' stage ' .. stage)
-            end
-            break
-        end
-    end
-end
+local setStage -- forward (quest host below)
 
 -- ---------------------------------------------------------------- dialogue session
 
@@ -189,6 +212,16 @@ local function objectForRunOn(cond, subject, target)
     if cond.runOn == 1 then return target end
     if cond.runOn == 2 and cond.reference ~= '' then
         local ok, obj = pcall(world.getObjectByFormId, cond.reference)
+        if ok and obj and obj:isValid() then return obj end
+    end
+    if cond.runOn == 3 then -- the subject's combat target
+        local c = I.FNVCombat
+        return subject ~= nil and c and c.getTarget and c.getTarget(subject) or nil
+    end
+    if cond.runOn == 4 then -- the subject's linked reference
+        local linked = subject ~= nil and core.obscript.getLinkedRef(subject)
+        if not linked then return nil end
+        local ok, obj = pcall(world.getObjectByFormId, linked)
         if ok and obj and obj:isValid() then return obj end
     end
     return nil
@@ -287,7 +320,21 @@ functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
     return state.talkedTo[dlg.getReferenceId(obj)] == true
 end
-functions[46] = function() return 0 end -- GetDead
+local function isDead(obj)
+    local c = I.FNVCombat
+    if obj == nil or c == nil or c.isDead == nil then return false end
+    local ok, dead = pcall(c.isDead, obj)
+    return ok and dead == true
+end
+functions[46] = function(_, obj) return isDead(obj) end -- GetDead
+functions[427] = function(cond, obj) -- GetIsVoiceType (the race's default voice is not loaded yet)
+    if obj == nil or isPlayer(obj) then return false end
+    return dlg.getVoiceType(obj) == cond.param1Form
+end
+-- GetDeadCount: deaths of actors with this base record seen so far (see trackDeaths)
+functions[84] = function(cond)
+    return state.deadCounts and state.deadCounts[cond.param1Form] or 0
+end
 functions[35] = function(_, obj) return obj ~= nil and not obj.enabled end -- GetDisabled
 functions[47] = function(cond, obj) -- GetItemCount
     if obj == nil or cond.param1Form == '' then return 0 end
@@ -361,8 +408,9 @@ end
 
 -- ---------------------------------------------------------------- INFO selection
 
-local function questAllows(info, ignoreQuestState)
-    if ignoreQuestState or info.quest == '' then return true end
+-- Only lines of running quests are eligible (and lines without a quest).
+local function questAllows(info)
+    if info.quest == '' then return true end
     local quest = getQuest(info.quest)
     if quest == nil then return true end
     return questState(quest).running == true
@@ -376,13 +424,14 @@ local function infoText(info)
     return table.concat(lines, '\n\n')
 end
 
-local function pickInfoImpl(topic, ignoreQuestState)
-    local s = session
-    local ctx = makeContext(s.speaker, s.player)
-    local infos = getTopicInfos(topic.id, s.actor.recordId)
+-- The first INFO of a topic whose quest is running and whose conditions pass
+-- for this speaker and target; Random lines are picked among the passing ones.
+local function pickInfoFor(topic, speaker, actor, target)
+    local ctx = makeContext(speaker, target)
+    local infos = getTopicInfos(topic.id, actor.recordId)
     local randoms = nil
     for _, info in ipairs(infos) do
-        if questAllows(info, ignoreQuestState) and not state.saidOnce[info.id] then
+        if questAllows(info) and not state.saidOnce[info.id] then
             local passed, failed, value = conditions.evaluate(info.conditions, ctx)
             if passed then
                 if not hasFlag(info.flags, INFO_RANDOM) then
@@ -404,17 +453,8 @@ local function pickInfoImpl(topic, ignoreQuestState)
 end
 
 local function pickInfo(topic)
-    local info = pickInfoImpl(topic, false)
-    if info == nil then
-        -- Quest start-up is not emulated yet (quest scripts do not run), so
-        -- dialogue of a quest that is not running would never show. Fall back
-        -- to ignoring the quest state and say so in the log.
-        info = pickInfoImpl(topic, true)
-        if info then
-            log(('%s: using INFO %s of quest %s which is not running'):format(topic.editorId, info.id, info.quest))
-        end
-    end
-    return info
+    local s = session
+    return pickInfoFor(topic, s.speaker, s.actor, s.player)
 end
 
 -- ---------------------------------------------------------------- result scripts
@@ -458,20 +498,400 @@ local function compileScript(source)
     return handler
 end
 
-runScript = function(source, label)
+-- The object a result or stage script runs on when it names no reference
+-- (`Disable`, `SayTo player X`); the speaker during dialogue otherwise.
+local scriptSubject = nil
+
+-- Result scripts get fresh locals for every run, as in the original (which
+-- gives each run a temporary event list).
+runScript = function(source, label, subject)
     if source == nil or source:match('^%s*$') then return end
     tlog('run result script (' .. label .. '):\n' .. source)
     local handler = compileScript(source)
     if not handler then return end
     -- stage scripts run from inside INFO scripts, so restore the outer state
-    local prevCurrent, prevBlock = obs._current, obs._block
-    obs._current = obs._scripts['anonymous']
+    local prevCurrent, prevBlock, prevSubject = obs._current, obs._block, scriptSubject
+    local entry = obs._scripts['anonymous']
+    local S = entry.locals
+    local saved = {}
+    for k, v in pairs(S) do saved[k] = v end
+    for k in pairs(saved) do S[k] = nil end
+    obs._current = entry
     obs._block = 'result'
+    scriptSubject = subject
     local ok, err = pcall(handler)
-    obs._current, obs._block = prevCurrent, prevBlock
+    for k in pairs(S) do S[k] = nil end
+    for k, v in pairs(saved) do S[k] = v end
+    obs._current, obs._block, scriptSubject = prevCurrent, prevBlock, prevSubject
     if not ok then
         log('result script error (' .. label .. '): ' .. tostring(err))
     end
+end
+
+-- ---------------------------------------------------------------- quest scripts
+-- Each running quest with a script runs it on its own countdown: the quest's
+-- delay (QUST DATA, SetQuestDelay), or fQuestScriptDelayTime (5 s) when that
+-- is 0. Countdowns start staggered so that quest scripts don't all run in the
+-- same frame. GetSecondsPassed is the time since the quest's previous run.
+-- The quest's variables are its script's locals, reachable as Quest.var from
+-- every script (object scripts through the storage section below).
+
+local QUEST_SCRIPT_DELAY = 5.0 -- fQuestScriptDelayTime:MAIN
+
+local questScripts = {} -- quest form id -> script entry, or false
+local publishQuest -- forward
+
+local function stripLocalScriptTail(luaSource)
+    return (luaSource:gsub('return obs%.makeLocalScript%(%)%s*$', ''))
+end
+
+-- Compiles a quest's script and makes its entry reachable under the quest's
+-- editor id too (Quest.var). Variables set before the script loaded (by
+-- result scripts, or restored from a save) are kept.
+local function loadQuestScript(quest)
+    local cached = questScripts[quest.id]
+    if cached ~= nil then return cached or nil end
+    questScripts[quest.id] = false
+    if quest.script == '' then return nil end
+    local record = dlg.getScript(quest.script)
+    if record == nil or record.source == '' then return nil end
+    local ok, luaSource = pcall(compiler.compile, record.source)
+    if not ok then
+        log('quest script ' .. record.editorId .. ' does not compile: ' .. tostring(luaSource))
+        return nil
+    end
+    local loaded, chunk = pcall(util.loadCode, stripLocalScriptTail(luaSource), scriptEnv)
+    if not loaded then
+        log('quest script ' .. record.editorId .. ' does not load: ' .. tostring(chunk))
+        return nil
+    end
+    local prevCurrent = obs._current
+    local ran, err = pcall(chunk)
+    local entry = obs._current
+    obs._current = prevCurrent
+    if not ran or entry == nil then
+        log('quest script ' .. record.editorId .. ' failed to initialize: ' .. tostring(err))
+        return nil
+    end
+    local questKey = quest.editorId:lower()
+    local earlier = obs._scripts[questKey]
+    if earlier and earlier ~= entry then
+        for k, v in pairs(earlier.locals) do
+            if rawget(entry.locals, k) == nil then entry.locals[k] = v end
+        end
+    end
+    obs._scripts[questKey] = entry
+    entry.quest = quest
+    questScripts[quest.id] = entry
+    tlog('quest script ' .. record.editorId .. ' loaded for ' .. quest.editorId)
+    return entry
+end
+
+-- Binary fractions 0, 1/2, 1/4, 3/4, 1/8, ... of the delay, for staggering.
+local staggerIndex = 0
+local function nextStagger()
+    local n, f, x = staggerIndex, 0.5, 0
+    staggerIndex = staggerIndex + 1
+    while n > 0 do
+        if n % 2 == 1 then x = x + f end
+        n = math.floor(n / 2)
+        f = f / 2
+    end
+    return x
+end
+
+local function questDelay(quest, s)
+    local delay = s.delay or quest.delay or 0
+    if delay <= 0 then delay = QUEST_SCRIPT_DELAY end
+    return delay
+end
+
+local questScriptErrors = {}
+local function runQuestScript(quest, entry, menuMode)
+    local ok, err = pcall(obs.execute, entry, { menuMode = menuMode })
+    if not ok and not questScriptErrors[quest.id] then
+        questScriptErrors[quest.id] = true
+        log('quest script of ' .. quest.editorId .. ' failed: ' .. tostring(err))
+    end
+    publishQuest(quest)
+end
+
+local function runningQuests()
+    local list = {}
+    for questId, s in pairs(state.quests) do
+        if s.running then
+            local quest = getQuest(questId)
+            if quest then list[#list + 1] = { quest = quest, s = s } end
+        end
+    end
+    -- a stable order, so that a frame's runs don't depend on table layout
+    table.sort(list, function(a, b) return a.quest.id < b.quest.id end)
+    return list
+end
+
+local function tickQuestScripts(dt)
+    for _, q in ipairs(runningQuests()) do
+        local entry = loadQuestScript(q.quest)
+        if entry and q.s.running then
+            local s = q.s
+            if s.countdown == nil then
+                s.countdown = questDelay(q.quest, s) * nextStagger()
+            end
+            s.elapsed = (s.elapsed or 0) + dt
+            s.countdown = s.countdown - dt
+            if s.countdown <= 0 then
+                s.countdown = questDelay(q.quest, s)
+                obs._dt = s.elapsed
+                s.elapsed = 0
+                runQuestScript(q.quest, entry, nil)
+            end
+        end
+    end
+end
+
+-- One run of every running quest script that has MenuMode blocks, for a menu
+-- that opened (menus the engine doesn't have yet are opened and closed at once).
+local function runMenuMode(menuType)
+    for _, q in ipairs(runningQuests()) do
+        local entry = loadQuestScript(q.quest)
+        if entry and obs.hasBlock(entry, 'menumode') then
+            obs._dt = 0
+            runQuestScript(q.quest, entry, menuType)
+        end
+    end
+end
+
+-- SetStage the original way: an undefined stage does nothing; the quest
+-- keeps the highest stage reached; every log entry of the stage whose
+-- conditions pass against the player runs once, applying its complete/fail
+-- flags and its result script. A stage that is already done runs again only
+-- for quests that allow repeated stages.
+setStage = function(quest, stage)
+    stage = math.floor(tonumber(stage) or 0)
+    local stageRecord = nil
+    for _, st in ipairs(quest.stages) do
+        if st.index == stage then
+            stageRecord = st
+            break
+        end
+    end
+    if stageRecord == nil then
+        tlog('SetStage ' .. quest.editorId .. ' ' .. stage .. ': no such stage')
+        return
+    end
+    local s = questState(quest)
+    local again = s.done[stage] == true
+    if not s.running and not s.completed then s.running = true end
+    s.stage = math.max(s.stage or 0, stage)
+    s.done[stage] = true
+    tlog('SetStage ' .. quest.editorId .. ' ' .. stage .. (again and ' (again)' or ''))
+    publishQuest(quest)
+    if again and not quest.allowRepeatedStages then return end
+    local player = world.players[1]
+    local ctx = makeContext(player, player)
+    for i, entry in ipairs(stageRecord.entries) do
+        local passed, failed, value = conditions.evaluate(entry.conditions, ctx)
+        if passed then
+            if hasFlag(entry.flags, 0x01) then
+                s.completed = true
+                s.running = false
+            end
+            if hasFlag(entry.flags, 0x02) then
+                s.failed = true
+                s.running = false
+            end
+            if entry.log ~= '' then
+                tlog('  log: ' .. entry.log)
+            end
+            runScript(entry.script, quest.editorId .. ' stage ' .. stage .. ' entry ' .. i, player)
+        elseif trace then
+            tlog(('  %s stage %d entry %d: fails %s'):format(quest.editorId, stage, i,
+                conditions.describe(failed, value)))
+        end
+    end
+    publishQuest(quest)
+end
+
+-- ------------------------------------------------ quest state for object scripts
+-- Object scripts run in local contexts and can't call into this script, so
+-- every quest's state and variables are mirrored into a global storage
+-- section they can read (openmw_aux/obscript/bindings.lua); their quest
+-- commands come back as ObScriptQuestCommand events.
+
+local questSection = storage.globalSection('ObScriptQuests')
+questSection:setLifeTime(storage.LIFE_TIME.GameSession)
+
+local dirtyQuests = {}
+publishQuest = function(quest)
+    dirtyQuests[quest.id] = quest
+end
+
+local function questSnapshot(quest)
+    local s = questState(quest)
+    local vars = {}
+    local entry = obs._scripts[quest.editorId:lower()]
+    if entry then
+        for k, v in pairs(entry.locals) do
+            if type(v) == 'number' or type(v) == 'string' then vars[k] = v end
+        end
+    end
+    local done = {}
+    for stage in pairs(s.done) do done[stage] = true end
+    local objectives = {}
+    for index, o in pairs(s.objectives) do objectives[index] = o end
+    return {
+        stage = s.stage or 0, running = s.running == true, completed = s.completed == true,
+        done = done, objectives = objectives, vars = vars,
+    }
+end
+
+local function flushQuests()
+    for id, quest in pairs(dirtyQuests) do
+        questSection:set(quest.editorId:lower(), questSnapshot(quest))
+        dirtyQuests[id] = nil
+    end
+end
+
+local function publishAllQuests()
+    for _, questId in ipairs(dlg.getAllQuests()) do
+        local quest = getQuest(questId)
+        if quest then publishQuest(quest) end
+    end
+    flushQuests()
+end
+
+-- ------------------------------------------------ lines spoken outside the dialogue window
+-- SayTo and friends: the speaker says the topic's first eligible line to the
+-- target. The INFO's begin script runs when the line starts and its end
+-- script when it finishes. Voice files are not played yet, so a line lasts as
+-- long as its subtitle (inferred: fNoticeTextTimePerCharacter 0.06 s per
+-- character, at least 2 s, plus fSubtitleSpeechDelay 0.15 s).
+
+local speaking = {} -- { speaker, info, label, timeLeft }
+
+local function lineDuration(text)
+    return math.max(2.0, #text * 0.06) + 0.15
+end
+
+local function sayLine(speaker, target, topicIdOrEditorId)
+    local actor = dlg.getActor(speaker)
+    if actor == nil then
+        tlog('SayTo: ' .. tostring(speaker) .. ' is not an NPC')
+        return false
+    end
+    local topic = getTopic(topicIdOrEditorId)
+    if topic == nil then
+        log('SayTo: unknown topic ' .. tostring(topicIdOrEditorId))
+        return false
+    end
+    local info = pickInfoFor(topic, speaker, actor, target or world.players[1])
+    if info == nil then
+        tlog('SayTo: ' .. actor.editorId .. ' has no line for ' .. topic.editorId)
+        return false
+    end
+    tlog(('SayTo: %s says %s INFO %s'):format(actor.editorId, topic.editorId, info.id))
+    if hasFlag(info.flags, INFO_SAY_ONCE) then
+        state.saidOnce[info.id] = true
+    end
+    for _, line in ipairs(speaking) do
+        if line.speaker == speaker then line.interrupted = true end
+    end
+    local text = infoText(info)
+    local line = { speaker = speaker, info = info, label = 'INFO ' .. info.id, timeLeft = lineDuration(text) }
+    speaking[#speaking + 1] = line
+    runScript(info.scriptBegin, line.label .. ' begin', speaker)
+    if text ~= '' then
+        world.players[1]:sendEvent('FNVSubtitle', {
+            speaker = actor.name ~= '' and actor.name or actor.editorId,
+            text = text,
+            duration = line.timeLeft,
+        })
+    end
+    return true
+end
+
+local function tickSpeaking(dt)
+    local finished = {}
+    local still = {}
+    for _, line in ipairs(speaking) do
+        line.timeLeft = line.timeLeft - dt
+        if line.timeLeft <= 0 or line.interrupted then
+            finished[#finished + 1] = line
+        else
+            still[#still + 1] = line
+        end
+    end
+    speaking = still
+    for _, line in ipairs(finished) do
+        runScript(line.info.scriptEnd, line.label .. ' end', line.speaker)
+    end
+end
+
+local function isSpeaking(obj)
+    for _, line in ipairs(speaking) do
+        if line.speaker == obj then return true end
+    end
+    return false
+end
+
+-- ------------------------------------------------ menus the engine doesn't have yet
+-- Character creation menus are not built yet. Opening one runs the quest
+-- scripts' MenuMode blocks once, as if the player had closed it right away.
+local pendingMenus = {}
+local function openStandInMenu(name, menuType)
+    log('(not implemented yet: ' .. name .. ', closed at once)')
+    pendingMenus[#pendingMenus + 1] = menuType
+end
+
+local function tickMenus()
+    local menus = pendingMenus
+    pendingMenus = {}
+    for _, menuType in ipairs(menus) do
+        runMenuMode(menuType)
+    end
+end
+
+-- ------------------------------------------------ deaths, for GetDeadCount
+local deathCheckTimer = 0
+local function trackDeaths(dt)
+    deathCheckTimer = deathCheckTimer - dt
+    if deathCheckTimer > 0 then return end
+    deathCheckTimer = 1
+    state.deadRefs = state.deadRefs or {}
+    state.deadCounts = state.deadCounts or {}
+    for _, actor in ipairs(world.activeActors) do
+        if types.ESM4NPC.objectIsInstance(actor) and isDead(actor) then
+            local data = dlg.getActor(actor)
+            if data and not state.deadRefs[data.reference] then
+                state.deadRefs[data.reference] = true
+                state.deadCounts[data.recordId] = (state.deadCounts[data.recordId] or 0) + 1
+            end
+        end
+    end
+end
+
+initState = function()
+    if state.initialized then return end
+    state.initialized = true
+    for _, questId in ipairs(dlg.getStartGameEnabledQuests()) do
+        state.quests[questId] = state.quests[questId] or { running = true, stage = 0, done = {}, objectives = {} }
+    end
+    if isNewGame then
+        seedClock()
+        -- The intro cinematic (quest VCG00) ends with SetStage VCG01 0, which
+        -- starts Doc Mitchell's scenes. The cinematic doesn't exist here, so a
+        -- new game that starts in Doc Mitchell's house takes that step itself.
+        local player = world.players[1]
+        local docId = core.obscript.resolveRefEditorId('DocMitchellREF')
+        local ok, doc = pcall(world.getObjectByFormId, docId or '')
+        local vcg01 = getQuest('VCG01')
+        if vcg01 and player and ok and doc and doc:isValid() and doc.cell and player.cell
+            and doc.cell.id == player.cell.id then
+            log("new game in Doc Mitchell's house: SetStage VCG01 0 (stands in for the intro cinematic)")
+            setStage(vcg01, 0)
+        end
+    end
+    publishAllQuests()
 end
 
 -- ---------------------------------------------------------------- result script commands
@@ -484,8 +904,7 @@ local function questArg(q)
     return quest
 end
 
-local function speakerOr(ref)
-    if ref == nil and session then return session.speaker end
+local function resolveObject(ref)
     if type(ref) == 'string' then
         if ref:lower() == 'player' or ref:lower() == 'playerref' then return world.players[1] end
         local formId = core.obscript.resolveRefEditorId(ref)
@@ -496,6 +915,31 @@ local function speakerOr(ref)
         return nil
     end
     return ref
+end
+
+-- The object a command acts on: the named reference, else the script's
+-- subject (the speaker, or the object an object script asked for).
+local function speakerOr(ref)
+    if ref == nil then
+        if scriptSubject then return scriptSubject end
+        if session then return session.speaker end
+        return nil
+    end
+    return resolveObject(ref)
+end
+
+-- Splits a binding's arguments into (reference, rest...) for commands that
+-- work both as `Ref.Cmd a b` and `Cmd a b` (on the script's subject).
+local function refAndArgs(...)
+    if obs._callBase ~= nil then
+        return speakerOr(select(1, ...)), select(2, ...)
+    end
+    return speakerOr(nil), ...
+end
+
+local function playerEvent(name, data)
+    local player = world.players[1]
+    if player then player:sendEvent(name, data) end
 end
 
 -- GetAV/SetAV/ModAV/GetLevel/GetIsSex... on the speaker or a named reference
@@ -516,16 +960,22 @@ obs.bind('GetStage', function(q)
 end)
 obs.bind('GetStageDone', function(q, stage)
     local quest = questArg(q)
-    return (quest and questState(quest).done[stage]) and 1 or 0
+    return (quest and questState(quest).done[math.floor(tonumber(stage) or -1)]) and 1 or 0
 end)
 obs.bind('StartQuest', function(q)
     local quest = questArg(q)
-    if quest then questState(quest).running = true end
+    if quest then
+        questState(quest).running = true
+        publishQuest(quest)
+    end
     return 0
 end)
 obs.bind('StopQuest', function(q)
     local quest = questArg(q)
-    if quest then questState(quest).running = false end
+    if quest then
+        questState(quest).running = false
+        publishQuest(quest)
+    end
     return 0
 end)
 obs.bind('CompleteQuest', function(q)
@@ -534,6 +984,16 @@ obs.bind('CompleteQuest', function(q)
         local s = questState(quest)
         s.completed = true
         s.running = false
+        publishQuest(quest)
+    end
+    return 0
+end)
+obs.bind('SetQuestDelay', function(q, delay)
+    local quest = questArg(q)
+    if quest then
+        local s = questState(quest)
+        s.delay = tonumber(delay) or 0
+        s.countdown = math.min(s.countdown or 0, questDelay(quest, s))
     end
     return 0
 end)
@@ -545,20 +1005,50 @@ obs.bind('GetQuestCompleted', function(q)
     local quest = questArg(q)
     return (quest and questState(quest).completed) and 1 or 0
 end)
+
+local function objectiveText(quest, index)
+    for _, o in ipairs(quest.objectives) do
+        if o.index == index then return o.text end
+    end
+    return ''
+end
+
 obs.bind('SetObjectiveDisplayed', function(q, index, flag)
     local quest = questArg(q)
+    index = math.floor(tonumber(index) or 0)
     if quest and obs.b(flag or 1) then
         local o = questState(quest).objectives
+        if o[index] == nil then
+            local text = objectiveText(quest, index)
+            if text ~= '' then playerEvent('ObScriptNotify', { text = text }) end
+        end
         if o[index] ~= 'completed' then o[index] = 'displayed' end
+        publishQuest(quest)
     end
     return 0
 end)
 obs.bind('SetObjectiveCompleted', function(q, index, flag)
     local quest = questArg(q)
+    index = math.floor(tonumber(index) or 0)
     if quest then
         questState(quest).objectives[index] = obs.b(flag or 1) and 'completed' or 'displayed'
+        publishQuest(quest)
     end
     return 0
+end)
+obs.bind('GetObjectiveDisplayed', function(q, index)
+    local quest = questArg(q)
+    local o = quest and questState(quest).objectives[math.floor(tonumber(index) or 0)]
+    return (o == 'displayed' or o == 'completed') and 1 or 0
+end)
+obs.bind('GetObjectiveCompleted', function(q, index)
+    local quest = questArg(q)
+    return (quest and questState(quest).objectives[math.floor(tonumber(index) or 0)] == 'completed') and 1 or 0
+end)
+
+-- Time since the running quest script's previous run (0 in result scripts).
+obs.bind('GetSecondsPassed', function()
+    return obs._dt or 0
 end)
 
 -- `player.AddItem Item count` / `AddItem Item count` (the speaker); only the
@@ -594,8 +1084,13 @@ obs.bind('ShowMessage', function(msgId, ...)
     for i, v in ipairs(args) do
         if type(v) == 'userdata' then args[i] = tostring(v) end
     end
-    world.players[1]:sendEvent('ObScriptShowMessage', { editorId = msgId, args = args })
+    playerEvent('ObScriptShowMessage', { editorId = msgId, args = args })
     return 0
+end)
+
+-- The button the player pressed in the last ShowMessage box, once; -1 until then.
+obs.bind('GetButtonPressed', function()
+    return core.obscript.getButtonPressed()
 end)
 
 local function setEnabled(ref, enabled)
@@ -609,12 +1104,49 @@ local function setEnabled(ref, enabled)
 end
 obs.bind('Enable', function(ref) return setEnabled(ref, true) end)
 obs.bind('Disable', function(ref) return setEnabled(ref, false) end)
+obs.bind('GetDisabled', function(ref)
+    local obj = speakerOr(ref)
+    return (obj ~= nil and not obj.enabled) and 1 or 0
+end)
+obs.bind('GetDead', function(ref)
+    return isDead(speakerOr(ref)) and 1 or 0
+end)
 
--- `Ref.StartConversation player Topic`: continue with that topic.
-obs.bind('StartConversation', function(a, b, c)
-    local topic = c or b
-    if type(topic) == 'string' and session then
-        session.pendingTopic = topic
+-- `Ref.SayTo target Topic` / `SayTo target Topic`; `Ref.Say Topic`.
+obs.bind('SayTo', function(...)
+    local speaker, target, topic = refAndArgs(...)
+    if speaker == nil or type(topic) ~= 'string' then return 0 end
+    sayLine(speaker, resolveObject(target), topic)
+    return 0
+end)
+obs.bind('Say', function(...)
+    local speaker, topic = refAndArgs(...)
+    if speaker == nil or type(topic) ~= 'string' then return 0 end
+    sayLine(speaker, world.players[1], topic)
+    return 0
+end)
+obs.bind('IsTalking', function(...)
+    local obj = refAndArgs(...)
+    return isSpeaking(obj) and 1 or 0
+end)
+
+local startDialogue -- forward (screens below)
+
+-- `Ref.StartConversation player Topic`: inside a conversation, continue with
+-- that topic; otherwise, when the player is the target, open dialogue on it.
+-- NPC-to-NPC conversations are not done yet.
+obs.bind('StartConversation', function(...)
+    local speaker, target, topic = refAndArgs(...)
+    if type(topic) ~= 'string' then topic = nil end
+    if session then
+        if topic then session.pendingTopic = topic end
+        return 0
+    end
+    local targetObj = resolveObject(target)
+    if speaker and isPlayer(targetObj) then
+        startDialogue(speaker, targetObj, topic)
+    else
+        tlog('StartConversation between NPCs is not done yet')
     end
     return 0
 end)
@@ -627,18 +1159,99 @@ obs.bind('GetIsID', function(a, b)
     return (data and type(id) == 'string' and data.editorId:lower() == id:lower()) and 1 or 0
 end)
 
+obs.bind('GetLinkedRef', function(...)
+    local obj = refAndArgs(...)
+    local linked = obj and core.obscript.getLinkedRef(obj)
+    return linked and resolveObject(linked) or 0
+end)
+
+-- EvaluatePackage and ResetAI: the AI picks the NPC's package again.
+local function evaluatePackage(...)
+    local obj = refAndArgs(...)
+    if obj and I.FNVAI and I.FNVAI.evaluate then I.FNVAI.evaluate(obj) end
+    return 0
+end
+obs.bind('EvaluatePackage', evaluatePackage)
+obs.bind('EVP', evaluatePackage)
+obs.bind('ResetAI', evaluatePackage)
+
+-- DisablePlayerControls / EnablePlayerControls movement pipboy fighting pov
+-- looking rollover sneaking. Without arguments every control is meant; with
+-- some, the missing ones are left alone (inferred).
+local CONTROLS = { 'movement', 'pipboy', 'fighting', 'pov', 'looking', 'rollover', 'sneaking' }
+local function playerControls(enable, ...)
+    local args = { ... }
+    local flags = {}
+    for i, name in ipairs(CONTROLS) do
+        if #args == 0 then
+            flags[name] = true
+        else
+            flags[name] = obs.b(args[i] or 0)
+        end
+    end
+    playerEvent('ObScriptPlayerControls', { enable = enable, flags = flags })
+    return 0
+end
+obs.bind('DisablePlayerControls', function(...) return playerControls(false, ...) end)
+obs.bind('EnablePlayerControls', function(...) return playerControls(true, ...) end)
+
+-- Character creation menus: stand-ins (see openStandInMenu). 1036 is the
+-- race menu, as VCG01SCRIPT's `MenuMode 1036` block shows.
+obs.bind('ShowRaceMenu', function() openStandInMenu('ShowRaceMenu', 1036) return 0 end)
+for _, name in ipairs({ 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
+    'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
+    obs.bind(name, function() openStandInMenu(name, nil) return 0 end)
+end
+
+-- Presentation commands with no effect on script flow; logged once each.
+local quietStubs = {}
+for _, name in ipairs({ 'AddScriptPackage', 'RemoveScriptPackage', 'ApplyImageSpaceModifier',
+    'RemoveImageSpaceModifier', 'SetDestroyed', 'PlayIdle', 'AutoDisplayObjectives', 'AutoSave',
+    'AddAchievement', 'SexChange', 'Look', 'StopLook', 'SetScreenSplatterFade', 'PlaySound', 'PlaySound3D' }) do
+    obs.bind(name, function()
+        if not quietStubs[name] then
+            quietStubs[name] = true
+            log('(not implemented yet, ignored: ' .. name .. ')')
+        end
+        return 0
+    end)
+end
+
+-- `Ref.MoveTo Target [x y z]` (and MoveToMarker, MoveToMarkerWithFade, whose
+-- fade is not done): puts the reference at the target, offset in world units.
+local function moveTo(...)
+    local obj, target, x, y, z = refAndArgs(...)
+    local dest = resolveObject(target)
+    if obj == nil or dest == nil or dest.cell == nil then
+        tlog('MoveTo: unknown reference or target ' .. tostring(target))
+        return 0
+    end
+    local offset = util.vector3(tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 0)
+    local ok, err = pcall(function()
+        obj:teleport(dest.cell, dest.position + offset, { rotation = dest.rotation })
+    end)
+    if not ok then tlog('MoveTo failed: ' .. tostring(err)) end
+    return 0
+end
+obs.bind('MoveTo', moveTo)
+obs.bind('MoveToMarker', moveTo)
+obs.bind('MoveToMarkerWithFade', moveTo)
+
 obs.bind('player', function() return 'player' end)
 
 -- Menus the intro and many conversations open; not implemented yet. The
 -- dialogue window reports them so the play-tester sees what was skipped.
-for _, name in ipairs({ 'ShowRaceMenu', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu',
-    'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel', 'ForceGreet',
-    'RewardXP', 'RewardKarma', 'AddPerk', 'ModPCSkill', 'SetEssential', 'AddScriptPackage', 'EVP',
-    'MoveTo', 'SetPlayerTeammate', 'PlayGroup', 'Say', 'SayTo', 'StartCombat', 'StopCombat',
-    'SetEnemy', 'SetAlly', 'AddTopic' }) do
+for _, name in ipairs({ 'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel', 'ForceGreet',
+    'RewardXP', 'RewardKarma', 'AddPerk', 'ModPCSkill', 'SetEssential', 'SetPlayerTeammate',
+    'PlayGroup', 'StartCombat', 'StopCombat', 'SetEnemy', 'SetAlly', 'AddTopic' }) do
     if obs._bindings[name:lower()] == nil then
+        local reported = false
         obs.bind(name, function()
-            notice('(not implemented yet: ' .. name .. ')')
+            -- in a conversation every call is shown; otherwise logged once
+            if session or not reported then
+                reported = true
+                notice('(not implemented yet: ' .. name .. ')')
+            end
             return 0
         end)
     end
@@ -691,6 +1304,17 @@ local function sendScreen(text)
     s.notices = {}
 end
 
+-- In the dialogue window an INFO's end script runs when its line is over,
+-- which (without voice) is when the player moves on: picks an answer or
+-- leaves. A topic the end script starts (StartConversation) is said next.
+local function finishLine()
+    local s = session
+    local info = s and s.saying
+    if info == nil then return end
+    s.saying = nil
+    runScript(info.scriptEnd, 'INFO ' .. info.id .. ' end', s.speaker)
+end
+
 local function say(info, topic)
     local s = session
     tlog(('%s: INFO %s (quest %s)'):format(topic and topic.editorId or '?', info.id, info.quest))
@@ -698,37 +1322,44 @@ local function say(info, topic)
         state.saidOnce[info.id] = true
     end
     s.pendingTopic = nil
-    runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin')
-    runScript(info.scriptEnd, 'INFO ' .. info.id .. ' end')
+    runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin', s.speaker)
     if session == nil then return end -- a script ended the conversation
-    local text = infoText(info)
+    s.saying = info
+    s.goodbye = hasFlag(info.flags, INFO_GOODBYE)
+    s.options = buildOptions(info)
+    sendScreen(infoText(info))
+end
+
+-- Ends the current line; true when its end script started another topic,
+-- which is then said instead of whatever the player picked.
+local function moveOn()
+    finishLine()
+    local s = session
+    if s == nil then return true end
     if s.pendingTopic then
         local option = topicOption(s.pendingTopic)
         s.pendingTopic = nil
         if option then
-            -- the follow-up topic is spoken right away
-            local followText = infoText(option.info)
-            text = (text ~= '' and (text .. '\n\n') or '') .. followText
-            info = option.info
-            runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin')
-            runScript(info.scriptEnd, 'INFO ' .. info.id .. ' end')
+            say(option.info, option.topic)
+            return true
         end
     end
-    s.goodbye = hasFlag(info.flags, INFO_GOODBYE)
-    s.options = buildOptions(info)
-    sendScreen(text)
+    return false
 end
 
 local function endDialogue()
+    if session == nil then return end
+    finishLine()
     if session == nil then return end
     session.player:sendEvent('FNVDialogueClose')
     session = nil
 end
 
-local function startDialogue(speaker, player, topicIdOrEditorId)
+startDialogue = function(speaker, player, topicIdOrEditorId)
     local actor = dlg.getActor(speaker)
     if actor == nil then return false end
     initState()
+    if session then finishLine() end
     session = { speaker = speaker, actor = actor, player = player, options = {}, notices = {} }
     tlog('start dialogue with ' .. actor.editorId .. ' (' .. actor.recordId .. ')')
     local topic = getTopic(topicIdOrEditorId or 'GREETING')
@@ -753,15 +1384,57 @@ I.Activation.addHandlerForType(types.ESM4NPC, function(npc, actor)
     end
 end)
 
+-- ---------------------------------------------------------------- object script requests
+-- Quest commands of object scripts (see openmw_aux/obscript/bindings.lua).
+-- `self` is the object whose script asked; `member` says whether the command
+-- was called as `Ref.Cmd`, so that refAndArgs splits the arguments the same way.
+local forwardedCommands = {
+    setstage = true, startquest = true, stopquest = true, completequest = true, setquestdelay = true,
+    setobjectivedisplayed = true, setobjectivecompleted = true,
+    sayto = true, say = true, startconversation = true, evaluatepackage = true, evp = true, resetai = true,
+    disableplayercontrols = true, enableplayercontrols = true,
+    showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
+    showtagskillmenu = true, settagskills = true, showtraitmenu = true, showlovetestermenuparams = true,
+}
+
+local function runForwardedCommand(data)
+    local name = tostring(data.name):lower()
+    local fn = obs._bindings[name]
+    if fn == nil or not forwardedCommands[name] then
+        log('object script command not handled here: ' .. tostring(data.name))
+        return
+    end
+    initState()
+    local prevSubject, prevBase = scriptSubject, obs._callBase
+    scriptSubject = data.self
+    obs._callBase = data.member and data.args[1] or nil
+    local ok, err = pcall(fn, table.unpack(data.args, 1, data.n or #data.args))
+    scriptSubject, obs._callBase = prevSubject, prevBase
+    if not ok then log('object script command ' .. name .. ' failed: ' .. tostring(err)) end
+end
+
+local function setQuestVar(data)
+    local quest = getQuest(tostring(data.quest))
+    if quest == nil then return end
+    loadQuestScript(quest)
+    obs.msetv(quest.editorId, data.name, data.value)
+    publishQuest(quest)
+end
+
 -- ---------------------------------------------------------------- save/load
 
 local function saveScriptVars()
     local vars = {}
-    for name, entry in pairs(obs._scripts) do
-        if name ~= 'anonymous' then
+    local seen = {}
+    for _, entry in pairs(obs._scripts) do
+        -- quest scripts are reachable under two names; save each once
+        if entry.name ~= 'anonymous' and not seen[entry] then
+            seen[entry] = true
             local locals = {}
-            for k, v in pairs(entry.locals) do locals[k] = v end
-            vars[name] = locals
+            for k, v in pairs(entry.locals) do
+                if type(v) == 'number' or type(v) == 'string' then locals[k] = v end
+            end
+            vars[entry.name:lower()] = locals
         end
     end
     return vars
@@ -802,6 +1475,11 @@ return {
             local quest = getQuest(q)
             if quest then setStage(quest, stage) end
         end,
+        --- A quest variable (Quest.var) for debugging.
+        getQuestVar = function(q, name)
+            local quest = getQuest(q)
+            return quest and obs.mv(quest.editorId, name)
+        end,
         --- Evaluates a CTDA list (as built by core.obscript) with subject as
         -- the running object and the player as target; used by AI packages.
         -- @return passed, failed condition, its value
@@ -815,6 +1493,7 @@ return {
             local s = session
             if s == nil then return end
             local option = s.options[data.index]
+            if moveOn() then return end
             if option == nil then
                 endDialogue()
                 return
@@ -822,10 +1501,24 @@ return {
             say(option.info, option.topic)
         end,
         FNVDialogueClose = function()
+            if session then finishLine() end
             session = nil
         end,
+        ObScriptQuestCommand = runForwardedCommand,
+        ObScriptSetQuestVar = setQuestVar,
     },
     engineHandlers = {
+        onNewGame = function()
+            isNewGame = true
+        end,
+        onUpdate = function(dt)
+            if not state.initialized then initState() end
+            tickMenus()
+            tickQuestScripts(dt)
+            tickSpeaking(dt)
+            trackDeaths(dt)
+            flushQuests()
+        end,
         onSave = function()
             local globals = {}
             for k, v in pairs(obs._globals) do globals[k] = v end
@@ -834,8 +1527,10 @@ return {
         onLoad = function(data)
             if data == nil then return end
             state = data.state or state
+            state.initialized = true
             for k, v in pairs(data.globals or {}) do obs._globals[k] = v end
             loadScriptVars(data.vars)
+            publishAllQuests()
         end,
     },
 }

@@ -126,6 +126,12 @@ void ESM4::Reference::load(ESM4::Reader& reader)
                 // << ", 0x" << std::hex << (mEsp.flags & 0xff) << std::endl;// FIXME
                 break;
             }
+            case ESM::fourCC("XLKR"): // linked reference; TES5 prefixes a keyword
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mLinkedRef);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XTEL"):
             {
                 switch (subHdr.dataSize)
@@ -327,7 +333,6 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XIS2"):
             case ESM::fourCC("XLCN"):
             case ESM::fourCC("XLIB"):
-            case ESM::fourCC("XLKR"):
             case ESM::fourCC("XLRM"):
             case ESM::fourCC("XLRT"):
             case ESM::fourCC("XLTW"):

@@ -12,6 +12,7 @@
 
 #include <components/esm/refid.hpp>
 #include <components/esm4/dialogue.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddial.hpp>
 #include <components/esm4/loadglob.hpp>
 #include <components/esm4/loadinfo.hpp>
@@ -289,6 +290,17 @@ namespace MWLua
             res["flags"] = quest.mData.flags;
             res["priority"] = quest.mData.priority;
             res["startGameEnabled"] = (quest.mData.flags & ESM4::Quest::Flag_StartGameEnabled) != 0;
+            res["allowRepeatedStages"] = (quest.mData.flags & ESM4::Quest::Flag_AllowRepeatStages) != 0;
+            res["delay"] = quest.mData.questDelay; // seconds between script runs; 0 = fQuestScriptDelayTime
+            sol::table objectives(lua, sol::create);
+            for (size_t i = 0; i < quest.mObjectives.size(); ++i)
+            {
+                sol::table o(lua, sol::create);
+                o["index"] = quest.mObjectives[i].mIndex;
+                o["text"] = quest.mObjectives[i].mText;
+                objectives[LuaUtil::toLuaIndex(i)] = o;
+            }
+            res["objectives"] = objectives;
             res["script"] = formIdText(quest.mQuestScript);
             res["variables"] = makeScriptVariables(lua, quest.mQuestScript);
             sol::table stages(lua, sol::create);
@@ -305,7 +317,7 @@ namespace MWLua
                     e["flags"] = entry.mFlags;
                     e["log"] = entry.mLogText;
                     e["script"] = entry.mScript.scriptSource;
-                    e["conditionCount"] = entry.mConditions.size();
+                    e["conditions"] = makeConditions(lua, entry.mConditions);
                     entries[LuaUtil::toLuaIndex(j)] = e;
                 }
                 s["entries"] = entries;
@@ -391,6 +403,16 @@ namespace MWLua
             return makeQuest(lua, *quest);
         };
 
+        // Form ids of all quests.
+        api["getAllQuests"] = [](sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const MWWorld::Store<ESM4::Quest>& quests = MWBase::Environment::get().getESMStore()->get<ESM4::Quest>();
+            for (size_t i = 0; i < quests.getSize(); ++i)
+                res[LuaUtil::toLuaIndex(i)] = formIdText(quests.at(i)->mId);
+            return res;
+        };
+
         // Form ids of the quests flagged "start game enabled".
         api["getStartGameEnabledQuests"] = [](sol::this_state s) -> sol::table {
             sol::state_view lua(s);
@@ -442,6 +464,45 @@ namespace MWLua
             res["factionRank"] = base->mFaction.rank;
             res["isFemale"] = MWClass::ESM4Npc::isFemale(ptr);
             res["script"] = formIdText(base->mScriptId);
+            res["voiceType"] = formIdText(base->mVoiceType);
+            return res;
+        };
+
+        // Voice type (VTCK) of an ESM4 NPC or creature reference, "" when it has none.
+        api["getVoiceType"] = [](const Object& object) -> std::string {
+            const MWWorld::Ptr& ptr = object.ptr();
+            if (ptr.getType() == ESM::REC_NPC_4)
+                return formIdText(ptr.get<ESM4::Npc>()->mBase->mVoiceType);
+            if (ptr.getType() == ESM::REC_CREA4)
+                return formIdText(ptr.get<ESM4::Creature>()->mBase->mVoiceType);
+            return {};
+        };
+
+        // Script (SCPT) by form id or editor id: { id, editorId, type, enabled, source } or nil.
+        // type: 0 object, 1 quest, 0x100 effect.
+        api["getScript"] = [](std::string_view idOrEditorId, sol::this_state s) -> sol::object {
+            sol::state_view lua(s);
+            const MWWorld::Store<ESM4::Script>& scripts = MWBase::Environment::get().getESMStore()->get<ESM4::Script>();
+            const ESM4::Script* script = scripts.search(ESM::RefId(parseFormId(idOrEditorId)));
+            if (script == nullptr)
+            {
+                static const std::map<std::string, const ESM4::Script*> byEditorId = [&scripts] {
+                    std::map<std::string, const ESM4::Script*> res;
+                    for (size_t i = 0; i < scripts.getSize(); ++i)
+                        res.emplace(Misc::StringUtils::lowerCase(scripts.at(i)->mEditorId), scripts.at(i));
+                    return res;
+                }();
+                auto it = byEditorId.find(Misc::StringUtils::lowerCase(idOrEditorId));
+                if (it == byEditorId.end())
+                    return sol::nil;
+                script = it->second;
+            }
+            sol::table res(lua, sol::create);
+            res["id"] = formIdText(script->mId);
+            res["editorId"] = script->mEditorId;
+            res["type"] = script->mScript.scriptHeader.type;
+            res["enabled"] = (script->mScript.scriptHeader.flag & 0x01) != 0;
+            res["source"] = script->mScript.scriptSource;
             return res;
         };
 

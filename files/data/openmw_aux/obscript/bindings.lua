@@ -9,6 +9,7 @@ local anim = require('openmw.animation')
 local core = require('openmw.core')
 local nearby = require('openmw.nearby')
 local self = require('openmw.self')
+local storage = require('openmw.storage')
 local types = require('openmw.types')
 local util = require('openmw.util')
 
@@ -35,6 +36,90 @@ obs._onLocalScriptReady = function(entry)
     if entry.handlers['onactivate'] then
         core.sendGlobalEvent('ObScriptHasOnActivate', { object = self.object })
     end
+end
+
+-- Block filters (`Begin OnTriggerEnter player`): the filter is an editor id,
+-- or the value of a ref variable.
+obs.refMatches = function(ref, filter)
+    if not isObject(ref) then return false end
+    if isObject(filter) then return ref == filter end
+    if type(filter) ~= 'string' then return false end
+    local key = filter:lower()
+    if key == 'player' or key == 'playerref' then
+        return types.Player.objectIsInstance(ref)
+    end
+    local formId = core.obscript.resolveRefEditorId(filter)
+    return formId ~= nil and tostring(ref.id) == formId
+end
+
+-- ---------------------------------------------------------------- quests
+-- Quest state and quest variables live in the global script
+-- scripts/omw/fnvdialogue/global.lua, which mirrors them into this storage
+-- section. Reads are immediate; changes go there as events and show up here
+-- in the next frame.
+local quests = storage.globalSection('ObScriptQuests')
+
+local function questData(name)
+    if type(name) ~= 'string' then return nil end
+    return quests:get(name:lower())
+end
+
+obs._remoteVar = function(base, name)
+    local q = questData(base)
+    if q == nil then return nil end
+    return q.vars[name:lower()] or 0
+end
+
+obs._remoteSet = function(base, name, value)
+    if questData(base) == nil then return false end
+    core.sendGlobalEvent('ObScriptSetQuestVar', { quest = base, name = name, value = value })
+    return true
+end
+
+obs.bind('GetStage', function(q)
+    local data = questData(q)
+    return data and data.stage or 0
+end)
+obs.bind('GetStageDone', function(q, stage)
+    local data = questData(q)
+    return (data and data.done[math.floor(tonumber(stage) or -1)]) and 1 or 0
+end)
+obs.bind('GetQuestRunning', function(q)
+    local data = questData(q)
+    return (data and data.running) and 1 or 0
+end)
+obs.bind('GetQuestCompleted', function(q)
+    local data = questData(q)
+    return (data and data.completed) and 1 or 0
+end)
+obs.bind('GetObjectiveDisplayed', function(q, index)
+    local data = questData(q)
+    local o = data and data.objectives[math.floor(tonumber(index) or 0)]
+    return (o == 'displayed' or o == 'completed') and 1 or 0
+end)
+obs.bind('GetObjectiveCompleted', function(q, index)
+    local data = questData(q)
+    return (data and data.objectives[math.floor(tonumber(index) or 0)] == 'completed') and 1 or 0
+end)
+
+-- Commands the global script carries out, with this object as the subject
+-- of reference-less forms (`SayTo player Topic` on an NPC's own script).
+for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 'SetQuestDelay',
+    'SetObjectiveDisplayed', 'SetObjectiveCompleted', 'SayTo', 'Say', 'StartConversation',
+    'EvaluatePackage', 'EVP', 'ResetAI', 'DisablePlayerControls', 'EnablePlayerControls',
+    'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
+    'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
+    obs.bind(name, function(...)
+        local args = { ... }
+        local n = select('#', ...)
+        for i = 1, n do
+            if args[i] == nil then args[i] = 0 end
+        end
+        core.sendGlobalEvent('ObScriptQuestCommand', {
+            name = name, self = self.object, member = obs._callBase ~= nil, args = args, n = n,
+        })
+        return 0
+    end)
 end
 
 -- ---------------------------------------------------------------- Activate
@@ -77,9 +162,9 @@ obs.bind('ShowMessage', function(msgId, ...)
     return 0
 end)
 
--- No button message box exists yet, so no button is ever pressed (vanilla: -1).
+-- The button pressed in the last ShowMessage box, once; -1 until then.
 obs.bind('GetButtonPressed', function()
-    return -1
+    return core.obscript.getButtonPressed()
 end)
 
 -- ---------------------------------------------------------------- PlayGroup

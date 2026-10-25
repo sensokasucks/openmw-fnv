@@ -110,6 +110,7 @@ namespace ESM4
         ESM::FormId mKey;
 
         ESM::FormId mTargetRef;
+        ESM::FormId mLinkedRef; // XLKR (FO3/FONV), GetLinkedRef
 
         // XPRM (FO3/FNV): primitive half extents of a trigger volume, zero if none
         float mPrimitiveBounds[3] = { 0.f, 0.f, 0.f };

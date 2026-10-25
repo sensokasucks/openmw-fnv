@@ -98,6 +98,9 @@ void ESM4::Npc::load(ESM4::Reader& reader)
             case ESM::fourCC("INAM"):
                 reader.getFormId(mDeathItem);
                 break;
+            case ESM::fourCC("VTCK"): // FO3/FONV voice type
+                reader.getFormId(mVoiceType);
+                break;
             case ESM::fourCC("SCRI"):
                 reader.getFormId(mScriptId);
                 break;
@@ -325,7 +328,6 @@ void ESM4::Npc::load(ESM4::Reader& reader)
             case ESM::fourCC("TINI"):
             case ESM::fourCC("TINV"):
             case ESM::fourCC("VMAD"):
-            case ESM::fourCC("VTCK"):
             case ESM::fourCC("GNAM"):
             case ESM::fourCC("SHRT"):
             case ESM::fourCC("SPOR"):

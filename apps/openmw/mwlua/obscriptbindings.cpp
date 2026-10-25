@@ -1,10 +1,13 @@
 #include "obscriptbindings.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <sol/state_view.hpp>
 #include <sol/table.hpp>
@@ -12,6 +15,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadachr.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
@@ -31,9 +35,12 @@
 #include <components/misc/strings/lower.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/windowmanager.hpp"
+#include "../mwbase/world.hpp"
 #include "../mwclass/esm4base.hpp"
 #include "../mwclass/esm4door.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/globals.hpp"
 #include "../mwworld/store.hpp"
 
 #include "context.hpp"
@@ -150,13 +157,18 @@ namespace MWLua
             static const EditorIdIndex index = [] {
                 EditorIdIndex res;
                 const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
-                const MWWorld::Store<ESM4::Reference>& refs = store.get<ESM4::Reference>();
-                for (size_t i = 0; i < refs.getSize(); ++i)
-                {
-                    const ESM4::Reference& ref = *refs.at(i);
-                    if (!ref.mEditorId.empty())
-                        res.emplace(Misc::StringUtils::lowerCase(ref.mEditorId), ESM::RefId(ref.mId));
-                }
+                // placed objects, NPCs and creatures (REFR, ACHR, ACRE)
+                auto addAll = [&](const auto& refs) {
+                    for (size_t i = 0; i < refs.getSize(); ++i)
+                    {
+                        const auto& ref = *refs.at(i);
+                        if (!ref.mEditorId.empty())
+                            res.emplace(Misc::StringUtils::lowerCase(ref.mEditorId), ESM::RefId(ref.mId));
+                    }
+                };
+                addAll(store.get<ESM4::Reference>());
+                addAll(store.get<ESM4::ActorCharacter>());
+                addAll(store.get<ESM4::ActorCreature>());
                 return res;
             }();
             return resolve(index, editorId);
@@ -204,6 +216,14 @@ namespace MWLua
             return bounds;
         };
 
+        // Form id of the reference's linked reference (XLKR), nil when it has none.
+        api["getLinkedRef"] = [](const Object& object) -> sol::optional<std::string> {
+            const ESM::FormId linked = object.ptr().getCellRef().getLinkedRef();
+            if (linked.isZeroOrUnset())
+                return sol::nullopt;
+            return ESM::RefId(linked).serializeText();
+        };
+
         // Sequences embedded in the object's model (NiControllerSequences such as "Forward" of a lever or "Open" of a
         // terminal). Group names are lower case. Plays once and holds the last frame.
         api["playEmbeddedGroup"] = [context](const Object& object, std::string_view group) {
@@ -241,6 +261,69 @@ namespace MWLua
             if (ptr.getType() != ESM4::Door::sRecordId)
                 return sol::nullopt;
             return MWClass::ESM4Door::isOpen(ptr);
+        };
+
+        // Blocking message box with buttons (ShowMessage of a MESG with buttons). The pressed
+        // button is read with getButtonPressed, which returns it once and -1 otherwise, like
+        // GetButtonPressed. UI calls go through actions; the answer arrives a frame later.
+        static std::atomic<int> sPressedButton{ -1 };
+        api["showMessageBox"] = [context](std::string_view text, sol::table buttons) {
+            std::vector<std::string> labels;
+            for (size_t i = 1; i <= buttons.size(); ++i)
+                labels.push_back(buttons.get<std::string>(i));
+            sPressedButton = -1;
+            context.mLuaManager->addAction(
+                [text = std::string(text), labels = std::move(labels)] {
+                    MWBase::Environment::get().getWindowManager()->interactiveMessageBox(text, labels);
+                },
+                "obscriptShowMessageBoxAction");
+        };
+        api["getButtonPressed"] = [context]() -> int {
+            context.mLuaManager->addAction(
+                [] {
+                    const int pressed = MWBase::Environment::get().getWindowManager()->readPressedButton();
+                    if (pressed != -1)
+                        sPressedButton = pressed;
+                },
+                "obscriptReadPressedButtonAction");
+            return sPressedButton.exchange(-1);
+        };
+
+        // The game clock as the FNV globals see it: { hour, day, month, year, daysPassed, timeScale }.
+        api["getGameDate"] = [lua]() {
+            const MWBase::World* world = MWBase::Environment::get().getWorld();
+            sol::table res(lua, sol::create);
+            res["hour"] = world->getGlobalFloat(MWWorld::Globals::sGameHour);
+            res["day"] = world->getGlobalInt(MWWorld::Globals::sDay);
+            res["month"] = world->getGlobalInt(MWWorld::Globals::sMonth);
+            res["year"] = world->getGlobalInt(MWWorld::Globals::sYear);
+            res["daysPassed"] = world->getGlobalInt(MWWorld::Globals::sDaysPassed);
+            res["timeScale"] = world->getGlobalFloat(MWWorld::Globals::sTimeScale);
+            return res;
+        };
+        // Sets one part of the clock: "hour", "day", "month", "year", "daysPassed" or "timeScale".
+        api["setGameDate"] = [context](std::string_view part, double value) {
+            static const std::map<std::string, MWWorld::GlobalVariableName, std::less<>> names = {
+                { "hour", MWWorld::Globals::sGameHour },
+                { "day", MWWorld::Globals::sDay },
+                { "month", MWWorld::Globals::sMonth },
+                { "year", MWWorld::Globals::sYear },
+                { "daysPassed", MWWorld::Globals::sDaysPassed },
+                { "timeScale", MWWorld::Globals::sTimeScale },
+            };
+            auto it = names.find(part);
+            if (it == names.end())
+                throw std::runtime_error("Unknown game date part: " + std::string(part));
+            const MWWorld::GlobalVariableName name = it->second;
+            context.mLuaManager->addAction(
+                [name, value] {
+                    MWBase::World* world = MWBase::Environment::get().getWorld();
+                    if (world->getGlobalVariableType(name) == 'f')
+                        world->setGlobalFloat(name, static_cast<float>(value));
+                    else
+                        world->setGlobalInt(name, static_cast<int>(value));
+                },
+                "obscriptSetGameDateAction");
         };
 
         // Opt-in runtime tracing (OPENMW_OBSCRIPT_TRACE=1); the Lua sandbox has no os.getenv.
