@@ -22,7 +22,7 @@
 -- effect does nothing while they fail, but its duration still runs.
 --
 -- Medicine items heal more with the Medicine skill and food with Survival
--- (fMagicMedicineSkillMult, fMagicSurvivalSkillMult). A chem with an
+-- (fMagicMedicineSkillBase/Mult, fMagicSurvivalSkillBase/Mult). A chem with an
 -- addiction SPEL can addict on use (the ALCH addiction chance); the
 -- addiction SPEL then stays on the actor until cured, and its effects'
 -- conditions decide when the withdrawal shows.
@@ -37,6 +37,8 @@ local storage = require('openmw.storage')
 local types = require('openmw.types')
 local world = require('openmw.world')
 local I = require('openmw.interfaces')
+
+local conditionsLib = require('scripts.omw.fnvdialogue.conditions')
 
 local effects = core.obscript and core.obscript.effects
 local stats = core.obscript and core.obscript.stats
@@ -197,11 +199,24 @@ local function effectItem(inst)
     return record and record.effects[inst.index]
 end
 
-local function conditionsPass(conditions, actor)
+-- A condition list that can't be evaluated fails, so that effects meant as
+-- alternatives (hardcore or not, with or without a perk) don't all apply.
+local function conditionsPass(conditions, actor, label)
     if conditions == nil or #conditions == 0 then return true end
-    if I.FNVDialogue == nil or I.FNVDialogue.checkConditions == nil then return true end
-    local ok, passed = pcall(I.FNVDialogue.checkConditions, conditions, actor)
-    return not ok or passed == true
+    if I.FNVDialogue == nil or I.FNVDialogue.checkConditions == nil then
+        warnOnce('noConditions', 'FNVDialogue.checkConditions is missing; effects with conditions are skipped')
+        return false
+    end
+    local ok, passed, failed, value = pcall(I.FNVDialogue.checkConditions, conditions, actor)
+    if not ok then
+        warnOnce('cond:' .. tostring(label), 'conditions of ' .. tostring(label) .. ' failed to evaluate: '
+            .. tostring(passed))
+        return false
+    end
+    if trace and passed ~= true and failed then
+        tlog(tostring(label) .. ': condition fails: ' .. conditionsLib.describe(failed, value))
+    end
+    return passed == true
 end
 
 -- ---------------------------------------------------------------- effect scripts
@@ -316,7 +331,7 @@ local function tick(inst, dt, recheck)
     end
     if recheck then
         local item = effectItem(inst)
-        local passes = conditionsPass(item and item.conditions, actor)
+        local passes = conditionsPass(item and item.conditions, actor, inst.effect)
         if passes and not inst.active then
             activate(inst)
         elseif inst.active and not passes then
@@ -345,21 +360,22 @@ local function tick(inst, dt, recheck)
     end
 end
 
--- Medicine items heal more with Medicine, food with Survival (guessed
--- formula: x(1 + skill/100 * (mult - 1)), i.e. double at skill 100).
+-- Medicine items heal more with Medicine (0x649530): x(fMagicMedicineSkillBase
+-- + Medicine/100 * fMagicMedicineSkillMult), 2x at 50 with the ESM's 1.0 and
+-- 2.0. Food uses Survival with the fMagicSurvivalSkill* pair (assumed alike).
 local function skillScale(actor, flags, item, mgef)
     if mgef.actorValue ~= HEALTH or hasFlag(mgef.flags, FLAG_DETRIMENTAL) then return 1 end
     local skill, setting
     if hasFlag(flags, ITEM_MEDICINE) then
-        skill, setting = 'Medicine', 'fMagicMedicineSkillMult'
+        skill, setting = 'Medicine', 'fMagicMedicineSkill'
     elseif hasFlag(flags, ITEM_FOOD) then
-        skill, setting = 'Survival', 'fMagicSurvivalSkillMult'
+        skill, setting = 'Survival', 'fMagicSurvivalSkill'
     else
         return 1
     end
     local ok, value = pcall(stats.get, actor, skill)
     if not ok then return 1 end
-    return 1 + math.max(0, value) / 100 * (gmst(setting, 2) - 1)
+    return gmst(setting .. 'Base', 1) + math.max(0, value) / 100 * gmst(setting .. 'Mult', 2)
 end
 
 ---
@@ -397,9 +413,12 @@ local function applyEffects(actor, source, caster, permanent)
             state.nextId = state.nextId + 1
             state.active[inst.id] = inst
             markDirty(actor)
-            tlog(('effect %s (archetype %s) from %s on %s: magnitude %g, duration %d'):format(mgef.editorId,
-                tostring(mgef.archetype), sourceName(source), tostring(actor), inst.magnitude, inst.duration))
-            if conditionsPass(item.conditions, actor) then activate(inst) end
+            tlog(('effect %s (archetype %s) from %s on %s: magnitude %g, duration %d, %d conditions'):format(
+                mgef.editorId, tostring(mgef.archetype), sourceName(source), tostring(actor), inst.magnitude,
+                inst.duration, #(item.conditions or {})))
+            if conditionsPass(item.conditions, actor, mgef.editorId .. ' in ' .. sourceName(source)) then
+                activate(inst)
+            end
             -- instant effects end at once; the rest tick from the next frame
             if inst.duration == 0 then finish(inst) end
         end
@@ -471,6 +490,22 @@ local function playerNotice(text)
     if player then player:sendEvent('ObScriptNotify', { text = text }) end
 end
 
+-- RollChemAddiction (0x824e70): addicted if rand%100 < chance*100, chance
+-- being the ALCH addiction chance. The original also keeps a per-chem usage
+-- record (above fAddictionUsageMonitorThreshold the chance becomes
+-- (usage - threshold)/100) and applies perk entry point 23; neither is here
+-- yet, since how usage grows is not traced.
+local function rollAddiction(potion)
+    local chance = math.max(0, math.min(1, potion.addictionChance or 0))
+    return math.random(0, 99) < chance * 100
+end
+
+local function playUiSound(editorId)
+    local player = world.players[1]
+    local id = player and core.obscript.resolveSoundEditorId and core.obscript.resolveSoundEditorId(editorId)
+    if id then pcall(core.sound.playSound3d, id, player) end
+end
+
 local function addAddiction(actor, spell, chemName)
     local key = actorKey(actor)
     state.addictions[key] = state.addictions[key] or {}
@@ -484,6 +519,7 @@ local function addAddiction(actor, spell, chemName)
         if type(text) ~= 'string' or text == '' then text = 'You are addicted to %s.' end
         if text:find('%%s') then text = text:format(chemName) end
         playerNotice(text)
+        playUiSound('UIHealthChemsAddicted')
     end
 end
 
@@ -510,9 +546,7 @@ local function applyPotion(actor, potionId)
     local addiction = potion.addiction ~= '' and getSpell(potion.addiction)
     if addiction then
         local list = state.addictions[actorKey(actor)]
-        local chance = potion.addictionChance or 0
-        if chance > 1 then chance = chance / 100 end -- in case it is a percentage
-        if not (list and list[addiction.id]) and math.random() < chance then
+        if not (list and list[addiction.id]) and rollAddiction(potion) then
             addAddiction(actor, addiction, potion.name)
         end
     end
