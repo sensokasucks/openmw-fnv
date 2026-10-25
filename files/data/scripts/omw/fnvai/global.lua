@@ -44,7 +44,11 @@ local furniture = require('scripts.omw.fnvai.furniture')
 local dlg = core.obscript.dialogue
 local combat = core.obscript.combat
 
-local PLAYER_REF = 'FormId:0x14'
+-- PlayerRef is form 0x14 of whichever file is loaded first, so only the low 24 bits tell
+local function isPlayerRef(formId)
+    local hex = type(formId) == 'string' and formId:match('^FormId:0x(%x+)$')
+    return hex ~= nil and tonumber(hex, 16) % 0x1000000 == 0x14
+end
 
 -- package types (PKDT)
 local T = {
@@ -535,7 +539,7 @@ end
 local function targetRef(pkg)
     local target = pkg.targets[1]
     if target == nil then return nil end
-    if target.id == PLAYER_REF then return player() end
+    if isPlayerRef(target.id) then return player() end
     return getObject(target.id)
 end
 
@@ -646,7 +650,7 @@ local function converse(npc, s, pkg)
     end
     local target = pkg.targets[1]
     local ref = targetRef(pkg)
-    if ref == nil or target.id ~= PLAYER_REF or not sameCell(ref.cell, npc.cell) then return end
+    if ref == nil or not isPlayerRef(target.id) or not sameCell(ref.cell, npc.cell) then return end
     local distance = target.count and target.count > 0 and target.count or DIALOGUE_DISTANCE
     local d = ref.position - npc.position
     if d:length() > distance then return end
