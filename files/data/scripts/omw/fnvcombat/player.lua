@@ -203,6 +203,8 @@ return {
             end
         end,
         onFrame = function(dt)
+            -- this script's onInit/onLoad run before the HUD's script is loaded
+            if hud ~= nil and I.FNVHud ~= nil then updateHud() end
             if weapon == nil or core.isWorldPaused() then return end
             if types.Actor.getStance(self) ~= types.Actor.STANCE.Nothing then
                 types.Actor.setStance(self, types.Actor.STANCE.Nothing)

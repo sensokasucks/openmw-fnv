@@ -7,6 +7,8 @@ local types = require('openmw.types')
 local ui = require('openmw.ui')
 local I = require('openmw.interfaces')
 
+local keys = require('scripts.omw.fnvhud.keys')
+
 -- A notice in the FNV HUD's corner (scripts/omw/fnvhud/player.lua), else a message box.
 local function notify(text, duration)
     if I.FNVHud then
@@ -37,9 +39,9 @@ return {
                 print('[obscript] ShowMessage: unknown message editor id: ' .. tostring(data.editorId))
                 return
             end
-            local text = formatMessage(msg.text or '', data.args or {})
+            local text = keys.expand(formatMessage(msg.text or '', data.args or {}))
             if msg.title and msg.title ~= '' then
-                text = msg.title .. '\n' .. text
+                text = keys.expand(msg.title) .. '\n' .. text
             end
             if #msg.buttons > 0 then
                 -- a blocking box; GetButtonPressed reads the answer

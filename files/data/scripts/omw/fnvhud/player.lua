@@ -30,6 +30,8 @@ local ui = require('openmw.ui')
 local util = require('openmw.util')
 local I = require('openmw.interfaces')
 
+local keys = require('scripts.omw.fnvhud.keys')
+
 if core.obscript == nil or not (core.contentFiles.has('falloutnv.esm') or core.contentFiles.has('fallout3.esm')) then
     return {}
 end
@@ -165,7 +167,7 @@ local function notify(message, options)
     local duration = tonumber(options.duration)
     if duration == nil or duration <= 0 then duration = NOTICE_TIME end
     notices[#notices + 1] = {
-        text = tostring(message), time = duration, sound = noticeSound(options.kind or 'message'),
+        text = keys.expand(tostring(message)), time = duration, sound = noticeSound(options.kind or 'message'),
     }
 end
 
@@ -466,7 +468,8 @@ local function updatePrompt()
             y = y + 20
         end
         if verb then
-            content[#content + 1] = text { text = 'E) ' .. verb, position = v2(0, y), autoSize = false,
+            local activateKey = keys.key('Activate') or 'E'
+            content[#content + 1] = text { text = activateKey .. ') ' .. verb, position = v2(0, y), autoSize = false,
                 size = v2(400, 22), textAlignH = ui.ALIGNMENT.Center }
             y = y + 22
         end
