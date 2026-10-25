@@ -108,6 +108,7 @@ namespace ESM4
         QuestData mData;
 
         std::vector<TargetCondition> mTargetConditions;
+        std::vector<DialogCondition> mDialogConditions; // FO3/FONV quest-level CTDA: every INFO of the quest needs them
 
         ScriptDefinition mScript;
 

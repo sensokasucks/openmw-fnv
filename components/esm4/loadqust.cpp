@@ -96,7 +96,10 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     else if (target)
                         addDialogCondition(reader, target->mConditions, cond, true);
                     else
+                    {
+                        addDialogCondition(reader, mDialogConditions, cond, true);
                         mTargetConditions.push_back(cond);
+                    }
                 }
                 else
                 {

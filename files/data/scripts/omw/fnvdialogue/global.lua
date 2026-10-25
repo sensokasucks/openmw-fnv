@@ -521,12 +521,18 @@ end
 
 -- ---------------------------------------------------------------- INFO selection
 
--- Only lines of running quests are eligible (and lines without a quest).
-local function questAllows(info)
+-- Only lines of running quests are eligible (and lines without a quest), and only
+-- when the quest's own dialogue conditions pass too (WaterBeggars: GetIsID of the
+-- beggar, so no one else begs for water).
+local function questAllows(info, ctx)
     if info.quest == '' then return true end
     local quest = getQuest(info.quest)
     if quest == nil then return true end
-    return questState(quest).running == true
+    if questState(quest).running ~= true then return false end
+    if ctx and quest.conditions and #quest.conditions > 0 then
+        return (conditions.evaluate(quest.conditions, ctx))
+    end
+    return true
 end
 
 local function infoText(info)
@@ -561,7 +567,7 @@ local function pickInfoFor(topic, speaker, actor, target)
         if randoms and not random then
             break -- the pool ended without a Random End line
         end
-        if questAllows(info) and available(info) then
+        if questAllows(info, ctx) and available(info) then
             local passed, failed, value = conditions.evaluate(info.conditions, ctx)
             if passed then
                 if not random then
@@ -989,6 +995,15 @@ local function sayLine(speaker, target, topicIdOrEditorId, afterward)
         log('SayTo: unknown topic ' .. tostring(topicIdOrEditorId))
         return false
     end
+    -- Object scripts reach this a frame late, so a trigger's OnTriggerEnter and OnTrigger
+    -- blocks can both ask for the line before either sees what it changed (VCG02SunnyBark);
+    -- a SayTo of the topic the speaker is still saying is the same request.
+    for _, line in ipairs(speaking) do
+        if line.speaker == speaker and not line.interrupted and line.info.topic == topic.id then
+            tlog(('SayTo: %s is already saying %s'):format(actor.editorId, topic.editorId))
+            return false
+        end
+    end
     local info = pickInfoFor(topic, speaker, actor, target or world.players[1])
     if info == nil then
         tlog('SayTo: ' .. actor.editorId .. ' has no line for ' .. topic.editorId)
@@ -1377,6 +1392,20 @@ obs.bind('RemoveItem', function(a, b, c)
         local found = types.Actor.inventory(target):find(recordId)
         if found then found:remove(math.max(1, math.floor(tonumber(count) or 1))) end
     end)
+    return 0
+end)
+
+-- `player.EquipItem Item`: the player readies an FNV weapon (scripts/omw/fnvcombat/player.lua). Worn items
+-- (Pip-Boy, armor, clothing) have no ESM4 equipment slots for the player yet, so they stay in the inventory.
+obs.bind('EquipItem', function(a, b)
+    local ref, item = nil, a
+    if type(a) == 'string' and type(b) == 'string' then ref, item = a, b end
+    local target = speakerOr(ref)
+    if not isPlayer(target) or type(item) ~= 'string' then
+        tlog('EquipItem on a non-player is ignored: ' .. tostring(item))
+        return 0
+    end
+    target:sendEvent('FNVEquipItem', { item = item })
     return 0
 end)
 
@@ -1878,7 +1907,9 @@ local function sendScreen(text)
         notices = s.notices,
         -- a Goodbye line with nothing to answer closes by itself once said (the game is
         -- paused in the window, so the player script times it)
-        autoClose = (s.goodbye and #list == 0 and text ~= '') and lineDuration(text) or nil,
+        autoClose = (s.goodbye and not s.continuing and #list == 0 and text ~= '') and lineDuration(text) or nil,
+        -- a line with a follow-up goes on by itself once said (FNVDialogueContinue)
+        autoContinue = s.continuing and lineDuration(text) or nil,
         speakerObject = s.speaker,
     })
     s.notices = {}
@@ -1904,6 +1935,7 @@ local function say(info, topic)
     runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin', s.speaker)
     if session == nil then return end -- a script ended the conversation
     s.saying = info
+    s.lastInfo = info
     stopSpeaking(s.speaker)
     startSpeech(s.speaker, info, false, nil)
     if hasFlag(info.flags, INFO_RUN_IMMEDIATELY) then
@@ -1911,13 +1943,48 @@ local function say(info, topic)
         if session == nil then return end
     end
     s.goodbye = hasFlag(info.flags, INFO_GOODBYE)
-    s.options = buildOptions(info)
+    -- with follow-ups the answers come after the last of them (continueLine)
+    s.continuing = #(info.followUps or {}) > 0
+    s.options = s.continuing and {} or buildOptions(info)
     sendScreen(infoText(info))
+end
+
+-- Follow-up INFOs (TCFU): once a line is over the speaker goes on with the
+-- first of them that may be said, before the player answers. Inferred from
+-- FalloutNV.esm: Doc Mitchell's farewell chains GREETING 001057E8 -> 001057E4
+-- -> 001057E5 (female) / 001057E6 (male), and only the last ones have choices.
+local function pickFollowUp(info)
+    local s = session
+    local ctx = makeContext(s.speaker, s.player)
+    for _, id in ipairs(info.followUps or {}) do
+        local follow = dlg.getInfo(id)
+        if follow and questAllows(follow, ctx) and available(follow) and (conditions.evaluate(follow.conditions, ctx)) then
+            return follow
+        end
+    end
+    return nil
+end
+
+local moveOn
+
+local function continueLine()
+    local s = session
+    if s == nil or not s.continuing then return end
+    s.continuing = false
+    local info = s.saying or s.lastInfo
+    if moveOn() or session == nil then return end
+    local follow = info and pickFollowUp(info)
+    if follow then
+        say(follow, getTopic(follow.topic))
+        return
+    end
+    s.options = buildOptions(info)
+    sendScreen(info and infoText(info) or '')
 end
 
 -- Ends the current line; true when its end script started another topic,
 -- which is then said instead of whatever the player picked.
-local function moveOn()
+moveOn = function()
     finishLine()
     local s = session
     if s == nil then return true end
@@ -2176,6 +2243,12 @@ return {
             initState()
             runScript(source, label, subject)
         end,
+        --- Marks a Say Once INFO (form id, e.g. FormId:0x210558f) as said, as if the
+        -- conversation that says it had happened; for tests that jump ahead in a quest.
+        markInfoSaid = function(infoId)
+            initState()
+            state.saidOnce[infoId] = true
+        end,
         --- Opens dialogue between the NPC and the player (Dialogue AI packages);
         -- topic: form id or editor id, nil for the greeting. False when a
         -- conversation is already going on.
@@ -2200,6 +2273,10 @@ return {
         FNVDialogueChoose = function(data)
             local s = session
             if s == nil then return end
+            if s.continuing then -- answering while a follow-up is due skips ahead to it
+                continueLine()
+                return
+            end
             local option = s.options[data.index]
             if moveOn() then return end
             if option == nil then
@@ -2208,6 +2285,7 @@ return {
             end
             say(option.info, option.topic)
         end,
+        FNVDialogueContinue = continueLine,
         FNVDialogueClose = function()
             if session then finishLine() end
             session = nil

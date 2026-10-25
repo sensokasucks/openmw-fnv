@@ -308,6 +308,7 @@ namespace MWLua
             res["scriptEnd"] = info.mScriptEnd.scriptSource;
             res["choices"] = makeFormList(lua, info.mChoices);
             res["linkFrom"] = makeFormList(lua, info.mLinkFrom);
+            res["followUps"] = makeFormList(lua, info.mFollowUps);
             res["addTopics"] = makeFormList(lua, info.mAddTopics);
             return res;
         }
@@ -350,6 +351,7 @@ namespace MWLua
             res["startGameEnabled"] = (quest.mData.flags & ESM4::Quest::Flag_StartGameEnabled) != 0;
             res["allowRepeatedStages"] = (quest.mData.flags & ESM4::Quest::Flag_AllowRepeatStages) != 0;
             res["delay"] = quest.mData.questDelay; // seconds between script runs; 0 = fQuestScriptDelayTime
+            res["conditions"] = makeConditions(lua, quest.mDialogConditions);
             sol::table objectives(lua, sol::create);
             for (size_t i = 0; i < quest.mObjectives.size(); ++i)
             {
@@ -436,6 +438,16 @@ namespace MWLua
                 if (mayBeSpokenBy(*info, speakerId))
                     res[LuaUtil::toLuaIndex(n++)] = makeInfo(lua, *info);
             return res;
+        };
+
+        // One INFO by form id (follow-up INFOs, TCFU); nil if unknown.
+        api["getInfo"] = [](std::string_view infoId, sol::this_state s) -> sol::object {
+            sol::state_view lua(s);
+            const ESM4::DialogInfo* info = MWBase::Environment::get().getESMStore()->get<ESM4::DialogInfo>().search(
+                ESM::RefId(parseFormId(infoId)));
+            if (info == nullptr)
+                return sol::nil;
+            return makeInfo(lua, *info);
         };
 
         // Top-level topics that have at least one INFO this speaker may say.

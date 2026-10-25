@@ -83,10 +83,12 @@ end
 local optionCount = 0
 local closeAt = nil -- real time to close a Goodbye line with nothing to answer
 local closeSpeaker = nil
+local continueAt = nil -- real time to go on with a follow-up line
 
 local function show(data)
     optionCount = #(data.options or {})
     closeAt = data.autoClose and (core.getRealTime() + data.autoClose) or nil
+    continueAt = data.autoContinue and (core.getRealTime() + data.autoContinue) or nil
     closeSpeaker = data.speakerObject
     destroyWindow()
     if not open then
@@ -118,6 +120,13 @@ local function show(data)
     for i, text in ipairs(data.options or {}) do
         content:add(optionLine(i .. '. ' .. text, function()
             core.sendGlobalEvent('FNVDialogueChoose', { index = i })
+        end))
+        content:add(gap(4))
+    end
+    if data.autoContinue then
+        content:add(optionLine('Continue', function()
+            continueAt = nil
+            core.sendGlobalEvent('FNVDialogueContinue')
         end))
         content:add(gap(4))
     end
@@ -154,6 +163,13 @@ end
 return {
     engineHandlers = {
         onFrame = function()
+            if open and continueAt ~= nil and core.getRealTime() >= continueAt then
+                local ok, talking = pcall(core.sound.isSayActive, closeSpeaker)
+                if not (ok and talking) then
+                    continueAt = nil
+                    core.sendGlobalEvent('FNVDialogueContinue')
+                end
+            end
             if not open or closeAt == nil or core.getRealTime() < closeAt then return end
             -- wait for the voice too, when there is one
             local ok, talking = pcall(core.sound.isSayActive, closeSpeaker)

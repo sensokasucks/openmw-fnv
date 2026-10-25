@@ -232,6 +232,12 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 else
                     reader.skipSubRecordData();
                 break;
+            case ESM::fourCC("TCFU"): // FONV follow-up INFO
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mFollowUps.emplace_back());
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("PNAM"): // FO3/FONV previous INFO (TES4 DLC: unknown)
                 if (subHdr.dataSize == 4)
                     reader.getFormId(mPrevInfo);
@@ -253,7 +259,6 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             case ESM::fourCC("DNAM"): // FO3 speech challenge
             case ESM::fourCC("KNAM"): // FO3 formid
             case ESM::fourCC("LNAM"): // FONV
-            case ESM::fourCC("TCFU"): // FONV
             case ESM::fourCC("TIFC"): // TES5
             case ESM::fourCC("TWAT"): // TES5
             case ESM::fourCC("CIS1"): // TES5

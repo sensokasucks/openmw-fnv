@@ -117,6 +117,7 @@ namespace ESM4
         std::vector<DialogResponse> mResponses; // all responses, in order
         std::vector<ESM::FormId> mChoices; // FO3/FONV TCLT: topics offered after this INFO
         std::vector<ESM::FormId> mLinkFrom; // FO3/FONV TCLF
+        std::vector<ESM::FormId> mFollowUps; // FONV TCFU: INFOs the speaker goes on with after this one
         std::vector<ESM::FormId> mAddTopics; // NAME
         std::uint32_t mLoadIndex = 0; // order in which INFO records were read (file order)
 
