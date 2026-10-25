@@ -147,6 +147,12 @@ end
 -- ---------------------------------------------------------------- queries
 -- Answered here, on this object or another reference.
 
+-- The form id of a placed reference; nil for objects created in game.
+local function referenceId(obj)
+    local ok, id = pcall(core.obscript.dialogue.getReferenceId, obj)
+    return ok and id or nil
+end
+
 local function refObject(ref)
     if isObject(ref) then return ref end
     if type(ref) ~= 'string' then return nil end
@@ -157,7 +163,7 @@ local function refObject(ref)
     if formId == nil then return nil end
     for _, list in ipairs({ nearby.actors, nearby.items, nearby.activators, nearby.doors, nearby.containers }) do
         for _, obj in ipairs(list) do
-            if tostring(obj.id) == formId or core.obscript.dialogue.getReferenceId(obj) == formId then
+            if referenceId(obj) == formId then
                 return obj
             end
         end
@@ -217,7 +223,7 @@ obs.bind('GetLinkedRef', function(...)
     if not linked then return 0 end
     for _, list in ipairs({ nearby.actors, nearby.items, nearby.activators, nearby.doors, nearby.containers }) do
         for _, o in ipairs(list) do
-            if core.obscript.dialogue.getReferenceId(o) == linked then return o end
+            if referenceId(o) == linked then return o end
         end
     end
     return 0

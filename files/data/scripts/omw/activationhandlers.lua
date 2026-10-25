@@ -104,7 +104,8 @@ local function ESM4FurnitureActivation(furniture, actor)
     local yawRotation = util.transform.rotateZ(furniture.rotation:getYaw() + yaw)
     seatedActors[actor.id] = { cell = actor.cell, position = actor.position, rotation = actor.rotation,
         furniture = furniture }
-    furnitureSection:set(tostring(actor.id), core.obscript and core.obscript.dialogue.getReferenceId(furniture) or '')
+    local ok, furnitureId = pcall(function() return core.obscript.dialogue.getReferenceId(furniture) end)
+    furnitureSection:set(tostring(actor.id), ok and furnitureId or '')
     Furniture4._setActorCollision(actor, false)
     actor:teleport(furniture.cell, furniture.position + furniture.rotation:apply(seat * furniture.scale),
         { rotation = yawRotation, onGround = false })

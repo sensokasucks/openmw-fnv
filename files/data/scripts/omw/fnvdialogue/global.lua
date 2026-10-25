@@ -233,6 +233,12 @@ local function objectForRunOn(cond, subject, target)
     return nil
 end
 
+-- The form id of a placed reference; nil for objects created in game.
+local function referenceId(obj)
+    local ok, id = pcall(dlg.getReferenceId, obj)
+    return ok and id or nil
+end
+
 local function isPlayer(obj)
     return obj ~= nil and types.Player.objectIsInstance(obj)
 end
@@ -261,7 +267,7 @@ end
 functions[136] = function(cond, obj) -- GetIsReference
     if isPlayer(obj) then return formIndex(cond.param1) == 0x14 end
     if formIndex(cond.param1) == 0x14 then return false end
-    return obj ~= nil and dlg.getReferenceId(obj) == cond.param1Form
+    return obj ~= nil and referenceId(obj) == cond.param1Form
 end
 functions[58] = function(cond) -- GetStage
     local quest = getQuest(cond.param1Form)
@@ -333,7 +339,7 @@ functions[73] = function(cond, obj) -- GetFactionRank
 end
 functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
-    return state.talkedTo[dlg.getReferenceId(obj)] == true
+    return state.talkedTo[referenceId(obj)] == true
 end
 local function isDead(obj)
     local c = I.FNVCombat
@@ -2184,7 +2190,8 @@ return {
         end,
         ObScriptLocals = function(data)
             if data.object == nil or not data.object:isValid() then return end
-            local key = dlg.getReferenceId(data.object)
+            local key = referenceId(data.object)
+            if key == nil then return end
             refVars[key] = { script = data.script, locals = data.locals }
             refVarSection:set(key, data.locals)
         end,
