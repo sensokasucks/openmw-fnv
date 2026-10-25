@@ -16,19 +16,28 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadachr.hpp>
+#include <components/esm4/loadacti.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadbook.hpp>
 #include <components/esm4/loadclot.hpp>
+#include <components/esm4/loadcont.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadkeym.hpp>
+#include <components/esm4/loadligh.hpp>
+#include <components/esm4/loadlvlc.hpp>
+#include <components/esm4/loadlvln.hpp>
 #include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
+#include <components/esm4/loadmstt.hpp>
 #include <components/esm4/loadnote.hpp>
+#include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscpt.hpp>
+#include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
@@ -131,6 +140,42 @@ namespace MWLua
                 addAll(store.get<ESM4::MiscItem>());
                 addAll(store.get<ESM4::Potion>());
                 addAll(store.get<ESM4::Weapon>());
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // Base records that can be placed in the world (`PlaceAtMe <EditorId>`): items, actors, leveled
+        // actors and placeable objects.
+        api["resolveBaseEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+                auto addAll = [&](const auto& s) {
+                    for (size_t i = 0; i < s.getSize(); ++i)
+                    {
+                        const auto& record = *s.at(i);
+                        if (!record.mEditorId.empty())
+                            res.emplace(Misc::StringUtils::lowerCase(record.mEditorId), ESM::RefId(record.mId));
+                    }
+                };
+                addAll(store.get<ESM4::Ammunition>());
+                addAll(store.get<ESM4::Armor>());
+                addAll(store.get<ESM4::Book>());
+                addAll(store.get<ESM4::Ingredient>());
+                addAll(store.get<ESM4::Key>());
+                addAll(store.get<ESM4::MiscItem>());
+                addAll(store.get<ESM4::Potion>());
+                addAll(store.get<ESM4::Weapon>());
+                addAll(store.get<ESM4::Npc>());
+                addAll(store.get<ESM4::Creature>());
+                addAll(store.get<ESM4::LevelledNpc>());
+                addAll(store.get<ESM4::LevelledCreature>());
+                addAll(store.get<ESM4::Activator>());
+                addAll(store.get<ESM4::Container>());
+                addAll(store.get<ESM4::Light>());
+                addAll(store.get<ESM4::Static>());
+                addAll(store.get<ESM4::MovableStatic>());
                 return res;
             }();
             return resolve(index, editorId);

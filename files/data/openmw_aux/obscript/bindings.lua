@@ -144,11 +144,100 @@ obs._publishLocals = function(entry, dt)
     end
 end
 
+-- ---------------------------------------------------------------- queries
+-- Answered here, on this object or another reference.
+
+local function refObject(ref)
+    if isObject(ref) then return ref end
+    if type(ref) ~= 'string' then return nil end
+    local key = ref:lower()
+    if key == 'player' or key == 'playerref' then return player() end
+    -- a reference this local script can see
+    local formId = core.obscript.resolveRefEditorId(ref)
+    if formId == nil then return nil end
+    for _, list in ipairs({ nearby.actors, nearby.items, nearby.activators, nearby.doors, nearby.containers }) do
+        for _, obj in ipairs(list) do
+            if tostring(obj.id) == formId or core.obscript.dialogue.getReferenceId(obj) == formId then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+-- (ref, rest...) for `Ref.Cmd a b` and `Cmd a b` (on this object)
+local function refAndArgs(...)
+    if obs._callBase ~= nil then
+        return refObject(select(1, ...)), select(2, ...)
+    end
+    return self.object, ...
+end
+
+obs.bind('GetDead', function(...)
+    local obj = refAndArgs(...)
+    if obj == nil then return 0 end
+    if types.Player.objectIsInstance(obj) then return types.Actor.isDead(obj) and 1 or 0 end
+    local ok, dead = pcall(core.obscript.combat.isDead, obj)
+    return (ok and dead) and 1 or 0
+end)
+obs.bind('GetDisabled', function(...)
+    local obj = refAndArgs(...)
+    return (obj ~= nil and not obj.enabled) and 1 or 0
+end)
+obs.bind('GetItemCount', function(...)
+    local obj, item = refAndArgs(...)
+    local recordId = type(item) == 'string' and core.obscript.resolveItemEditorId(item)
+    if obj == nil or not recordId then return 0 end
+    local ok, count = pcall(function()
+        local inventory = types.Actor.objectIsInstance(obj) and types.Actor.inventory(obj)
+            or types.Container.inventory(obj)
+        return inventory:countOf(recordId)
+    end)
+    return ok and count or 0
+end)
+obs.bind('GetRandomPercent', function() return math.random(0, 99) end)
+obs.bind('GetSelf', function(...)
+    local obj = refAndArgs(...)
+    return obj or 0
+end)
+obs.bind('GetDistance', function(...)
+    local obj, other = refAndArgs(...)
+    other = refObject(other)
+    if obj == nil or other == nil or obj.cell == nil or other.cell == nil or obj.cell.id ~= other.cell.id then return 999999 end
+    return (obj.position - other.position):length()
+end)
+obs.bind('GetIsReference', function(...)
+    local obj, other = refAndArgs(...)
+    other = refObject(other)
+    return (obj ~= nil and obj == other) and 1 or 0
+end)
+obs.bind('GetLinkedRef', function(...)
+    local obj = refAndArgs(...)
+    local linked = obj and core.obscript.getLinkedRef(obj)
+    if not linked then return 0 end
+    for _, list in ipairs({ nearby.actors, nearby.items, nearby.activators, nearby.doors, nearby.containers }) do
+        for _, o in ipairs(list) do
+            if core.obscript.dialogue.getReferenceId(o) == linked then return o end
+        end
+    end
+    return 0
+end)
+obs.bind('GetLocked', function(...)
+    local obj = refAndArgs(...)
+    local ok, locked = pcall(types.Lockable.isLocked, obj)
+    return (ok and locked) and 1 or 0
+end)
+obs.bind('GetCurrentTime', function()
+    return core.obscript.getGameDate().hour
+end)
+
 -- Commands the global script carries out, with this object as the subject
 -- of reference-less forms (`SayTo player Topic` on an NPC's own script).
 for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 'SetQuestDelay',
     'SetObjectiveDisplayed', 'SetObjectiveCompleted', 'SayTo', 'Say', 'StartConversation', 'ForceGreet',
     'EvaluatePackage', 'EVP', 'ResetAI', 'DisablePlayerControls', 'EnablePlayerControls',
+    'StartCombat', 'StopCombat', 'KillActor', 'Lock', 'Unlock', 'MarkForDelete', 'RemoveMe', 'PlaceAtMe',
+    'MoveTo', 'MoveToMarker', 'MoveToMarkerWithFade', 'AddTopic',
     'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
     obs.bind(name, function(...)

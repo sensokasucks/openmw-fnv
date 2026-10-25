@@ -1028,7 +1028,7 @@ local function tickGreetings(dt)
     local distance = gmst('fAIMinGreetingDistance', 150)
     local cooldown = gmst('fAIGreetingTimer', 20)
     for _, npc in ipairs(world.activeActors) do
-        if types.ESM4NPC.objectIsInstance(npc) and npc.cell == player.cell
+        if types.ESM4NPC.objectIsInstance(npc) and npc.cell and player.cell and npc.cell.id == player.cell.id
             and (npc.position - player.position):length() <= distance
             and simTime - (lastHello[npc.id] or -cooldown) >= cooldown
             and not isSpeaking(npc) and not isDead(npc)
@@ -1498,6 +1498,136 @@ obs.bind('MoveTo', moveTo)
 obs.bind('MoveToMarker', moveTo)
 obs.bind('MoveToMarkerWithFade', moveTo)
 
+-- ---------------------------------------------------- more commands, by how often FNV uses them
+
+local function combatApi(name)
+    return I.FNVCombat and I.FNVCombat[name]
+end
+
+-- `Ref.StartCombat Target` / `StopCombat`
+obs.bind('StartCombat', function(...)
+    local actor, target = refAndArgs(...)
+    local start = combatApi('startCombat')
+    target = resolveObject(target) or world.players[1]
+    if actor and target and start then start(actor, target) end
+    return 0
+end)
+obs.bind('StopCombat', function(...)
+    local actor = refAndArgs(...)
+    local stop = combatApi('stopCombat')
+    if actor and stop then stop(actor) end
+    return 0
+end)
+obs.bind('IsInCombat', function(...)
+    local actor = refAndArgs(...)
+    local check = combatApi('isInCombat')
+    return (actor and check and check(actor)) and 1 or 0
+end)
+obs.bind('GetCombatTarget', function(...)
+    local actor = refAndArgs(...)
+    local get = combatApi('getTarget')
+    return actor and get and get(actor) or 0
+end)
+-- `Ref.KillActor [Killer]`
+obs.bind('KillActor', function(...)
+    local actor = refAndArgs(...)
+    local kill = combatApi('kill')
+    if actor and kill and not isDead(actor) then kill(actor) end
+    return 0
+end)
+
+-- `Ref.Lock [level]` / `Ref.Unlock`
+obs.bind('Lock', function(...)
+    local obj, level = refAndArgs(...)
+    if obj then pcall(types.Lockable.lock, obj, math.floor(tonumber(level) or 0)) end
+    return 0
+end)
+obs.bind('Unlock', function(...)
+    local obj = refAndArgs(...)
+    if obj then pcall(types.Lockable.unlock, obj) end
+    return 0
+end)
+obs.bind('GetLocked', function(...)
+    local obj = refAndArgs(...)
+    local ok, locked = pcall(types.Lockable.isLocked, obj)
+    return (ok and locked) and 1 or 0
+end)
+
+-- MarkForDelete and RemoveMe: the reference goes away (at once here; the
+-- original waits until it is unloaded).
+local function removeRef(...)
+    local obj = refAndArgs(...)
+    if obj and obj:isValid() and not isPlayer(obj) then
+        pcall(function() obj:remove() end)
+    end
+    return 0
+end
+obs.bind('MarkForDelete', removeRef)
+obs.bind('RemoveMe', removeRef)
+
+-- `Ref.PlaceAtMe Base [count]`: new objects at the reference; returns the last one.
+obs.bind('PlaceAtMe', function(...)
+    local anchor, base, count = refAndArgs(...)
+    local recordId = type(base) == 'string' and core.obscript.resolveBaseEditorId(base)
+    if anchor == nil or not recordId or anchor.cell == nil then
+        tlog('PlaceAtMe: unknown object ' .. tostring(base))
+        return 0
+    end
+    local placed = 0
+    for _ = 1, math.max(1, math.floor(tonumber(count) or 1)) do
+        local ok, obj = pcall(world.createObject, recordId, 1)
+        if ok and obj then
+            obj:teleport(anchor.cell, anchor.position, { rotation = anchor.rotation })
+            placed = obj
+        end
+    end
+    return placed
+end)
+
+-- `Ref.GetItemCount Item`
+obs.bind('GetItemCount', function(...)
+    local obj, item = refAndArgs(...)
+    local recordId = type(item) == 'string' and core.obscript.resolveItemEditorId(item)
+    if obj == nil or not recordId then return 0 end
+    local ok, count = pcall(function()
+        local inventory = types.Actor.objectIsInstance(obj) and types.Actor.inventory(obj)
+            or types.Container.inventory(obj)
+        return inventory:countOf(recordId)
+    end)
+    return ok and count or 0
+end)
+
+obs.bind('GetRandomPercent', function() return math.random(0, 99) end)
+obs.bind('GetCurrentTime', function() return clockValue('gamehour') end)
+
+-- `Ref.GetSelf`: the reference the script runs on.
+obs.bind('GetSelf', function(...)
+    local obj = refAndArgs(...)
+    return obj or 0
+end)
+
+-- `Ref.GetIsReference Other`
+obs.bind('GetIsReference', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    return (obj ~= nil and other ~= nil and obj == other) and 1 or 0
+end)
+
+-- `Ref.GetDistance Other`: distance in the same cell, else very far.
+obs.bind('GetDistance', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    if obj == nil or other == nil or obj.cell == nil or other.cell == nil or obj.cell.id ~= other.cell.id then
+        return 999999
+    end
+    return (obj.position - other.position):length()
+end)
+obs.bind('GetInSameCell', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    return (obj ~= nil and other ~= nil and obj.cell ~= nil and other.cell ~= nil and obj.cell.id == other.cell.id) and 1 or 0
+end)
+
 obs.bind('player', function() return 'player' end)
 
 -- Menus the intro and many conversations open; not implemented yet. The
@@ -1680,6 +1810,9 @@ local forwardedCommands = {
     setobjectivedisplayed = true, setobjectivecompleted = true,
     sayto = true, say = true, startconversation = true, forcegreet = true, evaluatepackage = true, evp = true, resetai = true,
     disableplayercontrols = true, enableplayercontrols = true,
+    startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
+    markfordelete = true, removeme = true, placeatme = true, moveto = true, movetomarker = true,
+    movetomarkerwithfade = true, addtopic = true, showmessage = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
     showtagskillmenu = true, settagskills = true, showtraitmenu = true, showlovetestermenuparams = true,
 }
