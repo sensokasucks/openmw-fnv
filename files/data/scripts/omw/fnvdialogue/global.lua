@@ -893,7 +893,8 @@ local function startSpeech(speaker, info, subtitles, onDone)
     return line
 end
 
-local function sayLine(speaker, target, topicIdOrEditorId)
+-- `afterward(info)`, if given, runs once the line is over.
+local function sayLine(speaker, target, topicIdOrEditorId, afterward)
     local actor = dlg.getActor(speaker)
     if actor == nil then
         tlog('SayTo: ' .. tostring(speaker) .. ' is not an NPC')
@@ -926,8 +927,31 @@ local function sayLine(speaker, target, topicIdOrEditorId)
         if speaker:isValid() then
             speaker:sendEvent('ObScriptEvent', { event = 'SayToDone', ref = topic.editorId })
         end
+        if afterward then afterward(info) end
     end)
     return true
+end
+
+-- A conversation between two NPCs (StartConversation without the player):
+-- they take turns, each answering with the first of the previous line's
+-- choices (TCLT) that has a line for them, until a line has no choices or is
+-- a Goodbye. The original also walks them to each other first (inferred: a
+-- conversation package); here they talk where they stand.
+local function converse(speaker, listener, topicIdOrEditorId)
+    local function turn(a, b, topicId)
+        return sayLine(a, b, topicId, function(info)
+            if hasFlag(info.flags, INFO_GOODBYE) or not (a:isValid() and b:isValid()) then return end
+            for _, choice in ipairs(info.choices) do
+                local topic = getTopic(choice)
+                local actor = dlg.getActor(b)
+                if topic and actor and pickInfoFor(topic, b, actor, a) then
+                    turn(b, a, choice)
+                    return
+                end
+            end
+        end)
+    end
+    return turn(speaker, listener, topicIdOrEditorId)
 end
 
 local function lineOver(line, dt)
@@ -1338,8 +1362,8 @@ obs.bind('StartConversation', function(...)
     local targetObj = resolveObject(target)
     if speaker and isPlayer(targetObj) then
         startDialogue(speaker, targetObj, topic)
-    else
-        tlog('StartConversation between NPCs is not done yet')
+    elseif speaker and targetObj and topic then
+        converse(speaker, targetObj, topic)
     end
     return 0
 end)
