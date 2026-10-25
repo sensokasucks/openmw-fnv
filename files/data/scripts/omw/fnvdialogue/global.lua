@@ -385,6 +385,27 @@ functions[462] = function(cond) -- IsPlayerTagSkill
     return false
 end
 
+functions[5] = function(_, obj) -- GetLocked
+    local ok, locked = pcall(types.Lockable.isLocked, obj)
+    return ok and locked == true
+end
+functions[32] = function(cond, obj) -- GetInSameCell
+    local ok, other = pcall(world.getObjectByFormId, cond.param1Form)
+    if formIndex(cond.param1) == 0x14 then ok, other = true, world.players[1] end
+    return obj ~= nil and ok and other ~= nil and obj.cell ~= nil and other.cell ~= nil and obj.cell.id == other.cell.id
+end
+functions[289] = function(_, obj) -- IsInCombat
+    local c = I.FNVCombat
+    return obj ~= nil and c ~= nil and c.isInCombat ~= nil and c.isInCombat(obj) == true
+end
+local isSpeaking -- forward (spoken lines below)
+functions[141] = function(_, obj) -- IsTalking
+    return obj ~= nil and (isSpeaking(obj) or (session ~= nil and session.speaker == obj))
+end
+functions[64] = function(_, obj) -- GetIsCreature
+    return obj ~= nil and types.ESM4Creature ~= nil and types.ESM4Creature.objectIsInstance(obj)
+end
+
 -- GetDeadCount: deaths of actors with this base record seen so far (see trackDeaths)
 functions[84] = function(cond)
     return state.deadCounts and state.deadCounts[cond.param1Form] or 0
@@ -459,8 +480,8 @@ functions[474] = function(cond, obj) -- GetIsAlignment 0 good, 1 neutral, 2 evil
     return characterRules.alignmentOf(stats.get(obj, 'Karma'), character.gmst) == cond.param1
 end
 -- states the engine does not track for ESM4 actors yet: always "no"
-for _, f in ipairs({ 36, 45, 49, 61, 63, 64, 91, 98, 101, 125, 141, 159, 182, 224, 242, 286, 289, 309, 354,
-    365, 382, 435, 436, 454, 455, 523, 586, 619 }) do
+for _, f in ipairs({ 36, 45, 49, 61, 63, 91, 98, 101, 125, 159, 182, 224, 242, 286, 309, 354, 365, 382, 435, 436, 454, 455,
+    523, 586, 619 }) do
     functions[f] = function() return 0 end
 end
 
@@ -1039,7 +1060,7 @@ local function tickSpeaking(dt)
     end
 end
 
-local function isSpeaking(obj)
+isSpeaking = function(obj)
     for _, line in ipairs(speaking) do
         if line.speaker == obj then return true end
     end
