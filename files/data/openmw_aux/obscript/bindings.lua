@@ -350,9 +350,10 @@ end)
 -- AddItem on the player: resolve the item editor id and ask the global
 -- obscript handler to create and move the items. Other targets come with
 -- ref resolution later.
-obs.bind('AddItem', function(ref, item, count)
+obs.bind('AddItem', function(ref, item, count, hideMessage)
     if type(ref) == 'string' and ref:lower() == 'player' and type(item) == 'string' then
-        core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1 })
+        core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1,
+            silent = hideMessage ~= nil and obs.b(hideMessage) })
     end
     return 0
 end)

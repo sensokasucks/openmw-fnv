@@ -298,6 +298,18 @@ namespace MWLua
                 sol::table o(lua, sol::create);
                 o["index"] = quest.mObjectives[i].mIndex;
                 o["text"] = quest.mObjectives[i].mText;
+                // compass targets: { ref = reference form id, ignoresLocks, conditions }
+                sol::table targets(lua, sol::create);
+                for (size_t j = 0; j < quest.mObjectives[i].mTargets.size(); ++j)
+                {
+                    const ESM4::QuestTarget& target = quest.mObjectives[i].mTargets[j];
+                    sol::table t(lua, sol::create);
+                    t["ref"] = formIdText(target.mTarget);
+                    t["ignoresLocks"] = (target.mFlags & ESM4::QuestTarget::Flag_IgnoresLocks) != 0;
+                    t["conditions"] = makeConditions(lua, target.mConditions);
+                    targets[LuaUtil::toLuaIndex(j)] = t;
+                }
+                o["targets"] = targets;
                 objectives[LuaUtil::toLuaIndex(i)] = o;
             }
             res["objectives"] = objectives;

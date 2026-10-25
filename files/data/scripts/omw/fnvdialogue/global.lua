@@ -1047,22 +1047,12 @@ obs.bind('GetQuestCompleted', function(q)
     return (quest and questState(quest).completed) and 1 or 0
 end)
 
-local function objectiveText(quest, index)
-    for _, o in ipairs(quest.objectives) do
-        if o.index == index then return o.text end
-    end
-    return ''
-end
-
 obs.bind('SetObjectiveDisplayed', function(q, index, flag)
     local quest = questArg(q)
     index = math.floor(tonumber(index) or 0)
     if quest and obs.b(flag or 1) then
+        -- the HUD shows the new objective (scripts/omw/fnvhud/global.lua)
         local o = questState(quest).objectives
-        if o[index] == nil then
-            local text = objectiveText(quest, index)
-            if text ~= '' then playerEvent('ObScriptNotify', { text = text }) end
-        end
         if o[index] ~= 'completed' then o[index] = 'displayed' end
         publishQuest(quest)
     end
@@ -1094,15 +1084,16 @@ end)
 
 -- `player.AddItem Item count` / `AddItem Item count` (the speaker); only the
 -- player's inventory is supported.
-obs.bind('AddItem', function(a, b, c)
-    local ref, item, count = nil, a, b
-    if type(a) == 'string' and type(b) == 'string' then ref, item, count = a, b, c end
+obs.bind('AddItem', function(a, b, c, d)
+    local ref, item, count, hideMessage = nil, a, b, c
+    if type(a) == 'string' and type(b) == 'string' then ref, item, count, hideMessage = a, b, c, d end
     local target = speakerOr(ref)
     if not isPlayer(target) then
         tlog('AddItem to a non-player is ignored: ' .. tostring(item))
         return 0
     end
-    core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1 })
+    core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1,
+        silent = hideMessage ~= nil and obs.b(hideMessage) })
     return 0
 end)
 
