@@ -1310,6 +1310,16 @@ obs.bind('StartConversation', function(...)
     return 0
 end)
 
+-- `Ref.ForceGreet`: the NPC opens dialogue with the player (its greeting).
+obs.bind('ForceGreet', function(...)
+    local speaker = refAndArgs(...)
+    local player = world.players[1]
+    if speaker and player and not session then
+        startDialogue(speaker, player, nil)
+    end
+    return 0
+end)
+
 obs.bind('GetIsID', function(a, b)
     local ref, id = nil, a
     if b ~= nil then ref, id = a, b end
@@ -1434,7 +1444,7 @@ obs.bind('player', function() return 'player' end)
 
 -- Menus the intro and many conversations open; not implemented yet. The
 -- dialogue window reports them so the play-tester sees what was skipped.
-for _, name in ipairs({ 'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel', 'ForceGreet',
+for _, name in ipairs({ 'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel',
     'RewardXP', 'RewardKarma', 'AddPerk', 'ModPCSkill', 'SetEssential', 'SetPlayerTeammate',
     'PlayGroup', 'StartCombat', 'StopCombat', 'SetEnemy', 'SetAlly' }) do
     if obs._bindings[name:lower()] == nil then
@@ -1610,7 +1620,7 @@ end)
 local forwardedCommands = {
     setstage = true, startquest = true, stopquest = true, completequest = true, setquestdelay = true,
     setobjectivedisplayed = true, setobjectivecompleted = true,
-    sayto = true, say = true, startconversation = true, evaluatepackage = true, evp = true, resetai = true,
+    sayto = true, say = true, startconversation = true, forcegreet = true, evaluatepackage = true, evp = true, resetai = true,
     disableplayercontrols = true, enableplayercontrols = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
     showtagskillmenu = true, settagskills = true, showtraitmenu = true, showlovetestermenuparams = true,

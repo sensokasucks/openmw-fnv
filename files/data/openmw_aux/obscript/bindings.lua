@@ -147,7 +147,7 @@ end
 -- Commands the global script carries out, with this object as the subject
 -- of reference-less forms (`SayTo player Topic` on an NPC's own script).
 for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 'SetQuestDelay',
-    'SetObjectiveDisplayed', 'SetObjectiveCompleted', 'SayTo', 'Say', 'StartConversation',
+    'SetObjectiveDisplayed', 'SetObjectiveCompleted', 'SayTo', 'Say', 'StartConversation', 'ForceGreet',
     'EvaluatePackage', 'EVP', 'ResetAI', 'DisablePlayerControls', 'EnablePlayerControls',
     'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
