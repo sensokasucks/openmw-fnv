@@ -35,6 +35,8 @@
 #include <components/esm/formid.hpp>
 #include <components/esm/path.hpp>
 
+#include "loadinfo.hpp" // DialogCondition
+
 namespace ESM4
 {
     class Reader;
@@ -54,7 +56,8 @@ namespace ESM4
         ESM::FormId mDisplayNote; // INAM, NOTE shown (and added when Flag_AddNote)
         ESM::FormId mSubMenu; // TNAM, TERM opened instead
         std::string mScriptSource; // SCTX of the embedded result script
-        bool mHasConditions = false; // CTDA present; conditions are not evaluated yet
+        bool mHasConditions = false; // CTDA present
+        std::vector<DialogCondition> mConditions; // the entry shows only when they pass (run on the terminal)
     };
 
     struct Terminal

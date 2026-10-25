@@ -114,10 +114,20 @@ void ESM4::Terminal::load(ESM4::Reader& reader)
                     reader.getString(mItems.back().mScriptSource);
                 break;
             case ESM::fourCC("CTDA"):
-                if (!mItems.empty())
-                    mItems.back().mHasConditions = true;
-                reader.skipSubRecordData();
+            {
+                if (mItems.empty() || subHdr.dataSize != 28)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                TargetCondition cond;
+                reader.get(cond);
+                if (cond.reference)
+                    reader.adjustFormId(cond.reference);
+                addDialogCondition(reader, mItems.back().mConditions, cond, true);
+                mItems.back().mHasConditions = true;
                 break;
+            }
             case ESM::fourCC("CIS1"):
             case ESM::fourCC("CIS2"):
             case ESM::fourCC("MODT"): // Model data

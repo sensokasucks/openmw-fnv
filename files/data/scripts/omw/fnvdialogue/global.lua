@@ -1650,6 +1650,28 @@ return {
             session = nil
         end,
         ObScriptQuestCommand = runForwardedCommand,
+        -- Terminal entries (scripts/omw/esm4terminal.lua): which entries of a
+        -- terminal page show (their conditions run on the terminal, with the
+        -- player as target), and running an entry's result script.
+        FNVTerminalCheck = function(data)
+            initState()
+            local ok, rec = pcall(types.ESM4Terminal.record, data.record)
+            if not ok or rec == nil or data.player == nil then return end
+            local ctx = makeContext(data.terminal, data.player)
+            local visible = {}
+            for i, item in ipairs(rec.items) do
+                visible[i] = (#item.conditions == 0) or (conditions.evaluate(item.conditions, ctx)) == true
+            end
+            data.player:sendEvent('FNVTerminalChecked', { record = data.record, visible = visible })
+        end,
+        FNVTerminalRun = function(data)
+            initState()
+            local ok, rec = pcall(types.ESM4Terminal.record, data.record)
+            local item = ok and rec and rec.items[data.index]
+            if item and item.script ~= '' then
+                runScript(item.script, 'TERM ' .. tostring(rec.editorId) .. ' entry ' .. data.index, data.terminal)
+            end
+        end,
         FNVRegisterMenu = function(data)
             registeredMenus[tostring(data.name):lower()] = true
         end,

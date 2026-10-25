@@ -358,10 +358,15 @@ end
 
 local terminalPage  -- forward
 
-local function itemAction(item)
+-- The terminal being used; entry conditions and result scripts run on it
+-- (in the global script scripts/omw/fnvdialogue/global.lua).
+local currentTerminal = nil
+local pendingVisibility = {} -- terminal record id -> page waiting for FNVTerminalChecked
+
+local function itemAction(item, recordId, index)
     return function()
         if item.script ~= '' then
-            print('[esm4terminal] entry "' .. item.text .. '" has a result script that is not run yet:\n' .. item.script)
+            core.sendGlobalEvent('FNVTerminalRun', { terminal = currentTerminal, record = recordId, index = index })
         end
         if item.note then
             local rec = noteRecord(item.note)
@@ -397,10 +402,21 @@ terminalPage = function(rec, intro)
         body = intro .. '\n\n' .. body
     end
     local page = { title = rec.name ~= '' and rec.name or rec.editorId, body = body, entries = {} }
-    for _, item in ipairs(rec.items) do
-        page.entries[#page.entries + 1] = { text = item.text, action = itemAction(item) }
+    local conditional = false
+    for i, item in ipairs(rec.items) do
+        -- entries with conditions stay hidden until the global script has checked them
+        if #item.conditions == 0 then
+            page.entries[#page.entries + 1] = { text = item.text, action = itemAction(item, rec.id, i) }
+        else
+            conditional = true
+        end
     end
     page.entries[#page.entries + 1] = backEntry(#pageStack == 0 and 'Exit' or 'Back')
+    if conditional and currentTerminal then
+        page.record = rec
+        pendingVisibility[rec.id] = page
+        core.sendGlobalEvent('FNVTerminalCheck', { terminal = currentTerminal, record = rec.id, player = self.object })
+    end
     return page
 end
 
@@ -500,8 +516,26 @@ return {
         end,
     },
     eventHandlers = {
+        FNVTerminalChecked = function(data)
+            local page = pendingVisibility[data.record]
+            if page == nil then return end
+            pendingVisibility[data.record] = nil
+            local entries = {}
+            for i, item in ipairs(page.record.items) do
+                if data.visible[i] then
+                    entries[#entries + 1] = { text = item.text, action = itemAction(item, page.record.id, i) }
+                end
+            end
+            entries[#entries + 1] = page.entries[#page.entries] -- Exit / Back
+            page.entries = entries
+            if pageStack[#pageStack] == page then
+                selected = 1
+                render()
+            end
+        end,
         ESM4OpenTerminal = function(data)
             if element then return end
+            currentTerminal = data.terminal
             local rec = types.ESM4Terminal.record(data.terminal)
             local ok, intro = unlockTerminal(data.terminal, rec)
             if not ok then return end
