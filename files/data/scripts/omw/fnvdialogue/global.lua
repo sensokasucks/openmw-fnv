@@ -213,9 +213,18 @@ end
 
 local stats = core.obscript.stats
 
+-- PlayerRef (0x14) is an engine form, not a record of FalloutNV.esm, so its
+-- form id gets the master's load-order byte like any other and names no
+-- object here; only its low 24 bits identify it.
+local function isPlayerRefId(formIdText)
+    local hex = type(formIdText) == 'string' and formIdText:match('0x(%x+)')
+    return hex ~= nil and tonumber(hex, 16) % 0x1000000 == 0x14
+end
+
 local function objectForRunOn(cond, subject, target)
     if cond.runOn == 0 then return subject end
     if cond.runOn == 1 then return target end
+    if cond.runOn == 2 and isPlayerRefId(cond.reference) then return world.players[1] end
     if cond.runOn == 2 and cond.reference ~= '' then
         local ok, obj = pcall(world.getObjectByFormId, cond.reference)
         if ok and obj and obj:isValid() then return obj end
