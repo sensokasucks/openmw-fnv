@@ -41,6 +41,9 @@ end
 -- Block filters (`Begin OnTriggerEnter player`): the filter is an editor id,
 -- or the value of a ref variable.
 obs.refMatches = function(ref, filter)
+    if type(ref) == 'string' then -- SayToDone passes the topic
+        return type(filter) == 'string' and ref:lower() == filter:lower()
+    end
     if not isObject(ref) then return false end
     if isObject(filter) then return ref == filter end
     if type(filter) ~= 'string' then return false end
@@ -64,15 +67,29 @@ local function questData(name)
     return quests:get(name:lower())
 end
 
+-- Variables of other objects' scripts (Ref.var), as the global script
+-- republishes them.
+local refVars = storage.globalSection('ObScriptRefVars')
+
 obs._remoteVar = function(base, name)
     local q = questData(base)
-    if q == nil then return nil end
-    return q.vars[name:lower()] or 0
+    if q ~= nil then
+        return q.vars[name:lower()] or 0
+    end
+    local key = core.obscript.resolveRefEditorId(base)
+    local vars = key and refVars:get(key)
+    if vars == nil then return nil end
+    return vars[name:lower()] or 0
 end
 
 obs._remoteSet = function(base, name, value)
-    if questData(base) == nil then return false end
-    core.sendGlobalEvent('ObScriptSetQuestVar', { quest = base, name = name, value = value })
+    if questData(base) ~= nil then
+        core.sendGlobalEvent('ObScriptSetQuestVar', { quest = base, name = name, value = value })
+        return true
+    end
+    local key = core.obscript.resolveRefEditorId(base)
+    if key == nil then return false end
+    core.sendGlobalEvent('ObScriptSetRefVar', { ref = key, name = name, value = value })
     return true
 end
 
@@ -101,6 +118,31 @@ obs.bind('GetObjectiveCompleted', function(q, index)
     local data = questData(q)
     return (data and data.objectives[math.floor(tonumber(index) or 0)] == 'completed') and 1 or 0
 end)
+
+-- This object's variables, for Ref.var and GetScriptVariable elsewhere:
+-- sent to the global script when they changed, at most twice a second.
+local published = {}
+local publishTimer = 0
+obs._publishLocals = function(entry, dt)
+    publishTimer = publishTimer - dt
+    if publishTimer > 0 then return end
+    publishTimer = 0.5
+    local changed = false
+    local copy = {}
+    for k, v in pairs(entry.locals) do
+        if type(v) == 'number' or type(v) == 'string' then
+            copy[k] = v
+            if published[k] ~= v then changed = true end
+        end
+    end
+    for k in pairs(published) do
+        if copy[k] == nil then changed = true end
+    end
+    if changed then
+        published = copy
+        core.sendGlobalEvent('ObScriptLocals', { object = self.object, script = entry.name, locals = copy })
+    end
+end
 
 -- Commands the global script carries out, with this object as the subject
 -- of reference-less forms (`SayTo player Topic` on an NPC's own script).

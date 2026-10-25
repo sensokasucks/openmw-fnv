@@ -331,6 +331,30 @@ functions[427] = function(cond, obj) -- GetIsVoiceType (the race's default voice
     if obj == nil or isPlayer(obj) then return false end
     return dlg.getVoiceType(obj) == cond.param1Form
 end
+-- Variables of object scripts, as their local scripts publish them
+-- (ObScriptLocals): reference form id -> { script = editor id, locals = {...} }.
+local refVars = {}
+local refVarSection = storage.globalSection('ObScriptRefVars')
+refVarSection:setLifeTime(storage.LIFE_TIME.GameSession)
+
+local scriptVarNames = {} -- script editor id -> { [index] = name }
+local function scriptVariableName(scriptEditorId, index)
+    local names = scriptVarNames[scriptEditorId]
+    if names == nil then
+        local record = dlg.getScript(scriptEditorId)
+        names = record and dlg.getScriptVariables(record.id) or {}
+        scriptVarNames[scriptEditorId] = names
+    end
+    return names[index]
+end
+
+functions[53] = function(cond) -- GetScriptVariable ref index
+    local vars = refVars[cond.param1Form]
+    if vars == nil then return 0 end
+    local name = scriptVariableName(vars.script, cond.param2)
+    return name and vars.locals[name:lower()] or 0
+end
+
 -- GetDeadCount: deaths of actors with this base record seen so far (see trackDeaths)
 functions[84] = function(cond)
     return state.deadCounts and state.deadCounts[cond.param1Form] or 0
@@ -797,7 +821,8 @@ local function sayLine(speaker, target, topicIdOrEditorId)
         if line.speaker == speaker then line.interrupted = true end
     end
     local text = infoText(info)
-    local line = { speaker = speaker, info = info, label = 'INFO ' .. info.id, timeLeft = lineDuration(text) }
+    local line = { speaker = speaker, info = info, topic = topic.editorId, label = 'INFO ' .. info.id,
+        timeLeft = lineDuration(text) }
     speaking[#speaking + 1] = line
     runScript(info.scriptBegin, line.label .. ' begin', speaker)
     if text ~= '' then
@@ -824,6 +849,10 @@ local function tickSpeaking(dt)
     speaking = still
     for _, line in ipairs(finished) do
         runScript(line.info.scriptEnd, line.label .. ' end', line.speaker)
+        -- `Begin SayToDone Topic` on the speaker's own script
+        if line.speaker:isValid() then
+            line.speaker:sendEvent('ObScriptEvent', { event = 'SayToDone', ref = line.topic })
+        end
     end
 end
 
@@ -1217,6 +1246,29 @@ for _, name in ipairs({ 'AddScriptPackage', 'RemoveScriptPackage', 'ApplyImageSp
     end)
 end
 
+-- Ref.var in quest and result scripts: object script variables come from the
+-- published copies, and sets go to the object's own script.
+obs._remoteVar = function(base, name)
+    if obs._scripts[base:lower()] then return nil end -- a quest
+    local key = core.obscript.resolveRefEditorId(base)
+    local vars = key and refVars[key]
+    if vars == nil then return nil end
+    return vars.locals[name:lower()] or 0
+end
+local function setRefVar(key, name, value)
+    local ok, obj = pcall(world.getObjectByFormId, key)
+    if not ok or obj == nil or not obj:isValid() then return false end
+    obj:sendEvent('ObScriptSetVar', { name = name, value = value })
+    local vars = refVars[key]
+    if vars then vars.locals[name:lower()] = value end
+    return true
+end
+obs._remoteSet = function(base, name, value)
+    if obs._scripts[base:lower()] then return false end
+    local key = core.obscript.resolveRefEditorId(base)
+    return key ~= nil and setRefVar(key, name, value)
+end
+
 -- `Ref.MoveTo Target [x y z]` (and MoveToMarker, MoveToMarkerWithFade, whose
 -- fade is not done): puts the reference at the target, offset in world units.
 local function moveTo(...)
@@ -1505,6 +1557,15 @@ return {
             session = nil
         end,
         ObScriptQuestCommand = runForwardedCommand,
+        ObScriptLocals = function(data)
+            if data.object == nil or not data.object:isValid() then return end
+            local key = dlg.getReferenceId(data.object)
+            refVars[key] = { script = data.script, locals = data.locals }
+            refVarSection:set(key, data.locals)
+        end,
+        ObScriptSetRefVar = function(data)
+            setRefVar(data.ref, data.name, data.value)
+        end,
         ObScriptSetQuestVar = setQuestVar,
     },
     engineHandlers = {

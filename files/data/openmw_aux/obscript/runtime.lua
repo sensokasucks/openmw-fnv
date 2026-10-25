@@ -223,6 +223,9 @@ end
 --   obs._remoteSet(base, name, value) -> true when handled
 obs._remoteVar = nil
 obs._remoteSet = nil
+-- obs._publishLocals(entry, dt): called after each run of a local script, so
+-- that other contexts can read its variables (Ref.var, GetScriptVariable).
+obs._publishLocals = nil
 
 -- cross-script variable read: Quest.var / Ref.var
 function obs.mv(base, name)
@@ -425,6 +428,7 @@ end
 local dispatchedBlocks = {
     gamemode = true, onactivate = true, onopen = true, onload = true,
     ontriggerenter = true, ontrigger = true, ontriggerleave = true,
+    onhit = true, ondeath = true, onstartcombat = true, oncombatend = true, saytodone = true,
 }
 
 -- Trigger volumes have no physics callback in OpenMW, so every frame the
@@ -521,6 +525,9 @@ function obs.makeLocalScript()
                 local events = pending
                 pending = {}
                 obs.execute(entry, { events = events })
+                if obs._publishLocals then
+                    obs._publishLocals(entry, dt)
+                end
             end,
             onActive = function()
                 -- OnLoad: the object's 3D is loaded, i.e. it became active in the scene.
@@ -549,6 +556,13 @@ function obs.makeLocalScript()
         eventHandlers = {
             ObScriptEvent = function(data)
                 post(tostring(data.event):lower(), data.ref)
+            end,
+            -- `set ThisRef.var to x` from another script
+            ObScriptSetVar = function(data)
+                local key = tostring(data.name):lower()
+                local value = data.value
+                if entry.ints[key] then value = obs.int(value) end
+                entry.locals[key] = value
             end,
         },
     }
