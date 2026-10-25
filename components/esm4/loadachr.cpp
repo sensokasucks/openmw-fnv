@@ -87,6 +87,12 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
                 reader.get(mCount);
                 break;
             }
+            case ESM::fourCC("XMRC"): // FO3/FONV merchant container
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mMerchantContainer);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XLKR"): // linked reference; TES5 prefixes a keyword
                 if (subHdr.dataSize == 4)
                     reader.getFormId(mLinkedRef);
@@ -96,7 +102,6 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
             case ESM::fourCC("XRGD"): // ragdoll
             case ESM::fourCC("XRGB"): // ragdoll biped
             case ESM::fourCC("XHRS"): // horse formId
-            case ESM::fourCC("XMRC"): // merchant container formId
             // TES5
             case ESM::fourCC("XAPD"): // activation parent
             case ESM::fourCC("XAPR"): // active parent

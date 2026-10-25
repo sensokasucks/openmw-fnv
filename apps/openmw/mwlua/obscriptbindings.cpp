@@ -418,6 +418,29 @@ namespace MWLua
             return ESM::RefId(linked).serializeText();
         };
 
+        // The container a vendor NPC sells from (ACHR XMRC), as a form id; nil when the reference has none.
+        api["getMerchantContainer"] = [](const Object& object) -> sol::optional<std::string> {
+            const ESM4::ActorCharacter* ref
+                = MWBase::Environment::get().getESMStore()->get<ESM4::ActorCharacter>().searchStatic(
+                    object.ptr().getCellRef().getRefNum());
+            if (ref == nullptr || ref->mMerchantContainer.isZeroOrUnset())
+                return sol::nullopt;
+            return ESM::RefId(ref->mMerchantContainer).serializeText();
+        };
+
+        // What the barter and inventory menus show for an item: { name, value (caps, one item), weight, count }.
+        api["itemInfo"] = [](const Object& object, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const MWWorld::Ptr& ptr = object.ptr();
+            const MWWorld::Class& cls = ptr.getClass();
+            res["name"] = std::string(cls.getName(ptr));
+            res["value"] = cls.getValue(ptr);
+            res["weight"] = cls.getWeight(ptr);
+            res["count"] = ptr.getCellRef().getCount();
+            return res;
+        };
+
         // Sequences embedded in the object's model (NiControllerSequences such as "Forward" of a lever or "Open" of a
         // terminal). Group names are lower case. Plays once and holds the last frame.
         api["playEmbeddedGroup"] = [context](const Object& object, std::string_view group) {

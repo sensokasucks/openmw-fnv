@@ -56,6 +56,7 @@ namespace ESM4
         ESM::FormId mOwner;
         ESM::FormId mGlobal;
         ESM::FormId mLinkedRef; // XLKR (FO3/FONV), GetLinkedRef
+        ESM::FormId mMerchantContainer; // XMRC (FO3/FONV): the container a vendor sells from
 
         EnableParent mEsp;
 

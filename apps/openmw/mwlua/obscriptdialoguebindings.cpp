@@ -13,6 +13,17 @@
 #include <sol/table.hpp>
 
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadammo.hpp>
+#include <components/esm4/loadalch.hpp>
+#include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadbook.hpp>
+#include <components/esm4/loadclot.hpp>
+#include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
+#include <components/esm4/loadmisc.hpp>
+#include <components/esm4/loadrcct.hpp>
+#include <components/esm4/loadrcpe.hpp>
+#include <components/esm4/loadweap.hpp>
 #include <components/esm4/dialogue.hpp>
 #include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddial.hpp>
@@ -24,6 +35,7 @@
 #include <components/esm4/loadvtyp.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
+#include <components/misc/strings/algorithm.hpp>
 #include <components/misc/strings/lower.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/vfs/manager.hpp>
@@ -437,6 +449,74 @@ namespace MWLua
             for (const ESM4::DialogInfo* info : it->second)
                 if (mayBeSpokenBy(*info, speakerId))
                     res[LuaUtil::toLuaIndex(n++)] = makeInfo(lua, *info);
+            return res;
+        };
+
+        // Crafting recipes (RCPE) of a category (RCCT editor id, e.g. "CampfireRecipes"), by name:
+        // { id, editorId, name, skill (actor value, -1 none), skillLevel, conditions,
+        //   inputs = { { item = record id, name, count } }, outputs = { ... } }
+        api["getRecipes"] = [](std::string_view categoryEditorId, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            ESM::FormId category;
+            const MWWorld::Store<ESM4::RecipeCategory>& categories = store.get<ESM4::RecipeCategory>();
+            for (size_t i = 0; i < categories.getSize(); ++i)
+                if (Misc::StringUtils::ciEqual(categories.at(i)->mEditorId, categoryEditorId))
+                    category = categories.at(i)->mId;
+            if (category.isZeroOrUnset())
+                return res;
+            auto itemName = [&store](ESM::FormId id) -> std::string {
+                const ESM::RefId refId(id);
+                std::string name;
+                auto look = [&](const auto& items) {
+                    if (const auto* rec = items.search(refId); rec != nullptr && name.empty())
+                        name = rec->mFullName;
+                };
+                look(store.get<ESM4::Ammunition>());
+                look(store.get<ESM4::Armor>());
+                look(store.get<ESM4::Book>());
+                look(store.get<ESM4::Clothing>());
+                look(store.get<ESM4::Ingredient>());
+                look(store.get<ESM4::Key>());
+                look(store.get<ESM4::MiscItem>());
+                look(store.get<ESM4::Potion>());
+                look(store.get<ESM4::Weapon>());
+                return name;
+            };
+            auto components = [&](const std::vector<ESM4::Recipe::Component>& list) {
+                sol::table t(lua, sol::create);
+                for (size_t i = 0; i < list.size(); ++i)
+                {
+                    sol::table c(lua, sol::create);
+                    c["item"] = ESM::RefId(list[i].mItem).serializeText();
+                    c["name"] = itemName(list[i].mItem);
+                    c["count"] = list[i].mCount;
+                    t[LuaUtil::toLuaIndex(i)] = c;
+                }
+                return t;
+            };
+            std::vector<const ESM4::Recipe*> recipes;
+            const MWWorld::Store<ESM4::Recipe>& all = store.get<ESM4::Recipe>();
+            for (size_t i = 0; i < all.getSize(); ++i)
+                if (all.at(i)->mCategory == category)
+                    recipes.push_back(all.at(i));
+            std::sort(recipes.begin(), recipes.end(),
+                [](const ESM4::Recipe* a, const ESM4::Recipe* b) { return a->mFullName < b->mFullName; });
+            for (size_t i = 0; i < recipes.size(); ++i)
+            {
+                const ESM4::Recipe& recipe = *recipes[i];
+                sol::table r(lua, sol::create);
+                r["id"] = ESM::RefId(recipe.mId).serializeText();
+                r["editorId"] = recipe.mEditorId;
+                r["name"] = recipe.mFullName;
+                r["skill"] = recipe.mSkill;
+                r["skillLevel"] = recipe.mSkillLevel;
+                r["conditions"] = makeConditions(lua, recipe.mConditions);
+                r["inputs"] = components(recipe.mInputs);
+                r["outputs"] = components(recipe.mOutputs);
+                res[LuaUtil::toLuaIndex(i)] = r;
+            }
             return res;
         };
 

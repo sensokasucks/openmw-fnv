@@ -256,6 +256,8 @@ add_component_dir (esm4
     loadlvln
     loadmato
     loadmesg
+    loadrcct
+    loadrcpe
     loadmisc
     loadmset
     loadmstt

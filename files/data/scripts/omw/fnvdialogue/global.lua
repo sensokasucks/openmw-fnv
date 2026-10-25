@@ -1823,6 +1823,28 @@ end)
 
 obs.bind('player', function() return 'player' end)
 
+-- `ShowBarterMenu` (a vendor's "Show me what you have for sale"): the trade window
+-- opens over the conversation with the speaker's merchant container
+-- (scripts/omw/fnvbarter); leaving it returns to the conversation, as in the original.
+obs.bind('ShowBarterMenu', function(ref)
+    local merchant = speakerOr(ref)
+    if merchant == nil then return 0 end
+    core.sendGlobalEvent('FNVBarterOpen', { merchant = merchant })
+    return 0
+end)
+
+-- `player.ShowRecipeMenu CampfireRecipes` (campfires, workbenches): the crafting window
+-- for that recipe category (scripts/omw/fnvcrafting).
+obs.bind('ShowRecipeMenu', function(...)
+    local category
+    for _, arg in ipairs({ ... }) do
+        if type(arg) == 'string' and arg:lower() ~= 'player' then category = arg end
+    end
+    if category == nil then return 0 end
+    core.sendGlobalEvent('FNVRecipeOpen', { category = category })
+    return 0
+end)
+
 -- Menus the intro and many conversations open; not implemented yet. The
 -- dialogue window reports them so the play-tester sees what was skipped.
 for _, name in ipairs({ 'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel',
@@ -1943,8 +1965,11 @@ local function say(info, topic)
         if session == nil then return end
     end
     s.goodbye = hasFlag(info.flags, INFO_GOODBYE)
-    -- with follow-ups the answers come after the last of them (continueLine)
+    -- with follow-ups the answers come after the last of them (continueLine); a line whose
+    -- end script opens a menu (ShowBarterMenu after "Can do.") runs it once said, as the
+    -- original does, instead of waiting for the player to answer
     s.continuing = #(info.followUps or {}) > 0
+        or (info.scriptEnd ~= nil and info.scriptEnd:lower():find('show%a*menu') ~= nil)
     s.options = s.continuing and {} or buildOptions(info)
     sendScreen(infoText(info))
 end
@@ -2052,7 +2077,7 @@ local forwardedCommands = {
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
     showtagskillmenu = true, settagskills = true, showtraitmenu = true, showtraitselectmenu = true,
     showlovetestermenu = true, showlovetestermenuparams = true, showspecialbookmenu = true,
-    showspecialbookmenuparams = true,
+    showspecialbookmenuparams = true, showrecipemenu = true, showbartermenu = true,
 }
 
 local function runForwardedCommand(data)

@@ -1270,6 +1270,8 @@ template class MWWorld::TypedDynamicStore<ESM4::LevelledItem>;
 template class MWWorld::TypedDynamicStore<ESM4::LevelledNpc>;
 template class MWWorld::TypedDynamicStore<ESM4::Light>;
 template class MWWorld::TypedDynamicStore<ESM4::Message>;
+template class MWWorld::TypedDynamicStore<ESM4::Recipe>;
+template class MWWorld::TypedDynamicStore<ESM4::RecipeCategory>;
 template class MWWorld::TypedDynamicStore<ESM4::MiscItem>;
 template class MWWorld::TypedDynamicStore<ESM4::MovableStatic>;
 template class MWWorld::TypedDynamicStore<ESM4::Note>;

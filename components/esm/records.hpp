@@ -83,6 +83,8 @@
 #include <components/esm4/loadlvli.hpp>
 #include <components/esm4/loadlvln.hpp>
 #include <components/esm4/loadmesg.hpp>
+#include <components/esm4/loadrcct.hpp>
+#include <components/esm4/loadrcpe.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
 #include <components/esm4/loadmusc.hpp>
