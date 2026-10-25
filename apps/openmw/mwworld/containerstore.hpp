@@ -483,6 +483,10 @@ namespace MWWorld
         void fillESM4(const std::vector<ESM4::InventoryItem>& items, Misc::Rng::Generator& prng);
         ///< Insert ESM4 (FNV) container items into *this, resolving levelled lists.
 
+        static std::vector<std::pair<ESM::RefId, int>> resolveESM4Items(
+            const ESM::RefId& id, int count, int level, Misc::Rng::Generator& prng);
+        ///< The concrete items an ESM4 item or levelled item list (LVLI) gives at this level.
+
         virtual void clear();
         ///< Empty container.
 

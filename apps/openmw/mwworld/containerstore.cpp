@@ -830,6 +830,14 @@ namespace
     }
 }
 
+std::vector<std::pair<ESM::RefId, int>> MWWorld::ContainerStore::resolveESM4Items(
+    const ESM::RefId& id, int count, int level, Misc::Rng::Generator& prng)
+{
+    std::vector<std::pair<ESM::RefId, int>> out;
+    resolveESM4Item(*MWBase::Environment::get().getESMStore(), id, count, level, prng, out);
+    return out;
+}
+
 void MWWorld::ContainerStore::fillESM4(const std::vector<ESM4::InventoryItem>& items, Misc::Rng::Generator& prng)
 {
     const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();

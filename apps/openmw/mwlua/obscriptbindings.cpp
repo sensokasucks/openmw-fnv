@@ -31,6 +31,7 @@
 #include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadlvlc.hpp>
+#include <components/esm4/loadlvli.hpp>
 #include <components/esm4/loadlvln.hpp>
 #include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
@@ -50,6 +51,9 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/creaturestats.hpp"
+#include "../mwworld/class.hpp"
+#include "../mwworld/containerstore.hpp"
 #include "../mwclass/esm4base.hpp"
 #include "../mwclass/esm4door.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -147,9 +151,31 @@ namespace MWLua
                 addAll(store.get<ESM4::MiscItem>());
                 addAll(store.get<ESM4::Potion>());
                 addAll(store.get<ESM4::Weapon>());
+                addAll(store.get<ESM4::LevelledItem>());
                 return res;
             }();
             return resolve(index, editorId);
+        };
+
+        // The items `AddItem <LevelledList> <count>` gives the player: a levelled item list (LVLI) is rolled at
+        // the player's level; other items come back as they are. A list of { id = recordId, count = n }.
+        api["resolveLevelledItem"] = [](std::string_view recordId, int count, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            int level = 1;
+            const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+            if (!player.isEmpty())
+                level = player.getClass().getCreatureStats(player).getLevel();
+            const auto items = MWWorld::ContainerStore::resolveESM4Items(ESM::RefId::deserializeText(recordId),
+                count, level, MWBase::Environment::get().getWorld()->getPrng());
+            for (size_t i = 0; i < items.size(); ++i)
+            {
+                sol::table item(lua, sol::create);
+                item["id"] = items[i].first.serializeText();
+                item["count"] = items[i].second;
+                res[LuaUtil::toLuaIndex(i)] = item;
+            }
+            return res;
         };
 
         // Base records that can be placed in the world (`PlaceAtMe <EditorId>`): items, actors, leveled
