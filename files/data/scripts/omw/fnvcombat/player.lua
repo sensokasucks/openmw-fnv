@@ -59,7 +59,8 @@ local function hudText()
 end
 
 local function updateHud()
-    if weapon == nil then
+    -- the FNV HUD (scripts/omw/fnvhud/player.lua) shows the ammo counter and the target's health
+    if weapon == nil or I.FNVHud ~= nil then
         if hud then
             hud:destroy()
             hud = nil
@@ -175,6 +176,9 @@ return {
         --- The equipped weapon record (see core.obscript.combat.getWeapon), or nil.
         getWeapon = function() return weapon end,
         isDrawn = function() return weapon ~= nil and drawn end,
+        --- Rounds left in the clip.
+        getClip = function() return clip end,
+        isReloading = function() return reloading > 0 end,
     },
     engineHandlers = {
         onInit = function()

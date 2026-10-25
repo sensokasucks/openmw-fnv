@@ -60,11 +60,25 @@ namespace ESM4
         ScriptDefinition mScript; // stage result script
     };
 
+    // One compass target of an objective (QSTA + CTDA*); FO3/FONV.
+    struct QuestTarget
+    {
+        enum Flags
+        {
+            Flag_IgnoresLocks = 0x01, // the compass marker ignores locked doors
+        };
+
+        ESM::FormId mTarget; // the reference the marker points at
+        std::uint8_t mFlags = 0;
+        std::vector<DialogCondition> mConditions; // the marker shows while these pass
+    };
+
     // One objective (QOBJ + NNAM + QSTA targets); FO3/FONV.
     struct QuestObjective
     {
         std::int32_t mIndex = 0;
         std::string mText;
+        std::vector<QuestTarget> mTargets;
     };
 
     struct QuestStage

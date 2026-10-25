@@ -14,6 +14,7 @@
 
 #include "../mwbase/windowmanager.hpp"
 #include "../mwrender/localmap.hpp"
+#include "../mwworld/ptr.hpp"
 
 #include <components/misc/guarded.hpp>
 #include <components/myguiplatform/myguiplatform.hpp>
@@ -208,6 +209,7 @@ namespace MWGui
         void changeCell(const MWWorld::CellStore* cell) override; ///< change the active cell
 
         void setFocusObject(const MWWorld::Ptr& focus) override;
+        MWWorld::Ptr getFocusObject() const override { return mFocusObject.ptrOrEmpty(); }
         void setFocusObjectScreenCoords(float x, float y) override;
 
         void getMousePosition(int& x, int& y) override;
@@ -253,6 +255,8 @@ namespace MWGui
         /// Turn visibility of HUD on or off
         bool setHudVisibility(bool show) override;
         bool isHudVisible() const override { return mHudEnabled; }
+        void setFalloutHud(bool enabled) override;
+        bool isSneakHidden() const override;
 
         void disallowMouse() override;
         void allowMouse() override;
@@ -488,6 +492,7 @@ namespace MWGui
         MyGUI::Widget* mInputBlocker;
 
         bool mHudEnabled;
+        MWWorld::SafePtr mFocusObject;
         bool mCursorVisible;
         bool mCursorActive;
 

@@ -182,6 +182,8 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvai/global.lua
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
+    scripts/omw/fnvhud/global.lua
+    scripts/omw/fnvhud/player.lua
     scripts/omw/fnvstats.lua
     
     shaders/adjustments.omwfx
