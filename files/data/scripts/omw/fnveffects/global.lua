@@ -214,7 +214,12 @@ local function conditionsPass(conditions, actor, label)
         return false
     end
     if trace and passed ~= true and failed then
-        tlog(tostring(label) .. ': condition fails: ' .. conditionsLib.describe(failed, value))
+        -- conditions are re-checked every second: log each failure once
+        local text = tostring(label) .. ': condition fails: ' .. conditionsLib.describe(failed)
+        if not warned[text] then
+            warned[text] = true
+            tlog(text .. ' (got ' .. tostring(value) .. '; the effect stays inactive until it passes)')
+        end
     end
     return passed == true
 end
@@ -331,7 +336,9 @@ local function tick(inst, dt, recheck)
     end
     if recheck then
         local item = effectItem(inst)
-        local passes = conditionsPass(item and item.conditions, actor, inst.effect)
+        local mgef = getMagicEffect(inst.effect)
+        local passes = conditionsPass(item and item.conditions, actor,
+            (mgef and mgef.editorId or inst.effect) .. ' in ' .. sourceName(inst.source))
         if passes and not inst.active then
             activate(inst)
         elseif inst.active and not passes then
@@ -398,6 +405,7 @@ local function applyEffects(actor, source, caster, permanent)
                 actor = actor,
                 caster = caster,
                 source = { kind = source.kind, id = source.id, name = source.name or '' },
+                addiction = source.addiction,
                 index = index,
                 effect = mgef.id,
                 magnitude = magnitude,
@@ -490,13 +498,34 @@ local function playerNotice(text)
     if player then player:sendEvent('ObScriptNotify', { text = text }) end
 end
 
--- RollChemAddiction (0x824e70): addicted if rand%100 < chance*100, chance
--- being the ALCH addiction chance. The original also keeps a per-chem usage
--- record (above fAddictionUsageMonitorThreshold the chance becomes
--- (usage - threshold)/100) and applies perk entry point 23; neither is here
--- yet, since how usage grows is not traced.
-local function rollAddiction(potion)
-    local chance = math.max(0, math.min(1, potion.addictionChance or 0))
+-- RollChemAddiction (0x824e70): addicted if rand%100 < chance*100. The
+-- usage (0x822eb0) is a sum over the actor's active effects whose source has
+-- the same addiction, of a field taken to be the effect's magnitude (inferred
+-- from the layout); it only rolls when that sum is over
+-- fAddictionUsageMonitorThreshold, with chance (usage - threshold)/100.
+-- Without such effects it rolls the ALCH chance. Perk entry point 23 is not
+-- applied yet.
+local function rollAddiction(actor, potion)
+    local usage, linked = 0, false
+    for _, inst in pairs(state.active) do
+        if inst.actor == actor and inst.addiction == potion.addiction and not inst.finished then
+            usage = usage + math.abs(inst.magnitude or 0)
+            linked = true
+        end
+    end
+    local chance
+    if linked then
+        local threshold = gmst('fAddictionUsageMonitorThreshold', 70)
+        if usage <= threshold then
+            tlog(('addiction usage %g of %s is not over %g'):format(usage, potion.editorId, threshold))
+            return false
+        end
+        chance = (usage - threshold) / 100
+    else
+        chance = potion.addictionChance or 0
+    end
+    chance = math.max(0, math.min(1, chance))
+    tlog(('addiction roll for %s: usage %g, chance %g'):format(potion.editorId, usage, chance))
     return math.random(0, 99) < chance * 100
 end
 
@@ -539,6 +568,7 @@ local function applyPotion(actor, potionId)
     end
     applyEffects(actor, {
         kind = 'potion', id = potion.id, name = potion.name, effects = potion.effects, flags = potion.flags,
+        addiction = potion.addiction ~= '' and potion.addiction or nil,
     }, actor, false)
     if potion.consumeSound ~= '' then
         pcall(core.sound.playSound3d, potion.consumeSound, actor)
@@ -546,7 +576,7 @@ local function applyPotion(actor, potionId)
     local addiction = potion.addiction ~= '' and getSpell(potion.addiction)
     if addiction then
         local list = state.addictions[actorKey(actor)]
-        if not (list and list[addiction.id]) and rollAddiction(potion) then
+        if not (list and list[addiction.id]) and rollAddiction(actor, potion) then
             addAddiction(actor, addiction, potion.name)
         end
     end
