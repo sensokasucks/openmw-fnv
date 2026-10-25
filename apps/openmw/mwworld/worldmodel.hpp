@@ -65,6 +65,11 @@ namespace MWWorld
 
         CellStore& getCell(std::string_view name, bool forceLoad = true) const;
 
+        /// Load and register every persistent ESM4 reference (REFR/ACHR/ACRE flagged persistent) in its cell, without
+        /// loading the cells. The original engine keeps these in memory all the time, so scripts and AI packages can
+        /// use them (GetPos, MoveTo, package targets, quest aliases) wherever the player is.
+        void loadPersistentRefs();
+
         Ptr getPtrByRefId(const ESM::RefId& name);
 
         Ptr getPtr(ESM::RefNum refNum) const { return mPtrRegistry.getOrEmpty(refNum); }

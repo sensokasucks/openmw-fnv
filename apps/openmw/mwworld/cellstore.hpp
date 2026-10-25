@@ -207,6 +207,14 @@ namespace MWWorld
         void preload();
         ///< Build ID list from content file.
 
+        /// Load one content-file reference flagged persistent (ESM4) and register it, so that scripts and AI reach it
+        /// while the cell is not loaded, as in the original engine. A later load() adds the other references. Does
+        /// nothing if the cell is loaded already.
+        void loadPersistentRef(const ESM4::Reference& ref);
+        void loadPersistentRef(const ESM4::ActorCharacter& ref);
+
+        bool hasPersistentRefs() const { return mHasPersistentRefs; }
+
         /// Call visitor (MWWorld::Ptr) for each reference. visitor must return a bool. Returning
         /// false will abort the iteration.
         /// \note Prefer using forEachConst when possible.
@@ -355,6 +363,8 @@ namespace MWWorld
         MWWorld::Cell mCellVariant;
         State mState;
         bool mHasState;
+        // Persistent references were loaded while the cell was not; load() skips them.
+        bool mHasPersistentRefs = false;
         std::vector<ESM::RefId> mIds;
         float mWaterLevel;
 
@@ -428,6 +438,8 @@ namespace MWWorld
 
         void loadRef(const ESM4::Reference& ref);
         void loadRef(const ESM4::ActorCharacter& ref);
+        template <class R>
+        void loadPersistentRefImpl(const R& ref);
         void loadRef(ESM::CellRef& ref, bool deleted, std::map<ESM::RefNum, ESM::RefId>& refNumToID);
         ///< Make case-adjustments to \a ref and insert it into the respective container.
         ///

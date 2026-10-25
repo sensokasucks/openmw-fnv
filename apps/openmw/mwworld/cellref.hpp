@@ -185,7 +185,8 @@ namespace MWWorld
             {
                 ESM::RefId operator()(const ESM::CellRef& ref) { return ref.mSoul; }
                 ESM::RefId operator()(const ESM4::Reference& /*ref*/) { return ESM::RefId(); }
-                ESM::RefId operator()(const ESM4::ActorCharacter&) { throw std::logic_error("Not applicable"); }
+                // Asked of every reference read from a saved game.
+                ESM::RefId operator()(const ESM4::ActorCharacter& /*ref*/) { return ESM::RefId(); }
             };
             return std::visit(Visitor(), mCellRef.mVariant);
         }

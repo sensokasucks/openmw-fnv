@@ -275,6 +275,8 @@ namespace MWWorld
         // Rebuild player
         setupPlayer();
 
+        mWorldModel.loadPersistentRefs();
+
         renderPlayer();
         mRendering->getCamera()->reset();
 
@@ -2228,6 +2230,7 @@ namespace MWWorld
     {
         mStore.rebuildIdsIndex();
         mStore.validateDynamic();
+        mWorldModel.loadPersistentRefs();
         mTimeManager->setup(mGlobalVariables);
         mProjectileManager->saveLoaded(reader);
     }
