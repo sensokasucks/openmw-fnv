@@ -1081,11 +1081,11 @@ end
 -- blocks run once for it. A menu nobody registered closes at once.
 local registeredMenus = {} -- lower-case command name -> true
 local pendingMenus = {}
-local function openStandInMenu(name, menuType)
+local function openStandInMenu(name, menuType, args)
     if registeredMenus[name:lower()] then
         local player = world.players[1]
         if player then
-            player:sendEvent('FNVOpenMenu', { name = name, menuType = menuType })
+            player:sendEvent('FNVOpenMenu', { name = name, menuType = menuType, args = args or {} })
             return
         end
     end
@@ -1458,10 +1458,10 @@ obs.bind('EnablePlayerControls', function(...) return playerControls(true, ...) 
 
 -- Character creation menus: stand-ins (see openStandInMenu). 1036 is the
 -- race menu, as VCG01SCRIPT's `MenuMode 1036` block shows.
-obs.bind('ShowRaceMenu', function() openStandInMenu('ShowRaceMenu', 1036) return 0 end)
+obs.bind('ShowRaceMenu', function(...) openStandInMenu('ShowRaceMenu', 1036, { ... }) return 0 end)
 for _, name in ipairs({ 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
-    obs.bind(name, function() openStandInMenu(name, nil) return 0 end)
+    obs.bind(name, function(...) openStandInMenu(name, nil, { ... }) return 0 end)
 end
 
 -- Presentation commands with no effect on script flow; logged once each.
