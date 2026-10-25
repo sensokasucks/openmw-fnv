@@ -52,7 +52,9 @@ obs.refMatches = function(ref, filter)
         return types.Player.objectIsInstance(ref)
     end
     local formId = core.obscript.resolveRefEditorId(filter)
-    return formId ~= nil and tostring(ref.id) == formId
+    if formId == nil then return false end
+    local ok, refId = pcall(core.obscript.dialogue.getReferenceId, ref)
+    return ok and refId == formId
 end
 
 -- ---------------------------------------------------------------- quests
@@ -165,6 +167,14 @@ local function refObject(ref)
         for _, obj in ipairs(list) do
             if referenceId(obj) == formId then
                 return obj
+            end
+        end
+    end
+    -- FO3/FNV NPCs and creatures are not in nearby.actors
+    if core.obscript.getESM4ActorsNear then
+        for _, actor in ipairs(core.obscript.getESM4ActorsNear(self.object, self.object.position, 8192)) do
+            if referenceId(actor) == formId then
+                return actor
             end
         end
     end
@@ -421,7 +431,11 @@ obs._triggerProbe = function()
     local scale = self.object.scale or 1
     local hx, hy, hz = b.x * scale, b.y * scale, b.z * scale
     local center = self.object.position
-    local radius2 = (hx * hx + hy * hy + hz * hz) + 64 * 64
+    -- actors are capsules, not points: a box grown by the capsule radius
+    -- (inferred, about the size of a human's collision capsule) catches an
+    -- actor touching the volume, such as one seated at its edge
+    local ACTOR_RADIUS = 32
+    local radius2 = (hx * hx + hy * hy + hz * hz) + 96 * 96
     local inv = self.object.rotation:inverse()
     local inside = {}
     local function probe(actor)
@@ -429,7 +443,8 @@ obs._triggerProbe = function()
         if (pos - center):length2() <= radius2 then
             local function hit(p)
                 local rel = inv:apply(p - center)
-                return math.abs(rel.x) <= hx and math.abs(rel.y) <= hy and math.abs(rel.z) <= hz
+                return math.abs(rel.x) <= hx + ACTOR_RADIUS and math.abs(rel.y) <= hy + ACTOR_RADIUS
+                    and math.abs(rel.z) <= hz
             end
             if hit(pos) or hit(pos + util.vector3(0, 0, 64)) then
                 inside[#inside + 1] = actor
