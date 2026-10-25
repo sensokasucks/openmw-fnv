@@ -104,6 +104,11 @@ namespace MWClass::ESM4Stats
     };
     std::vector<Change> getChanges();
     void setChanges(const std::vector<Change>& changes);
+
+    // The player's tag skills (Barter..Unarmed), which get fAVDTagSkillBonus; set by character creation and saved
+    // by scripts/omw/fnvstats.lua.
+    std::vector<int> getPlayerTagSkills();
+    void setPlayerTagSkills(const std::vector<int>& skills);
 }
 
 #endif // GAME_MWCLASS_ESM4STATS_H

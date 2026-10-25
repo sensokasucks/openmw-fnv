@@ -178,6 +178,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvdialogue/conditions.lua
     scripts/omw/fnvdialogue/global.lua
     scripts/omw/fnvdialogue/player.lua
+    scripts/omw/fnvchargen/player.lua
     scripts/omw/fnvai/global.lua
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
