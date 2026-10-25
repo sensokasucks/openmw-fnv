@@ -49,7 +49,12 @@ void ESM4::Music::load(ESM4::Reader& reader)
             case ESM::fourCC("FNAM"):
                 reader.getZString(mMusicFile);
                 break;
-            case ESM::fourCC("ANAM"): // FONV float (attenuation in db? loop if positive?)
+            case ESM::fourCC("ANAM"): // FONV
+                if (subHdr.dataSize == 4)
+                    reader.get(mAttenuation);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("WNAM"): // TES5
             case ESM::fourCC("PNAM"): // TES5
             case ESM::fourCC("TNAM"): // TES5

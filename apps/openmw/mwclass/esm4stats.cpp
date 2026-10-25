@@ -16,6 +16,7 @@
 #include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwworld/class.hpp"
+#include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/livecellref.hpp"
 #include "../mwworld/ptr.hpp"
@@ -105,6 +106,29 @@ namespace MWClass::ESM4Stats
             "Hunger",
             "SleepDeprivation",
             "DamageThreshold",
+        };
+
+        float gmst(std::string_view name)
+        {
+            return MWWorld::ESM4GameSettings::getFloat(name);
+        }
+
+        // The game setting with each skill's (Barter..Unarmed) starting value.
+        constexpr std::array<std::string_view, 14> sSkillBaseSettings = {
+            "fAVDSkillBarterBase",
+            "fAVDSkillBigGunsBase",
+            "fAVDSkillEnergyWeaponsBase",
+            "fAVDSkillExplosivesBase",
+            "fAVDSkillLockpickBase",
+            "fAVDSkillMedicineBase",
+            "fAVDSkillMeleeWeaponsBase",
+            "fAVDSkillRepairBase",
+            "fAVDSkillScienceBase",
+            "fAVDSkillSmallGunsBase",
+            "fAVDSkillSneakBase",
+            "fAVDSkillSpeechBase",
+            "fAVDSkillSurvivalBase",
+            "fAVDSkillUnarmedBase",
         };
 
         // The SPECIAL stat each skill (Barter..Unarmed) starts from.
@@ -247,6 +271,9 @@ namespace MWClass::ESM4Stats
 
         float recordBase(const MWWorld::Ptr& actor, int av)
         {
+            // Limbs start healthy
+            if (av >= PerceptionCondition && av <= BrainCondition)
+                return gmst("fAVDDefaultBodyPartCondition");
             if (actor.getType() == ESM::REC_CREA4)
                 return creatureBase(actor, av);
             const ESM4::Npc* record = statsRecord(actor);
@@ -266,7 +293,8 @@ namespace MWClass::ESM4Stats
                     return record->mFO3Stats.skills[skill];
                 const float attribute = getPermanent(actor, sGoverningAttribute[skill]);
                 const float luck = getPermanent(actor, Luck);
-                return 2 + 2 * attribute + std::ceil(luck / 2);
+                return gmst(sSkillBaseSettings[skill]) + gmst("fAVDSkillPrimaryBonusMult") * attribute
+                    + std::ceil(gmst("fAVDSkillLuckBonusMult") * luck);
             }
 
             switch (av)
@@ -282,25 +310,38 @@ namespace MWClass::ESM4Stats
                 case Assistance:
                     return record != nullptr ? record->mFO3Stats.assistance : 0;
                 case ActionPoints:
-                    return 65 + 3 * getPermanent(actor, Agility);
+                    return gmst("fAVDActionPointsBase") + gmst("fAVDActionPointsMult") * getPermanent(actor, Agility);
                 case CarryWeight:
-                    return 150 + 10 * getPermanent(actor, Strength);
+                    return gmst("fAVDCarryWeightsBase") + gmst("fAVDCarryWeightMult") * getPermanent(actor, Strength);
                 case CritChance:
-                    return getPermanent(actor, Luck);
+                    return gmst("fAVDCritLuckBase") + gmst("fAVDCritLuckMult") * getPermanent(actor, Luck);
                 case MeleeDamage:
-                    return getPermanent(actor, Strength) / 2;
+                    return std::max(0.f,
+                        std::floor(gmst("fAVDMeleeDamageStrengthMult")
+                            * (getPermanent(actor, Strength) + gmst("fAVDMeleeDamageStrengthOffset"))));
                 case PoisonResist:
-                    return (getPermanent(actor, Endurance) - 1) * 5;
+                    return gmst("fAVDPoisonResistEnduranceMult")
+                        * (getPermanent(actor, Endurance) + gmst("fAVDPoisonResistEnduranceOffset"));
                 case RadResist:
-                    return (getPermanent(actor, Endurance) - 1) * 2;
+                    return gmst("fAVDRadResistEnduranceMult")
+                        * (getPermanent(actor, Endurance) + gmst("fAVDRadResistEnduranceOffset"));
                 case Health:
                 {
+                    // DATA health plus the Endurance bonus (0x6436c0). Only the player and AutoCalcStats NPCs
+                    // (0x603fc0) get a level term.
                     const float endurance = getPermanent(actor, Endurance);
                     const int level = getLevel(actor);
+                    const float base = record != nullptr ? record->mFO3Stats.baseHealth : (player ? 100 : 0);
                     if (player)
-                        return 100 + 20 * endurance + 5 * (level - 1);
-                    const float base = record != nullptr ? record->mFO3Stats.baseHealth : 0;
-                    return base + 5 * endurance + 10 * level;
+                        return base
+                            + gmst("fAVDHealthEnduranceMult") * (endurance + gmst("fAVDHealthEnduranceOffset"))
+                            + gmst("fAVDHealthLevelMult") * (level - 1);
+                    float bonus
+                        = gmst("fAVDNPCHealthEnduranceMult") * (endurance + gmst("fAVDNPCHealthEnduranceOffset"));
+                    if (record != nullptr && record->mIsFONV
+                        && (record->mBaseConfig.fo3.flags & ESM4::Npc::FO3_AutoCalcStats))
+                        bonus = std::max(0.f, std::trunc(bonus + gmst("fAVDNPCHealthLevelMult") * (level - 1)));
+                    return base + bonus;
                 }
                 case SpeedMult:
                     if (!player && record != nullptr && record->mIsFONV)

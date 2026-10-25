@@ -1,6 +1,7 @@
 #include "esm4combat.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <random>
@@ -29,6 +30,7 @@
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/scene.hpp"
 #include "../mwworld/worldmodel.hpp"
@@ -43,11 +45,10 @@ namespace MWMechanics::ESM4Combat
     {
         namespace Stats = MWClass::ESM4Stats;
 
-        // FalloutNV.esm game settings
-        constexpr float fDamageSkillBase = 0.5f;
-        constexpr float fDamageSkillMult = 0.5f;
-        constexpr float fMinDamMultiplier = 0.2f;
-        constexpr float fMaxArmorRating = 85.f;
+        float gmst(std::string_view name)
+        {
+            return MWWorld::ESM4GameSettings::getFloat(name);
+        }
 
         // How far a bullet flies. The original engine moves projectiles; at gun ranges they are effectively instant.
         constexpr float sShotRange = 16384.f;
@@ -257,7 +258,8 @@ namespace MWMechanics::ESM4Combat
         if (skill < 0 || skill >= Stats::Count)
             skill = skillForAnimType(weapon.mHasFO3Data ? weapon.mFO3Data.animType : 3);
         const float skillValue = canBeHit(attacker) ? Stats::getCurrent(attacker, skill) : 100.f;
-        const float skillFactor = fDamageSkillBase + fDamageSkillMult * std::clamp(skillValue, 0.f, 100.f) / 100.f;
+        const float skillFactor
+            = gmst("fDamageSkillBase") + gmst("fDamageSkillMult") * std::clamp(skillValue, 0.f, 100.f) / 100.f;
         return base * skillFactor * conditionMultiplier(condition);
     }
 
@@ -265,8 +267,9 @@ namespace MWMechanics::ESM4Combat
     {
         if (damage <= 0.f)
             return 0.f;
-        const float minimum = damage * fMinDamMultiplier;
-        const float resistance = std::clamp(Stats::getCurrent(target, Stats::DamageResist), 0.f, fMaxArmorRating);
+        const float minimum = damage * gmst("fMinDamMultiplier");
+        const float resistance
+            = std::clamp(Stats::getCurrent(target, Stats::DamageResist), 0.f, gmst("fMaxArmorRating"));
         damage *= 1.f - resistance / 100.f;
         damage -= std::max(0.f, Stats::getCurrent(target, Stats::DamageThreshold));
         return std::max(damage, minimum);
@@ -389,17 +392,72 @@ namespace MWMechanics::ESM4Combat
             return bounds.getBoundingBox();
         }
 
-        // FNV NPCs' aim wanders up to fNPCMaxGunWobbleAngle; scaled down by the weapon skill
-        // (fGunSpreadSkillBase 0.5 + fGunSpreadSkillMult -0.005 x skill), plus the weapon's own spread.
-        float aimErrorDegrees(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon)
+        // Two-handed weapons by DNAM animation type (FUN_00646cb0)
+        bool isTwoHanded(const ESM4::Weapon& weapon)
         {
-            constexpr float fNPCMaxGunWobbleAngle = 15.f;
+            switch (weapon.mHasFO3Data ? weapon.mFO3Data.animType : 3)
+            {
+                case 2:
+                case 5:
+                case 6:
+                case 8:
+                case 9:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // An NPC's gun wobble (CalcActorGunWobble 0x646910): stance, crippled arm and requirement penalties, scaled
+        // down by the weapon skill. NPCs don't crouch or aim down the sights, so they always pay the standing and
+        // unaimed penalties.
+        float gunWobble(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon)
+        {
+            float wobble = gmst("fStandingSpreadPenalty") + gmst("fUnaimedSpreadPenalty");
+            if (ESM4Actors::get().isMoving(attacker))
+                wobble += ESM4Actors::get().isRunning(attacker) ? gmst("fRunningSpreadPenalty")
+                                                                 : gmst("fWalkingSpreadPenalty");
+
+            if (Stats::getCurrent(attacker, Stats::IgnoreCrippledLimbs) == 0)
+            {
+                const bool left = Stats::getCurrent(attacker, Stats::LeftAttackCondition) <= 0;
+                const bool right = Stats::getCurrent(attacker, Stats::RightAttackCondition) <= 0;
+                const bool twoHanded = isTwoHanded(weapon);
+                if (left && right)
+                    wobble += gmst(twoHanded ? "fCrippledArms2HSpreadPenalty" : "fCrippledArms1HSpreadPenalty");
+                else if (twoHanded && (left || right))
+                    wobble += gmst("fCrippledArm2HSpreadPenalty");
+                else if (right)
+                    wobble += gmst("fCrippledArm1HSpreadPenalty");
+            }
+
             int skill = weapon.mHasFO3Data ? weapon.mFO3Data.skill : -1;
             if (skill < 0 || skill >= Stats::Count)
                 skill = Stats::Guns;
-            const float skillFactor = std::clamp(0.5f - 0.005f * Stats::getCurrent(attacker, skill), 0.f, 0.5f);
+            const float skillValue = std::round(Stats::getCurrent(attacker, skill));
+            if (weapon.mHasFO3Data)
+            {
+                // A point of penalty per missing Strength point and per missing 10 skill points, up to 10 each
+                const float strength = std::round(Stats::getCurrent(attacker, Stats::Strength));
+                const float strengthReq = static_cast<float>(weapon.mFO3Data.strengthRequirement);
+                if (strengthReq >= strength)
+                    wobble += std::clamp(strengthReq - strength, 0.f, 10.f) * gmst("fWeapStrengthReqPenalty");
+                const float skillReq = static_cast<float>(weapon.mFO3Data.skillRequirement);
+                if (skillReq >= skillValue)
+                    wobble += std::clamp(std::ceil((skillReq - skillValue) / 10.f), 0.f, 10.f)
+                        * gmst("fWeapSkillReqPenalty");
+            }
+
+            wobble *= 1.f - skillValue * gmst("fWobbleToSkillConversion") * 0.01f;
+            return std::max(wobble, gmst("fMinGunSpreadValue"));
+        }
+
+        // How far off an NPC's shot may go: the wobble times fNPCMaxGunWobbleAngle (fire, 0x524024), plus the
+        // weapon's own spread.
+        float aimErrorDegrees(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon)
+        {
             const float weaponSpread = weapon.mHasFO3Data ? weapon.mFO3Data.minSpread + weapon.mFO3Data.spread : 0.f;
-            return weaponSpread + fNPCMaxGunWobbleAngle * skillFactor;
+            return weaponSpread + gunWobble(attacker, weapon) * gmst("fNPCMaxGunWobbleAngle");
         }
     }
 

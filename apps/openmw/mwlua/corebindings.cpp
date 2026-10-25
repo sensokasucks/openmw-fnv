@@ -17,6 +17,7 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwworld/datetimemanager.hpp"
+#include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/esmstore.hpp"
 
 #include "context.hpp"
@@ -146,6 +147,22 @@ namespace MWLua
                         break;
                 }
                 return sol::nil;
+            };
+
+            // FNV game settings: the ESM4 value, else the FalloutNV.exe default; nil for unknown names
+            api["getFNVGMST"] = [lua](std::string_view setting) -> sol::object {
+                const ESM4::GameSetting::Data* value = MWWorld::ESM4GameSettings::find(setting);
+                if (value == nullptr)
+                    return sol::nil;
+                return std::visit(
+                    [&](const auto& v) -> sol::object {
+                        using V = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_same_v<V, std::monostate>)
+                            return sol::nil;
+                        else
+                            return sol::make_object(lua, v);
+                    },
+                    *value);
             };
 
             if (context.mType != Context::Menu)

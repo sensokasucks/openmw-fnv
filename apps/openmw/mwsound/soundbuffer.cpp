@@ -228,7 +228,16 @@ namespace MWSound
     SoundBuffer* SoundBufferPool::insertSound(const ESM::RefId& soundId, const ESM4::Sound& sound)
     {
         VFS::Path::Normalized path = getESM4SoundPath(sound.mSoundFile);
-        float volume = 1, min = 1, max = 255; // TODO: needs research
+        // SNDD/SNDX distances are stored as min / 5 and max / 100 game units; the static attenuation is a reduction in
+        // hundredths of a dB.
+        float min = sound.mData.minAttenuation * 5.f;
+        float max = sound.mData.maxAttenuation * 100.f;
+        if (min == 0 && max == 0)
+            max = 255; // no range given
+        min = std::max(min, 1.0f);
+        max = std::max(min, max);
+        const float volume = std::min(1.f,
+            static_cast<float>(std::pow(10.0, -static_cast<double>(sound.mData.staticAttenuation) / 100.0 / 20.0)));
         SoundBuffer& sfx = mSoundBuffers.emplace_back(std::move(path), volume, min, max);
         mBufferNameMap.emplace(soundId, &sfx);
         return &sfx;

@@ -7,15 +7,20 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadweap.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwclass/esm4npc.hpp"
+#include "../mwclass/esm4stats.hpp"
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/raycasting.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/ptr.hpp"
 #include "../mwworld/worldmodel.hpp"
 
@@ -161,6 +166,73 @@ namespace MWMechanics
         state.mTurnTo = yaw;
     }
 
+    bool ESM4Actors::isRunning(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it != mStates.end() && it->second.mStatus == Status::Moving && it->second.mOptions.mRun;
+    }
+
+    float ESM4Actors::getWalkSpeed(const MWWorld::Ptr& ptr)
+    {
+        namespace Stats = MWClass::ESM4Stats;
+        using MWWorld::ESM4GameSettings::getFloat;
+
+        float penalty = 0.f;
+        if (ptr.getType() == ESM::REC_NPC_4)
+        {
+            // Heaviest armor worn
+            float armor = 0.f;
+            for (const ESM4::Armor* worn : MWClass::ESM4Npc::getEquippedArmor(ptr))
+            {
+                if (worn->mGeneralFlags & ESM4::Armor::FO3_HeavyArmor)
+                    armor = std::max(armor, getFloat("fMoveHeavyArmorPenalty"));
+                else if (worn->mGeneralFlags & ESM4::Armor::FO3_MediumArmor)
+                    armor = std::max(armor, getFloat("fMoveMediumArmorPenalty"));
+            }
+            penalty += armor;
+
+            const MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+            const ESM4::Weapon* weapon = MWClass::ESM4Npc::getEquippedWeapon(ptr);
+            if (weapon != nullptr && weapon->mHasFO3Data && animation != nullptr && animation->isWeaponShown())
+            {
+                switch (weapon->mFO3Data.animType)
+                {
+                    case 2: // melee 2H
+                    case 8: // handle
+                    case 9: // launcher
+                        penalty += getFloat("fMove2HBigPenalty");
+                        break;
+                    case 5: // rifles
+                    case 6:
+                        penalty += getFloat("fMove2HRPenalty");
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        float legs = 1.f;
+        if (Stats::getCurrent(ptr, Stats::IgnoreCrippledLimbs) == 0)
+        {
+            const int crippled = (Stats::getCurrent(ptr, Stats::LeftMobilityCondition) <= 0 ? 1 : 0)
+                + (Stats::getCurrent(ptr, Stats::RightMobilityCondition) <= 0 ? 1 : 0);
+            if (crippled == 1)
+                legs = getFloat("fMoveOneCrippledLegSpeedMult");
+            else if (crippled == 2)
+                legs = getFloat("fMoveTwoCrippledLegsSpeedMult");
+        }
+
+        const float speed
+            = Stats::getCurrent(ptr, Stats::SpeedMult) * 0.01f * getFloat("fMoveBaseSpeed") * legs * (1.f - penalty);
+        return std::max(0.f, speed);
+    }
+
+    float ESM4Actors::getRunSpeed(const MWWorld::Ptr& ptr)
+    {
+        return getWalkSpeed(ptr) * MWWorld::ESM4GameSettings::getFloat("fMoveRunMult");
+    }
+
     ESM4Actors::Status ESM4Actors::getStatus(const MWWorld::Ptr& ptr) const
     {
         auto it = mStates.find(ptr.getCellRef().getRefNum());
@@ -194,8 +266,15 @@ namespace MWMechanics
         if (animation != nullptr)
         {
             animation->setLocomotion(locomotion);
-            if (animation->getLocomotionSpeed() > 1.f)
-                speed = animation->getLocomotionSpeed();
+            const float animationSpeed = animation->getLocomotionSpeed();
+            if (ptr.getType() == ESM::REC_NPC_4)
+            {
+                // NPC speed comes from the formula; the walk or run loop is played faster or slower to keep pace
+                speed = state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr);
+                animation->setLocomotionRate(animationSpeed > 1.f ? speed / animationSpeed : 1.f);
+            }
+            else if (animationSpeed > 1.f)
+                speed = animationSpeed;
         }
 
         osg::Vec3f position = ptr.getRefData().getPosition().asVec3();

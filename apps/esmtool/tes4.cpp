@@ -447,6 +447,9 @@ namespace EsmTool
                     return true;
                 case ESM4::REC_PHZD:
                     break;
+                case ESM4::REC_PMIS:
+                    readTypedRecord<ESM4::PlacedMissile>(params, reader);
+                    return true;
                 case ESM4::REC_PROJ:
                     break;
                 case ESM4::REC_PWAT:

@@ -240,6 +240,7 @@ namespace ESM
         REC_PERK4 = esm4Recname(ESM4::REC_PERK), // Perk
         REC_PGRE4 = esm4Recname(ESM4::REC_PGRE), // Placed grenade
         REC_PHZD4 = esm4Recname(ESM4::REC_PHZD), // Placed hazard
+        REC_PMIS4 = esm4Recname(ESM4::REC_PMIS), // Placed missile
         REC_PROJ4 = esm4Recname(ESM4::REC_PROJ), // Projectile
         REC_QUST4 = esm4Recname(ESM4::REC_QUST), // Quest
         REC_RACE4 = esm4Recname(ESM4::REC_RACE), // Race / Creature type

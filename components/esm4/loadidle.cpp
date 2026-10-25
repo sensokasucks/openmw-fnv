@@ -80,11 +80,43 @@ void ESM4::IdleAnimation::load(ESM4::Reader& reader)
             case ESM::fourCC("MODB"):
                 reader.get(mBoundRadius);
                 break;
-            case ESM::fourCC("CTDA"): // formId
+            case ESM::fourCC("CTDA"):
+            {
+                if (subHdr.dataSize != 28) // FO3/FONV only; TES4/TES5 differ
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                TargetCondition condition;
+                reader.get(condition);
+                if (condition.reference)
+                    reader.adjustFormId(condition.reference);
+                addDialogCondition(reader, mConditions, condition, true);
+                break;
+            }
+            case ESM::fourCC("DATA"):
+            {
+                if (subHdr.dataSize != 6 && subHdr.dataSize != 8) // FO3/FONV
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                std::uint8_t unused;
+                reader.get(mAnimGroupSection);
+                reader.get(mLoopMin);
+                reader.get(mLoopMax);
+                reader.get(unused);
+                reader.get(mReplayDelay);
+                if (subHdr.dataSize == 8)
+                {
+                    reader.get(mIdleFlags);
+                    reader.get(unused);
+                }
+                break;
+            }
             case ESM::fourCC("CTDT"):
             case ESM::fourCC("CIS1"):
             case ESM::fourCC("CIS2"):
-            case ESM::fourCC("DATA"):
             case ESM::fourCC("MODD"):
             case ESM::fourCC("MODS"):
             case ESM::fourCC("MODT"):

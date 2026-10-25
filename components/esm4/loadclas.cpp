@@ -54,7 +54,33 @@ void ESM4::Class::load(ESM4::Reader& reader)
                 reader.getZString(mIcon);
                 break;
             case ESM::fourCC("DATA"):
+            {
+                if (subHdr.dataSize != 28) // FO3/FONV
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                for (std::int32_t& skill : mTagSkills)
+                    reader.get(skill);
+                reader.get(mClassFlags);
+                reader.get(mServices);
+                reader.get(mTeaches);
+                reader.get(mMaxTrainingLevel);
+                reader.skipSubRecordData(2);
+                mHasFO3Data = true;
+                break;
+            }
             case ESM::fourCC("ATTR"):
+            {
+                if (subHdr.dataSize != 7) // FO3/FONV SPECIAL
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                for (std::uint8_t& attribute : mSpecial)
+                    reader.get(attribute);
+                break;
+            }
             case ESM::fourCC("PRPS"):
                 reader.skipSubRecordData();
                 break;

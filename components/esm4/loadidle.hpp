@@ -29,10 +29,13 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
 #include <components/esm/path.hpp>
+
+#include "loadinfo.hpp" // DialogCondition
 
 namespace ESM4
 {
@@ -53,6 +56,15 @@ namespace ESM4
         ESM::FormId mPrevious;
 
         float mBoundRadius;
+
+        // FO3/FONV DATA
+        std::uint8_t mAnimGroupSection = 0;
+        std::uint8_t mLoopMin = 0;
+        std::uint8_t mLoopMax = 0;
+        std::int16_t mReplayDelay = 0;
+        std::uint8_t mIdleFlags = 0; // 0x01 no attacking
+
+        std::vector<DialogCondition> mConditions; // FO3/FONV CTDA
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

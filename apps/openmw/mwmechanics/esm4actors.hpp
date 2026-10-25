@@ -52,6 +52,14 @@ namespace MWMechanics
         // Turns in place.
         void face(const MWWorld::Ptr& ptr, float yaw);
         Status getStatus(const MWWorld::Ptr& ptr) const;
+        bool isMoving(const MWWorld::Ptr& ptr) const { return getStatus(ptr) == Status::Moving; }
+        bool isRunning(const MWWorld::Ptr& ptr) const;
+
+        // FO3/FONV NPC walk speed in units per second (ComputeActorWalkSpeed 0x647d10): SpeedMult percent of
+        // fMoveBaseSpeed, slowed by crippled legs, medium/heavy armor and a drawn two-handed weapon. Running is
+        // fMoveRunMult times faster (0x647f00).
+        static float getWalkSpeed(const MWWorld::Ptr& ptr);
+        static float getRunSpeed(const MWWorld::Ptr& ptr);
 
         // Plays a one-off sequence (an attack) and goes back to walking or standing when it ends. Returns its length,
         // 0 when the actor has no such sequence.

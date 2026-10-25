@@ -66,6 +66,14 @@
 -- @usage local bloodTextureName = core.getGMST('Blood_Texture_1') -- get a "fallback" parameter value from openmw.cfg (always a string)
 
 ---
+-- Get a Fallout: New Vegas game setting (ESM4 GMST record) by its editor id, ignoring case. Falls back to the
+-- value FalloutNV.exe gives the setting when no loaded file sets it. Not available in load scripts.
+-- @function [parent=#core] getFNVGMST
+-- @param #string setting Setting name
+-- @return #any number, boolean or string; nil for an unknown name
+-- @usage local walk = core.getFNVGMST('fMoveBaseSpeed') -- 77 from FalloutNV.esm (the exe default is 85)
+
+---
 -- The game's difficulty setting.
 -- @function [parent=#core] getGameDifficulty
 -- @return #number

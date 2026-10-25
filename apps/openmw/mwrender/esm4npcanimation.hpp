@@ -56,6 +56,9 @@ namespace MWRender
 
         // Ground speed of the current locomotion sequence (units per second), 0 when standing or unknown.
         float getLocomotionSpeed() const;
+        // Playback rate of the walk and run loops: the actor's speed over getLocomotionSpeed.
+        void setLocomotionRate(float rate);
+        bool isWeaponShown() const { return mWeapon != nullptr; }
 
     private:
         // FO3/FONV: places rigid head parts in the skinned head's space under the head bone
@@ -67,6 +70,7 @@ namespace MWRender
         std::string mIdleSequence;
         osg::ref_ptr<osg::Node> mWeapon;
         float mLocomotionSpeed = 0.f;
+        std::shared_ptr<float> mLocomotionRate = std::make_shared<float>(1.f);
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         std::map<const osg::Node*, osg::Vec3f> mRestTranslations;
 
