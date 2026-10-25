@@ -34,24 +34,43 @@
 
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
+#include <components/esm/position.hpp>
+
+#include "reference.hpp" // EnableParent
 
 namespace ESM4
 {
     class Reader;
     class Writer;
 
-    struct PlacedGrenade
+    // A placed projectile: PGRE (placed grenade, how FNV places mines) or PMIS (placed missile). The base
+    // object is a PROJ record; the reference sits in a cell like a REFR.
+    struct PlacedProjectile
     {
         ESM::FormId mId; // from the header
         std::uint32_t mFlags; // from the header, see enum type RecordFlag for details
+        ESM::FormId mParent; // cell FormId, from the loading sequence
 
         std::string mEditorId;
 
-        void load(ESM4::Reader& reader);
-        // void save(ESM4::Writer& writer) const;
+        ESM::FormId mBaseObj;
+        ESM::Position mPos;
+        float mScale = 1.0f;
+        ESM::FormId mOwner;
+        std::int32_t mFactionRank = -1;
+        EnableParent mEsp;
 
-        // void blank();
+        void load(ESM4::Reader& reader);
+    };
+
+    struct PlacedGrenade : PlacedProjectile
+    {
         static constexpr ESM::RecNameInts sRecordId = ESM::RecNameInts::REC_PGRE4;
+    };
+
+    struct PlacedMissile : PlacedProjectile
+    {
+        static constexpr ESM::RecNameInts sRecordId = ESM::RecNameInts::REC_PMIS4;
     };
 }
 

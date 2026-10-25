@@ -495,6 +495,31 @@ namespace MWRender
 
     namespace
     {
+        // Loop time that runs at a rate the AI can change while the loop plays, so the walk keeps pace with the
+        // actor's speed.
+        class RateTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            explicit RateTimeSource(std::shared_ptr<const float> rate)
+                : mRate(std::move(rate))
+            {
+            }
+
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (mLast)
+                    mTime += (now - *mLast) * *mRate;
+                mLast = now;
+                return static_cast<float>(mTime);
+            }
+
+        private:
+            std::shared_ptr<const float> mRate;
+            double mTime = 0;
+            std::optional<double> mLast;
+        };
+
         // Plays a sequence once, backwards when asked, and holds the frame it ends on.
         class OnceTimeSource : public SceneUtil::ControllerSource
         {
@@ -679,6 +704,11 @@ namespace MWRender
         return mPtr.getType() == ESM::REC_NPC_4 && MWClass::ESM4Npc::isFemale(mPtr);
     }
 
+    void ESM4NpcAnimation::setLocomotionRate(float rate)
+    {
+        *mLocomotionRate = rate;
+    }
+
     float ESM4NpcAnimation::getLocomotionSpeed() const
     {
         return mLocomotionSpeed;
@@ -708,7 +738,12 @@ namespace MWRender
             return;
         }
 
-        playKeyframesFONV(path, std::make_shared<SceneUtil::FrameTimeSource>(), stripRootMotion);
+        std::shared_ptr<SceneUtil::ControllerSource> source;
+        if (stripRootMotion)
+            source = std::make_shared<RateTimeSource>(mLocomotionRate);
+        else
+            source = std::make_shared<SceneUtil::FrameTimeSource>();
+        playKeyframesFONV(path, source, stripRootMotion);
     }
 
     float ESM4NpcAnimation::playKeyframesFONV(const VFS::Path::Normalized& path,

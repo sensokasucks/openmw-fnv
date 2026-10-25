@@ -153,6 +153,8 @@ void ESM4::Weapon::load(ESM4::Reader& reader)
                 get(120, d.resistType);
                 get(128, d.semiAutoDelayMin);
                 get(132, d.semiAutoDelayMax);
+                get(168, d.strengthRequirement);
+                get(200, d.skillRequirement);
                 mHasFO3Data = true;
                 break;
             }

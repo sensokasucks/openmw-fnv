@@ -54,6 +54,15 @@ namespace ESM4
         std::string mIcon;
         Data mData;
 
+        // FO3/FONV DATA and ATTR
+        std::int32_t mTagSkills[4] = { -1, -1, -1, -1 }; // actor values, -1 for none
+        std::uint32_t mClassFlags = 0; // 0x01 playable, 0x02 guard
+        std::uint32_t mServices = 0;
+        std::int8_t mTeaches = -1; // skill, actor value - 32
+        std::uint8_t mMaxTrainingLevel = 0;
+        std::uint8_t mSpecial[7] = { 0, 0, 0, 0, 0, 0, 0 };
+        bool mHasFO3Data = false;
+
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& reader) const;
 

@@ -105,6 +105,8 @@ namespace ESM4
             std::int32_t resistType = -1; // 120, actor value
             float semiAutoDelayMin = 0.f; // 128
             float semiAutoDelayMax = 0.f; // 132
+            std::uint32_t strengthRequirement = 0; // 168
+            std::uint32_t skillRequirement = 0; // 200
         };
 
         enum Flags1FO3

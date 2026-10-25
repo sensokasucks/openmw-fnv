@@ -128,6 +128,7 @@ namespace ESM4
         REC_PERK = fourCC("PERK"), // Perk
         REC_PGRE = fourCC("PGRE"), // Placed grenade
         REC_PHZD = fourCC("PHZD"), // Placed hazard
+        REC_PMIS = fourCC("PMIS"), // Placed missile
         REC_PROJ = fourCC("PROJ"), // Projectile
         REC_QUST = fourCC("QUST"), // Quest
         REC_RACE = fourCC("RACE"), // Race / Creature type

@@ -82,19 +82,24 @@ namespace ESM4
     struct ArmorAddon;
     struct Book;
     struct Cell;
+    struct Class;
     struct Clothing;
     struct Container;
     struct Creature;
+    struct DefaultObj;
     struct Door;
     struct Eyes;
     struct Faction;
     struct Flora;
+    struct FormIdList;
     struct Furniture;
+    struct GameSetting;
     struct Dialogue;
     struct DialogInfo;
     struct GlobalVariable;
     struct Hair;
     struct HeadPart;
+    struct IdleAnimation;
     struct Ingredient;
     struct ItemMod;
     struct Key;
@@ -104,14 +109,18 @@ namespace ESM4
     struct LevelledItem;
     struct LevelledNpc;
     struct Light;
+    struct LightingTemplate;
     struct Message;
     struct MiscItem;
     struct MovableStatic;
+    struct Music;
     struct Note;
     struct Npc;
     struct NavMesh;
     struct AIPackage;
     struct Outfit;
+    struct PlacedGrenade;
+    struct PlacedMissile;
     struct Potion;
     struct Quest;
     struct Race;
@@ -164,7 +173,9 @@ namespace MWWorld
             Store<ESM4::NavMesh>, Store<ESM4::Note>, Store<ESM4::Npc>, Store<ESM4::AIPackage>, Store<ESM4::Outfit>, Store<ESM4::Potion>, Store<ESM4::Quest>, Store<ESM4::Race>, Store<ESM4::Reference>,
             Store<ESM4::Script>, Store<ESM4::Sound>, Store<ESM4::SoundReference>, Store<ESM4::Static>,
             Store<ESM4::StaticCollection>, Store<ESM4::Terminal>, Store<ESM4::TextureSet>, Store<ESM4::Tree>,
-            Store<ESM4::Weapon>, Store<ESM4::World>>;
+            Store<ESM4::Weapon>, Store<ESM4::World>, Store<ESM4::GameSetting>, Store<ESM4::FormIdList>,
+            Store<ESM4::IdleAnimation>, Store<ESM4::Class>, Store<ESM4::DefaultObj>, Store<ESM4::LightingTemplate>,
+            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>>;
 
     private:
         template <typename T>

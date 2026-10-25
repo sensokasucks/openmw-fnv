@@ -33,10 +33,11 @@
 #include "reader.hpp"
 //#include "writer.hpp"
 
-void ESM4::PlacedGrenade::load(ESM4::Reader& reader)
+void ESM4::PlacedProjectile::load(ESM4::Reader& reader)
 {
     mId = reader.getFormIdFromHeader();
     mFlags = reader.hdr().record.flags;
+    mParent = reader.currCell();
 
     while (reader.getSubRecordHeader())
     {
@@ -47,6 +48,27 @@ void ESM4::PlacedGrenade::load(ESM4::Reader& reader)
                 reader.getZString(mEditorId);
                 break;
             case ESM::fourCC("NAME"):
+                reader.getFormId(mBaseObj);
+                break;
+            case ESM::fourCC("DATA"):
+                reader.get(mPos);
+                break;
+            case ESM::fourCC("XSCL"):
+                reader.get(mScale);
+                break;
+            case ESM::fourCC("XOWN"):
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mOwner);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("XRNK"):
+                reader.get(mFactionRank);
+                break;
+            case ESM::fourCC("XESP"):
+                reader.getFormId(mEsp.parent);
+                reader.get(mEsp.flags);
+                break;
             case ESM::fourCC("XEZN"):
             case ESM::fourCC("XRGD"):
             case ESM::fourCC("XRGB"):
@@ -54,8 +76,6 @@ void ESM4::PlacedGrenade::load(ESM4::Reader& reader)
             case ESM::fourCC("XPPA"):
             case ESM::fourCC("INAM"):
             case ESM::fourCC("TNAM"):
-            case ESM::fourCC("XOWN"):
-            case ESM::fourCC("XRNK"):
             case ESM::fourCC("XCNT"):
             case ESM::fourCC("XRDS"):
             case ESM::fourCC("XHLP"):
@@ -67,12 +87,9 @@ void ESM4::PlacedGrenade::load(ESM4::Reader& reader)
             case ESM::fourCC("XAPD"):
             case ESM::fourCC("XAPR"):
             case ESM::fourCC("XATO"):
-            case ESM::fourCC("XESP"):
             case ESM::fourCC("XEMI"):
             case ESM::fourCC("XMBR"):
             case ESM::fourCC("XIBS"):
-            case ESM::fourCC("XSCL"):
-            case ESM::fourCC("DATA"):
             case ESM::fourCC("VMAD"):
             case ESM::fourCC("MNAM"): // FO4
             case ESM::fourCC("XAMC"): // FO4
@@ -91,7 +108,7 @@ void ESM4::PlacedGrenade::load(ESM4::Reader& reader)
                 reader.skipSubRecordData();
                 break;
             default:
-                throw std::runtime_error("ESM4::PGRE::load - Unknown subrecord " + ESM::printName(subHdr.typeId));
+                throw std::runtime_error("ESM4::PGRE/PMIS::load - Unknown subrecord " + ESM::printName(subHdr.typeId));
         }
     }
 }

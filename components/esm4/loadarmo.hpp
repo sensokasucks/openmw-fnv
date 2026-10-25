@@ -129,6 +129,7 @@ namespace ESM4
             TES4_NonPlayable = 0x0040,
             TES4_HeavyArmor = 0x0080,
             //
+            FO3_MediumArmor = 0x0008, // FONV
             FO3_PowerArmor = 0x0020,
             FO3_NonPlayable = 0x0040,
             FO3_HeavyArmor = 0x0080,
