@@ -305,7 +305,8 @@ local function changeReputation(repKey, which, fn)
     local before = standing(rep)
     local entry = repEntry(rep)
     local kind = character.kind(which)
-    entry[kind] = math.max(0, fn(entry[kind]))
+    -- clamped to the REPU DATA value, as AddReputation 0x615c90 does
+    entry[kind] = math.max(0, math.min(rep.value, fn(entry[kind])))
     dirty = true
     local after = standing(rep)
     if after ~= before then
