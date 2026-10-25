@@ -184,6 +184,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
     scripts/omw/fnvhud/global.lua
+    scripts/omw/fnvhud/keys.lua
     scripts/omw/fnvhud/player.lua
     scripts/omw/fnvstats.lua
     scripts/omw/fnvcharacter/rules.lua
