@@ -434,6 +434,10 @@ local function unlockTerminal(terminal, rec)
         return false
     end
     hacked[terminal.id] = true
+    local xp = core.getFNVGMST and core.getFNVGMST('iXPRewardHackComputer' .. name:gsub(' ', ''))
+    if type(xp) == 'number' and xp > 0 then
+        core.sendGlobalEvent('FNVCharacterCommand', { name = 'rewardXP', args = { xp } })
+    end
     return true, ('Terminal hacked (%s).'):format(name)
 end
 

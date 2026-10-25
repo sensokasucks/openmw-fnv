@@ -247,6 +247,7 @@ namespace ESM
         REC_REFR4 = esm4Recname(ESM4::REC_REFR), // Object Reference
         REC_REGN4 = esm4Recname(ESM4::REC_REGN), // Region (Audio/Weather)
         REC_RELA4 = esm4Recname(ESM4::REC_RELA), // Relationship
+        REC_REPU4 = esm4Recname(ESM4::REC_REPU), // Reputation (FONV)
         REC_REVB4 = esm4Recname(ESM4::REC_REVB), // Reverb Parameters
         REC_RFCT4 = esm4Recname(ESM4::REC_RFCT), // Visual Effect
         REC_SBSP4 = esm4Recname(ESM4::REC_SBSP), // Subspace (TES4 only?)

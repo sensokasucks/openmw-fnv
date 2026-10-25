@@ -127,6 +127,7 @@ set(BUILTIN_DATA_FILES
     openmw_aux/obscript/parser.lua
     openmw_aux/obscript/runtime.lua
     openmw_aux/obscript/stats.lua
+    openmw_aux/obscript/character.lua
     openmw_aux/obscript/transpiler.lua
 
     builtin.omwscripts
@@ -182,6 +183,9 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
     scripts/omw/fnvstats.lua
+    scripts/omw/fnvcharacter/rules.lua
+    scripts/omw/fnvcharacter/global.lua
+    scripts/omw/fnvcharacter/player.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx

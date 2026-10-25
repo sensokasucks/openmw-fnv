@@ -383,4 +383,23 @@ require('openmw_aux.obscript.stats').install(obs, {
     end,
 })
 
+-- RewardXP, RewardKarma, AddReputation, GetReputationThreshold, HasPerk...
+-- (openmw_aux.obscript.character): reads what scripts/omw/fnvcharacter/global.lua
+-- publishes and sends it the changes.
+local characterSection = storage.globalSection('FNVCharacter')
+require('openmw_aux.obscript.character').install(obs, {
+    subject = function() return self.object end,
+    resolve = function(ref)
+        if isObject(ref) then return ref end
+        if type(ref) ~= 'string' then return nil end
+        local key = ref:lower()
+        if key == 'player' or key == 'playerref' then return player() end
+        return nil
+    end,
+    data = function() return characterSection:get('state') end,
+    command = function(name, ...)
+        core.sendGlobalEvent('FNVCharacterCommand', { name = name, args = { ... } })
+    end,
+})
+
 return obs

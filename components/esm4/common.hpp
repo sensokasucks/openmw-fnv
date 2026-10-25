@@ -135,6 +135,7 @@ namespace ESM4
         REC_REFR = fourCC("REFR"), // Object Reference
         REC_REGN = fourCC("REGN"), // Region (Audio/Weather)
         REC_RELA = fourCC("RELA"), // Relationship
+        REC_REPU = fourCC("REPU"), // Reputation (FONV)
         REC_REVB = fourCC("REVB"), // Reverb Parameters
         REC_RFCT = fourCC("RFCT"), // Visual Effect
         REC_SBSP = fourCC("SBSP"), // Subspace (TES4 only?)

@@ -405,9 +405,32 @@ functions[415] = function(_, obj) return obj ~= nil end -- Exists
 functions[353] = function(_, obj) return obj ~= nil end -- IsActor
 functions[254] = function() return 1 end -- GetIsPlayableRace
 functions[524] = function() return 1 end -- IsWin32
+-- Reputation, perks and karma (scripts/omw/fnvcharacter/global.lua)
+local character = require('openmw_aux.obscript.character')
+local characterRules = require('scripts.omw.fnvcharacter.rules')
+local function characterState()
+    return I.FNVCharacter and I.FNVCharacter.getState()
+end
+functions[573] = function(cond) -- GetReputation rep (1 fame, 0 infamy)
+    return character.points(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[574] = function(cond) -- GetReputationPct
+    return character.percent(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[575] = function(cond) -- GetReputationThreshold: tier 0..3
+    return character.threshold(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[449] = function(cond, obj) -- HasPerk (only the player has perks)
+    if not isPlayer(obj) then return 0 end
+    return character.perkRank(characterState(), character.perk(cond.param1Form)) > 0
+end
+functions[474] = function(cond, obj) -- GetIsAlignment 0 good, 1 neutral, 2 evil, 3 very good, 4 very evil
+    if obj == nil or not stats.hasActorValues(obj) then return 0 end
+    return characterRules.alignmentOf(stats.get(obj, 'Karma'), character.gmst) == cond.param1
+end
 -- states the engine does not track for ESM4 actors yet: always "no"
 for _, f in ipairs({ 36, 45, 49, 61, 63, 64, 91, 98, 101, 125, 141, 159, 182, 224, 242, 286, 289, 309, 354,
-    365, 382, 435, 436, 449, 454, 455, 462, 523, 573, 574, 575, 586, 619 }) do
+    365, 382, 435, 436, 454, 455, 462, 523, 586, 619 }) do
     functions[f] = function() return 0 end
 end
 
@@ -988,6 +1011,16 @@ require('openmw_aux.obscript.stats').install(obs, {
     subject = function() return speakerOr(nil) end,
     resolve = speakerOr,
     change = function(object, op, av, value) I.FNVStats.change(object, op, av, value) end,
+})
+
+-- RewardXP, RewardKarma, AddReputation, HasPerk... (scripts/omw/fnvcharacter/global.lua)
+require('openmw_aux.obscript.character').install(obs, {
+    subject = function() return speakerOr(nil) end,
+    resolve = speakerOr,
+    data = function() return I.FNVCharacter and I.FNVCharacter.getState() end,
+    command = function(name, ...)
+        if I.FNVCharacter then I.FNVCharacter.command(name, ...) end
+    end,
 })
 
 obs.bind('SetStage', function(q, stage)

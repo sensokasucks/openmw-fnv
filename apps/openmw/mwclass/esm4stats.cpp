@@ -153,6 +153,7 @@ namespace MWClass::ESM4Stats
         struct Delta
         {
             std::optional<float> mBase;
+            float mPoints = 0; // added to the base: skill points spent at level up
             float mModifier = 0;
             float mDamage = 0;
         };
@@ -476,9 +477,10 @@ namespace MWClass::ESM4Stats
     {
         if (!valid(av) || !hasActorValues(actor))
             return 0;
-        if (const Delta* delta = findDelta(actor, av); delta != nullptr && delta->mBase)
-            return *delta->mBase;
-        return recordBase(actor, av);
+        const Delta* delta = findDelta(actor, av);
+        if (delta == nullptr)
+            return recordBase(actor, av);
+        return (delta->mBase ? *delta->mBase : recordBase(actor, av)) + delta->mPoints;
     }
 
     float getPermanent(const MWWorld::Ptr& actor, int av)
@@ -496,7 +498,17 @@ namespace MWClass::ESM4Stats
     void setBase(const MWWorld::Ptr& actor, int av, float value)
     {
         if (valid(av) && hasActorValues(actor))
-            deltaFor(actor, av).mBase = value;
+        {
+            Delta& delta = deltaFor(actor, av);
+            delta.mBase = value;
+            delta.mPoints = 0;
+        }
+    }
+
+    void addBasePoints(const MWWorld::Ptr& actor, int av, float points)
+    {
+        if (valid(av) && hasActorValues(actor))
+            deltaFor(actor, av).mPoints += points;
     }
 
     void modify(const MWWorld::Ptr& actor, int av, float delta)
@@ -550,8 +562,8 @@ namespace MWClass::ESM4Stats
         std::vector<Change> res;
         for (const auto& [actor, values] : sChanges)
             for (const auto& [av, delta] : values)
-                if (delta.mBase || delta.mModifier != 0 || delta.mDamage != 0)
-                    res.push_back(Change{ actor, av, delta.mBase, delta.mModifier, delta.mDamage });
+                if (delta.mBase || delta.mPoints != 0 || delta.mModifier != 0 || delta.mDamage != 0)
+                    res.push_back(Change{ actor, av, delta.mBase, delta.mPoints, delta.mModifier, delta.mDamage });
         return res;
     }
 
@@ -564,6 +576,7 @@ namespace MWClass::ESM4Stats
                 continue;
             Delta& delta = sChanges[change.mActor][change.mValue];
             delta.mBase = change.mBase;
+            delta.mPoints = change.mPoints;
             delta.mModifier = change.mModifier;
             delta.mDamage = change.mDamage;
         }
