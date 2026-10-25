@@ -11,9 +11,12 @@
 --
 -- Like the original, the menus can't be cancelled: Escape keeps them open.
 --
--- Not implemented yet: race and face (the race menu only picks the sex), and
--- traits are not perks (HasPerk doesn't see them; only their plain actor value
--- effects are applied).
+-- Traits are the game's PERK records flagged as traits; choosing one adds the
+-- perk (scripts/omw/fnvcharacter/global.lua), so HasPerk sees it. Perk entry
+-- points aren't applied yet, so the plain actor value effects of a few traits
+-- are applied here.
+--
+-- Not implemented yet: race and face (the race menu only picks the sex).
 
 local async = require('openmw.async')
 local core = require('openmw.core')
@@ -68,8 +71,9 @@ local SKILLS = { 'Barter', 'EnergyWeapons', 'Explosives', 'Guns', 'Lockpick', 'M
 local SKILL_LABEL = { EnergyWeapons = 'Energy Weapons', MeleeWeapons = 'Melee Weapons' }
 local TAG_COUNT = 3 -- SetTagSkills 3 1
 
--- The base game's traits. `effects` are the actor value changes this engine can apply so far.
-local TRAITS = {
+-- Stand-in trait list for when no PERK records are loaded. `effects` (by trait name) are the actor value
+-- changes applied until perk entry points are.
+local FALLBACK_TRAITS = {
     { id = 'BuiltToDestroy', name = 'Built to Destroy',
         text = 'Your weapons score critical hits more often, but they wear out faster.' },
     { id = 'FastShot', name = 'Fast Shot',
@@ -96,8 +100,31 @@ local TRAITS = {
     { id = 'WildWasteland', name = 'Wild Wasteland',
         text = 'Unleashes the most bizarre and silly elements of post-apocalyptic America.' },
 }
-local TRAIT_BY_ID = {}
-for _, trait in ipairs(TRAITS) do TRAIT_BY_ID[trait.id] = trait end
+local EFFECTS = {}
+for _, trait in ipairs(FALLBACK_TRAITS) do EFFECTS[trait.name] = trait.effects end
+
+-- The traits: playable PERK records flagged as traits, by name; FALLBACK_TRAITS without them.
+local traitList, traitById = nil, nil
+local function loadTraits()
+    if traitList then return end
+    traitList, traitById = {}, {}
+    local ok, perks = pcall(function() return stats.perks and stats.perks() end)
+    -- playable ones; every named trait if none is flagged playable
+    for _, playableOnly in ipairs({ true, false }) do
+        for _, perk in ipairs(ok and perks or {}) do
+            if perk.isTrait and (perk.playable or not playableOnly) and not perk.hidden and perk.name ~= '' then
+                traitList[#traitList + 1] = { id = perk.id, name = perk.name, text = perk.description,
+                    effects = EFFECTS[perk.name], perk = true }
+            end
+        end
+        if #traitList > 0 then break end
+    end
+    table.sort(traitList, function(a, b) return a.name < b.name end)
+    if #traitList == 0 then
+        for _, trait in ipairs(FALLBACK_TRAITS) do traitList[#traitList + 1] = trait end
+    end
+    for _, trait in ipairs(traitList) do traitById[trait.id] = trait end
+end
 
 local COMMANDS = {
     ShowRaceMenu = 'race',
@@ -124,7 +151,7 @@ local DEFAULT_MENU_TYPE = {
 
 -- ------------------------------------------------------------ state
 
-local traits = {} -- chosen trait ids, saved with the game
+local traits = {} -- chosen trait ids (PERK form ids), saved with the game
 local queue = {}  -- menus asked for while one is open: { kind, menuType }
 
 local element = nil
@@ -423,7 +450,7 @@ local function renderTraits(state)
             or string.format('Choose up to %d traits (optional).', state.max)),
         gap(8),
     }
-    for _, trait in ipairs(TRAITS) do
+    for _, trait in ipairs(traitList) do
         local picked = state.chosen[trait.id] == true
         content[#content + 1] = button(trait.name, function()
             state.focus = trait.id
@@ -436,7 +463,7 @@ local function renderTraits(state)
         end, { selected = picked })
     end
     content[#content + 1] = gap(8)
-    local focus = TRAIT_BY_ID[state.focus]
+    local focus = traitById[state.focus]
     content[#content + 1] = paragraph(focus and (focus.name .. ': ' .. focus.text) or '')
     content[#content + 1] = gap(8)
     content[#content + 1] = text(string.format('%d of %d selected', chosen, state.max))
@@ -447,7 +474,10 @@ end
 
 local function applyTraitEffects(ids, sign)
     for _, id in ipairs(ids) do
-        local trait = TRAIT_BY_ID[id]
+        local trait = traitById[id]
+        if trait and trait.perk then
+            core.sendGlobalEvent('FNVCharacterCommand', { name = sign > 0 and 'addPerk' or 'removePerk', args = { id } })
+        end
         for av, delta in pairs(trait and trait.effects or {}) do
             core.sendGlobalEvent('FNVStatsChange', { object = self.object, op = 'modify', av = av, value = sign * delta })
         end
@@ -456,11 +486,19 @@ end
 
 local function applyTraits(state)
     local new = {}
-    for _, trait in ipairs(TRAITS) do
-        if state.chosen[trait.id] then new[#new + 1] = trait.id end
+    local old = {}
+    for _, id in ipairs(traits) do old[id] = true end
+    local added, removed = {}, {}
+    for _, trait in ipairs(traitList) do
+        if state.chosen[trait.id] then
+            new[#new + 1] = trait.id
+            if not old[trait.id] then added[#added + 1] = trait.id end
+        elseif old[trait.id] then
+            removed[#removed + 1] = trait.id
+        end
     end
-    applyTraitEffects(traits, -1)
-    applyTraitEffects(new, 1)
+    applyTraitEffects(removed, -1)
+    applyTraitEffects(added, 1)
     traits = new
 end
 
@@ -513,10 +551,11 @@ local menus = {
     },
     traits = {
         init = function(state)
+            loadTraits()
             state.chosen = {}
             for _, id in ipairs(traits) do state.chosen[id] = true end
             state.max = math.max(1, math.floor(gameSetting('iTraitMenuMaxNumTraits', 2)))
-            state.focus = TRAITS[1].id
+            state.focus = traitList[1].id
         end,
         render = renderTraits,
         apply = applyTraits,
@@ -596,9 +635,10 @@ return {
             return { traits = traits }
         end,
         onLoad = function(data)
+            loadTraits()
             traits = {}
             for _, id in ipairs(data and data.traits or {}) do
-                if TRAIT_BY_ID[id] then traits[#traits + 1] = id end
+                if traitById[id] then traits[#traits + 1] = id end
             end
             register()
         end,
