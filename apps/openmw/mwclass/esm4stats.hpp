@@ -87,6 +87,7 @@ namespace MWClass::ESM4Stats
     float getCurrent(const MWWorld::Ptr& actor, int av);
 
     void setBase(const MWWorld::Ptr& actor, int av, float value); // SetAV, ForceAV
+    void addBasePoints(const MWWorld::Ptr& actor, int av, float points); // skill points spent at level up
     void modify(const MWWorld::Ptr& actor, int av, float delta); // ModAV
     void damage(const MWWorld::Ptr& actor, int av, float amount); // DamageAV (negative restores)
 
@@ -99,6 +100,7 @@ namespace MWClass::ESM4Stats
         ESM::FormId mActor; // unset for the player
         int mValue;
         std::optional<float> mBase;
+        float mPoints = 0;
         float mModifier = 0;
         float mDamage = 0;
     };

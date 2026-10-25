@@ -14,6 +14,7 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/containerstore.hpp"
+#include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/ptr.hpp"
 
@@ -42,6 +43,17 @@ namespace MWClass::ESM4Lock
             if (level >= 25)
                 return "Easy";
             return "Very Easy";
+        }
+
+        // XP for picking a lock of this level (iXPRewardPickLockVeryEasy .. VeryHard).
+        int pickLockXP(int level)
+        {
+            const std::string_view name = levelName(level);
+            std::string setting = "iXPRewardPickLock";
+            for (char c : name)
+                if (c != ' ')
+                    setting += c;
+            return MWWorld::ESM4GameSettings::getInt(setting);
         }
 
         template <class Record>
@@ -122,7 +134,10 @@ namespace MWClass::ESM4Lock
         }
 
         unlock(ptr);
-        tell(actor, "Lock picked.");
+        // The XP actor value; scripts/omw/fnvcharacter/global.lua levels up from it
+        const int xp = pickLockXP(needed);
+        ESM4Stats::modify(actor, ESM4Stats::XP, static_cast<float>(xp));
+        tell(actor, xp > 0 ? Misc::StringUtils::format("Lock picked. +%d XP", xp) : std::string("Lock picked."));
         return true;
     }
 

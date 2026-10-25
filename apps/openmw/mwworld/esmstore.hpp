@@ -119,6 +119,7 @@ namespace ESM4
     struct NavMesh;
     struct AIPackage;
     struct Outfit;
+    struct Perk;
     struct PlacedGrenade;
     struct PlacedMissile;
     struct VoiceType;
@@ -126,6 +127,7 @@ namespace ESM4
     struct Quest;
     struct Race;
     struct Reference;
+    struct Reputation;
     struct Script;
     struct Sound;
     struct SoundReference;
@@ -176,7 +178,8 @@ namespace MWWorld
             Store<ESM4::StaticCollection>, Store<ESM4::Terminal>, Store<ESM4::TextureSet>, Store<ESM4::Tree>,
             Store<ESM4::Weapon>, Store<ESM4::World>, Store<ESM4::GameSetting>, Store<ESM4::FormIdList>,
             Store<ESM4::IdleAnimation>, Store<ESM4::Class>, Store<ESM4::DefaultObj>, Store<ESM4::LightingTemplate>,
-            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::VoiceType>>;
+            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::VoiceType>,
+            Store<ESM4::Perk>, Store<ESM4::Reputation>>;
 
     private:
         template <typename T>

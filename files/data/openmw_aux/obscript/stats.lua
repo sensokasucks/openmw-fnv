@@ -112,14 +112,6 @@ function M.install(obs, env)
     obs.bind('GetPCIsSex', function(a, b)
         return isSex(env.resolve('player'), b or a)
     end)
-
-    -- `RewardXP amount` gives the player experience points (the XP actor value).
-    obs.bind('RewardXP', function(a, b)
-        local amount = tonumber(b or a) or 0
-        local player = env.resolve('player')
-        if player then env.change(player, 'modify', stats.actorValue('XP'), amount) end
-        return 0
-    end)
 end
 
 return M

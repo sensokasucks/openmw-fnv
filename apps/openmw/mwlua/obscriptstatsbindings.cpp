@@ -1,5 +1,6 @@
 #include "obscriptstatsbindings.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -12,12 +13,18 @@
 #include <components/esm/refid.hpp>
 #include <components/esm3/loadbody.hpp>
 #include <components/esm3/loadnpc.hpp>
+#include <components/esm4/loadperk.hpp>
+#include <components/esm4/loadrepu.hpp>
 #include <components/lua/luastate.hpp>
+#include <components/lua/util.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwclass/esm4stats.hpp"
+#include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/creaturestats.hpp"
+#include "../mwworld/class.hpp"
 #include "../mwworld/esm4gamesettings.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/livecellref.hpp"
@@ -26,6 +33,7 @@
 #include "context.hpp"
 #include "luamanagerimp.hpp"
 #include "object.hpp"
+#include "obscriptdialoguebindings.hpp"
 
 namespace MWLua
 {
@@ -77,6 +85,11 @@ namespace MWLua
                 if (fits(bp))
                     return bp.mId;
             return current;
+        std::string formIdText(ESM::FormId id)
+        {
+            if (id.isZeroOrUnset())
+                return {};
+            return ESM::RefId(id).serializeText();
         }
     }
 
@@ -110,6 +123,9 @@ namespace MWLua
         // Changing values is for global scripts (scripts/omw/fnvstats.lua); local ObScript sends it events.
         api["_setBase"] = [](const Object& actor, const sol::object& av, float value) {
             Stats::setBase(actor.ptr(), actorValue(av), value);
+        };
+        api["_addBasePoints"] = [](const Object& actor, const sol::object& av, float points) {
+            Stats::addBasePoints(actor.ptr(), actorValue(av), points);
         };
         api["_modify"] = [](const Object& actor, const sol::object& av, float delta) {
             Stats::modify(actor.ptr(), actorValue(av), delta);
@@ -171,6 +187,88 @@ namespace MWLua
                     world->renderPlayer();
                 },
                 "setPlayerSex");
+        // The player's level (the engine level GetLevel reads); for the leveling in scripts/omw/fnvcharacter.lua.
+        api["_setPlayerLevel"] = [context](int level) {
+            context.mLuaManager->addAction(
+                [level] {
+                    const MWWorld::Ptr player = MWMechanics::getPlayer();
+                    if (!player.isEmpty())
+                        player.getClass().getCreatureStats(player).setLevel(std::max(1, level));
+                },
+                "obscriptSetPlayerLevelAction");
+        };
+
+        // FONV reputations (REPU): a list of { id, editorId, name, value }.
+        api["reputations"] = [](sol::this_state s) {
+            sol::state_view state(s);
+            sol::table res(state, sol::create);
+            const MWWorld::Store<ESM4::Reputation>& store
+                = MWBase::Environment::get().getESMStore()->get<ESM4::Reputation>();
+            for (size_t i = 0; i < store.getSize(); ++i)
+            {
+                const ESM4::Reputation& rep = *store.at(i);
+                sol::table t(state, sol::create);
+                t["id"] = formIdText(rep.mId);
+                t["editorId"] = rep.mEditorId;
+                t["name"] = rep.mFullName;
+                t["value"] = rep.mValue;
+                res[LuaUtil::toLuaIndex(i)] = t;
+            }
+            return res;
+        };
+
+        // FO3/FONV perks and traits (PERK): a list of { id, editorId, name, description, isTrait, minLevel,
+        // ranks, playable, hidden, conditions (CTDA requirements, as core.obscript.dialogue builds them),
+        // entries = { { type = 'quest'|'ability'|'entryPoint', rank, quest, stage, spell, entryPoint,
+        // func, values } } }.
+        api["perks"] = [](sol::this_state s) {
+            sol::state_view state(s);
+            sol::table res(state, sol::create);
+            const MWWorld::Store<ESM4::Perk>& store = MWBase::Environment::get().getESMStore()->get<ESM4::Perk>();
+            for (size_t i = 0; i < store.getSize(); ++i)
+            {
+                const ESM4::Perk& perk = *store.at(i);
+                sol::table t(state, sol::create);
+                t["id"] = formIdText(perk.mId);
+                t["editorId"] = perk.mEditorId;
+                t["name"] = perk.mFullName;
+                t["description"] = perk.mDesc;
+                t["isTrait"] = perk.mIsTrait;
+                t["minLevel"] = perk.mMinLevel;
+                t["ranks"] = std::max<int>(1, perk.mRanks);
+                t["playable"] = perk.mPlayable;
+                t["hidden"] = perk.mHidden;
+                t["conditions"] = makeObScriptConditions(state, perk.mConditions);
+                sol::table entries(state, sol::create);
+                for (size_t j = 0; j < perk.mEntries.size(); ++j)
+                {
+                    const ESM4::Perk::Entry& entry = perk.mEntries[j];
+                    sol::table e(state, sol::create);
+                    e["rank"] = entry.mRank;
+                    switch (entry.mType)
+                    {
+                        case ESM4::Perk::Entry_Quest:
+                            e["type"] = "quest";
+                            e["quest"] = formIdText(entry.mQuest);
+                            e["stage"] = entry.mStage;
+                            break;
+                        case ESM4::Perk::Entry_Ability:
+                            e["type"] = "ability";
+                            e["spell"] = formIdText(entry.mSpell);
+                            break;
+                        default:
+                            e["type"] = "entryPoint";
+                            e["entryPoint"] = entry.mEntryPoint;
+                            e["func"] = entry.mFunction;
+                            e["values"] = state.create_table_with(1, entry.mValues[0], 2, entry.mValues[1]);
+                            break;
+                    }
+                    entries[LuaUtil::toLuaIndex(j)] = e;
+                }
+                t["entries"] = entries;
+                res[LuaUtil::toLuaIndex(i)] = t;
+            }
+            return res;
         };
 
         // Saved-game state: a list of { actor = 'player' or reference form id, av =, base =, modifier =, damage = }.
@@ -184,6 +282,8 @@ namespace MWLua
                 t["av"] = change.mValue;
                 if (change.mBase)
                     t["base"] = *change.mBase;
+                if (change.mPoints != 0)
+                    t["points"] = change.mPoints;
                 t["modifier"] = change.mModifier;
                 t["damage"] = change.mDamage;
                 res.add(t);
@@ -210,6 +310,7 @@ namespace MWLua
                 change.mValue = t.get_or("av", -1);
                 if (sol::optional<float> base = t.get<sol::optional<float>>("base"))
                     change.mBase = *base;
+                change.mPoints = t.get_or("points", 0.f);
                 change.mModifier = t.get_or("modifier", 0.f);
                 change.mDamage = t.get_or("damage", 0.f);
                 changes.push_back(change);
