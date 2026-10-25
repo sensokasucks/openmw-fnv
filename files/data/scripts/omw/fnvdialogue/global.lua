@@ -39,6 +39,9 @@ end
 local INFO_GOODBYE = 0x0001
 local INFO_RANDOM = 0x0002
 local INFO_SAY_ONCE = 0x0004
+local INFO_RUN_IMMEDIATELY = 0x0008 -- the end script runs with the begin script
+local INFO_RANDOM_END = 0x0020 -- closes a run of Random lines
+local INFO_SAY_ONCE_A_DAY = 0x0100
 
 local function hasFlag(flags, flag)
     return util.bitAnd(flags or 0, flag) ~= 0
@@ -52,6 +55,8 @@ local state = {
     --                    delay (SetQuestDelay), countdown, elapsed (quest script scheduling) }
     quests = {},
     saidOnce = {},   -- INFO form id -> true
+    saidAt = {},     -- INFO form id -> game time (s) it was last said, for Say Once a Day
+    knownTopics = {}, -- topic form id -> true: topics from AddTopic and INFO add-topics (top-level ones are always known)
     talkedTo = {},   -- NPC reference form id -> true
 }
 
@@ -450,30 +455,62 @@ end
 
 -- The first INFO of a topic whose quest is running and whose conditions pass
 -- for this speaker and target; Random lines are picked among the passing ones.
+local DAY = 24 * 3600
+
+local function available(info)
+    if state.saidOnce[info.id] then return false end
+    if hasFlag(info.flags, INFO_SAY_ONCE_A_DAY) then
+        local at = state.saidAt[info.id]
+        if at and core.getGameTime() - at < DAY then return false end
+    end
+    return true
+end
+
+-- Random lines form a pool that ends at the line flagged Random End (or at
+-- the first line that is not Random); one passing line of the pool is picked.
 local function pickInfoFor(topic, speaker, actor, target)
     local ctx = makeContext(speaker, target)
     local infos = getTopicInfos(topic.id, actor.recordId)
     local randoms = nil
     for _, info in ipairs(infos) do
-        if questAllows(info) and not state.saidOnce[info.id] then
+        local random = hasFlag(info.flags, INFO_RANDOM)
+        if randoms and not random then
+            break -- the pool ended without a Random End line
+        end
+        if questAllows(info) and available(info) then
             local passed, failed, value = conditions.evaluate(info.conditions, ctx)
             if passed then
-                if not hasFlag(info.flags, INFO_RANDOM) then
-                    if randoms == nil then return info end
-                elseif randoms == nil then
-                    randoms = { info }
-                else
-                    randoms[#randoms + 1] = info
+                if not random then
+                    return info
                 end
+                randoms = randoms or {}
+                randoms[#randoms + 1] = info
             elseif trace then
                 tlog(('  %s %s: fails %s'):format(topic.editorId, info.id, conditions.describe(failed, value)))
             end
+        end
+        if randoms and hasFlag(info.flags, INFO_RANDOM_END) then
+            break
         end
     end
     if randoms then
         return randoms[math.random(1, #randoms)]
     end
     return nil
+end
+
+-- What saying a line changes: Say Once (a Day), and the topics it adds to
+-- the player's known topics.
+local function markSaid(info)
+    if hasFlag(info.flags, INFO_SAY_ONCE) then
+        state.saidOnce[info.id] = true
+    end
+    if hasFlag(info.flags, INFO_SAY_ONCE_A_DAY) then
+        state.saidAt[info.id] = core.getGameTime()
+    end
+    for _, topicId in ipairs(info.addTopics) do
+        state.knownTopics[topicId] = true
+    end
 end
 
 local function pickInfo(topic)
@@ -814,9 +851,7 @@ local function sayLine(speaker, target, topicIdOrEditorId)
         return false
     end
     tlog(('SayTo: %s says %s INFO %s'):format(actor.editorId, topic.editorId, info.id))
-    if hasFlag(info.flags, INFO_SAY_ONCE) then
-        state.saidOnce[info.id] = true
-    end
+    markSaid(info)
     for _, line in ipairs(speaking) do
         if line.speaker == speaker then line.interrupted = true end
     end
@@ -825,6 +860,10 @@ local function sayLine(speaker, target, topicIdOrEditorId)
         timeLeft = lineDuration(text) }
     speaking[#speaking + 1] = line
     runScript(info.scriptBegin, line.label .. ' begin', speaker)
+    if hasFlag(info.flags, INFO_RUN_IMMEDIATELY) then
+        runScript(info.scriptEnd, line.label .. ' end', speaker)
+        line.endDone = true
+    end
     if text ~= '' then
         world.players[1]:sendEvent('FNVSubtitle', {
             speaker = actor.name ~= '' and actor.name or actor.editorId,
@@ -848,7 +887,9 @@ local function tickSpeaking(dt)
     end
     speaking = still
     for _, line in ipairs(finished) do
-        runScript(line.info.scriptEnd, line.label .. ' end', line.speaker)
+        if not line.endDone then
+            runScript(line.info.scriptEnd, line.label .. ' end', line.speaker)
+        end
         -- `Begin SayToDone Topic` on the speaker's own script
         if line.speaker:isValid() then
             line.speaker:sendEvent('ObScriptEvent', { event = 'SayToDone', ref = line.topic })
@@ -1281,6 +1322,17 @@ obs._remoteSet = function(base, name, value)
     return key ~= nil and setRefVar(key, name, value)
 end
 
+-- `AddTopic Topic`: the player knows the topic from now on.
+obs.bind('AddTopic', function(topicId)
+    local topic = type(topicId) == 'string' and getTopic(topicId)
+    if topic then
+        state.knownTopics[topic.id] = true
+    else
+        tlog('AddTopic: unknown topic ' .. tostring(topicId))
+    end
+    return 0
+end)
+
 -- `Ref.MoveTo Target [x y z]` (and MoveToMarker, MoveToMarkerWithFade, whose
 -- fade is not done): puts the reference at the target, offset in world units.
 local function moveTo(...)
@@ -1307,7 +1359,7 @@ obs.bind('player', function() return 'player' end)
 -- dialogue window reports them so the play-tester sees what was skipped.
 for _, name in ipairs({ 'ShowBarterMenu', 'ShowRepairMenu', 'ShowRecipeMenu', 'ShowCompanionWheel', 'ForceGreet',
     'RewardXP', 'RewardKarma', 'AddPerk', 'ModPCSkill', 'SetEssential', 'SetPlayerTeammate',
-    'PlayGroup', 'StartCombat', 'StopCombat', 'SetEnemy', 'SetAlly', 'AddTopic' }) do
+    'PlayGroup', 'StartCombat', 'StopCombat', 'SetEnemy', 'SetAlly' }) do
     if obs._bindings[name:lower()] == nil then
         local reported = false
         obs.bind(name, function()
@@ -1345,10 +1397,31 @@ local function buildOptions(info)
         end
         if #options > 0 then return options end
     end
+    -- the player's known topics: every top-level topic, plus those added by
+    -- AddTopic and by lines said; ordered by priority, then name
+    local topics = {}
+    local seen = {}
     for _, topicId in ipairs(getSpeakerTopics(session.actor.recordId)) do
         local topic = getTopic(topicId)
-        if topic and topic.editorId:upper() ~= 'GREETING' then
-            local option = topicOption(topicId)
+        if topic then
+            topics[#topics + 1] = topic
+            seen[topic.id] = true
+        end
+    end
+    for topicId in pairs(state.knownTopics) do
+        local topic = getTopic(topicId)
+        if topic and not seen[topic.id] and topic.type == 0 then
+            topics[#topics + 1] = topic
+            seen[topic.id] = true
+        end
+    end
+    table.sort(topics, function(a, b)
+        if a.priority ~= b.priority then return a.priority > b.priority end
+        return a.name < b.name
+    end)
+    for _, topic in ipairs(topics) do
+        if topic.editorId:upper() ~= 'GREETING' then
+            local option = topicOption(topic.id)
             if option then options[#options + 1] = option end
         end
     end
@@ -1382,13 +1455,15 @@ end
 local function say(info, topic)
     local s = session
     tlog(('%s: INFO %s (quest %s)'):format(topic and topic.editorId or '?', info.id, info.quest))
-    if hasFlag(info.flags, INFO_SAY_ONCE) then
-        state.saidOnce[info.id] = true
-    end
+    markSaid(info)
     s.pendingTopic = nil
     runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin', s.speaker)
     if session == nil then return end -- a script ended the conversation
     s.saying = info
+    if hasFlag(info.flags, INFO_RUN_IMMEDIATELY) then
+        finishLine()
+        if session == nil then return end
+    end
     s.goodbye = hasFlag(info.flags, INFO_GOODBYE)
     s.options = buildOptions(info)
     sendScreen(infoText(info))
@@ -1613,6 +1688,8 @@ return {
             if data == nil then return end
             state = data.state or state
             state.initialized = true
+            state.saidAt = state.saidAt or {}
+            state.knownTopics = state.knownTopics or {}
             for k, v in pairs(data.globals or {}) do obs._globals[k] = v end
             loadScriptVars(data.vars)
             publishAllQuests()
