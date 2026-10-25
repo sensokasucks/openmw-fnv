@@ -300,6 +300,9 @@ namespace MWWorld
 
         void enable(const Ptr& ptr) override;
 
+        void updateEnableChildren(const Ptr& reference);
+        Ptr findLoadedESM4Reference(ESM::FormId id);
+
         void disable(const Ptr& ptr) override;
 
         void advanceTime(double hours, bool incremental = false) override;

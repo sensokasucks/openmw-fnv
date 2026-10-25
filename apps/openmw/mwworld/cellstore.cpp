@@ -359,12 +359,15 @@ namespace MWWorld
             if (ref.mEsp.parent.isZeroOrUnset())
                 return true;
 
-            // Disable objects that are linked to an initially disabled parent.
-            // Actually when we will start working on Oblivion/Skyrim scripting we will need to:
-            //  - use the current state of the parent instead of initial state of the parent
-            //  - every time when the parent is enabled/disabled we should also enable/disable
-            //        all objects that are linked to it.
-            // But for now we assume that the parent remains in its initial state.
+            const bool inversedChild = ref.mEsp.flags & ESM4::EnableParent::Flag_Inversed;
+            // A parent that is already loaded (persistent references always are) has its current state, which
+            // scripts may have changed (VCG02BottleMarkerREF.Enable); World::enable/disable passes later
+            // changes on to loaded children.
+            const MWWorld::Ptr parent = MWBase::Environment::get().getWorldModel()->getPtr(ref.mEsp.parent);
+            if (!parent.isEmpty())
+                return parent.getRefData().isEnabled() != inversedChild;
+
+            // Otherwise the parent is in its initial state.
             if (const ESM4::Reference* parentRef = store.get<ESM4::Reference>().searchStatic(ref.mEsp.parent))
             {
                 const bool parentDisabled = parentRef->mFlags & ESM4::Rec_Disabled;
