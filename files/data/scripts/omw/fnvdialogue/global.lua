@@ -370,6 +370,15 @@ functions[53] = function(cond) -- GetScriptVariable ref index
     return name and vars.locals[name:lower()] or 0
 end
 
+functions[462] = function(cond) -- IsPlayerTagSkill
+    local av = stats.actorValue(cond.param1)
+    if av == nil or stats.getTagSkills == nil then return false end
+    for _, tagged in ipairs(stats.getTagSkills()) do
+        if tagged == av then return true end
+    end
+    return false
+end
+
 -- GetDeadCount: deaths of actors with this base record seen so far (see trackDeaths)
 functions[84] = function(cond)
     return state.deadCounts and state.deadCounts[cond.param1Form] or 0
@@ -445,7 +454,7 @@ functions[474] = function(cond, obj) -- GetIsAlignment 0 good, 1 neutral, 2 evil
 end
 -- states the engine does not track for ESM4 actors yet: always "no"
 for _, f in ipairs({ 36, 45, 49, 61, 63, 64, 91, 98, 101, 125, 141, 159, 182, 224, 242, 286, 289, 309, 354,
-    365, 382, 435, 436, 454, 455, 462, 523, 586, 619 }) do
+    365, 382, 435, 436, 454, 455, 523, 586, 619 }) do
     functions[f] = function() return 0 end
 end
 
@@ -1475,7 +1484,7 @@ end
 local quietStubs = {}
 for _, name in ipairs({ 'ApplyImageSpaceModifier',
     'RemoveImageSpaceModifier', 'SetDestroyed', 'PlayIdle', 'AutoDisplayObjectives', 'AutoSave',
-    'AddAchievement', 'SexChange', 'Look', 'StopLook', 'SetScreenSplatterFade', 'PlaySound', 'PlaySound3D' }) do
+    'AddAchievement', 'Look', 'StopLook', 'SetScreenSplatterFade', 'PlaySound', 'PlaySound3D' }) do
     obs.bind(name, function()
         if not quietStubs[name] then
             quietStubs[name] = true
