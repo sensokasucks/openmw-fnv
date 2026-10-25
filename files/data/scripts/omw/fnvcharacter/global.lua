@@ -9,6 +9,8 @@
 -- 'FNVCharacter' for local scripts.
 --
 -- From the Lua console (`luag`):
+--   I.FNVCharacter.levelUp()      -- one level up, opens the level-up window
+--   I.FNVCharacter.levelUp(3)     -- three levels
 --   I.FNVCharacter.rewardXP(1000)
 --   I.FNVCharacter.addReputation('RepNVGoodsprings', 1, 3)
 --   I.FNVCharacter.getState()
@@ -359,6 +361,11 @@ return {
         rewardXP = rewardXP,
         rewardKarma = rewardKarma,
         advanceLevel = advanceLevel,
+        --- Gives the XP for `count` (default 1) more levels; for testing from the console.
+        levelUp = function(count)
+            for _ = 1, math.max(1, math.floor(tonumber(count) or 1)) do advanceLevel() end
+            return state.level
+        end,
         resetXP = resetXP,
         addReputation = commands.addReputation,
         removeReputation = commands.removeReputation,
