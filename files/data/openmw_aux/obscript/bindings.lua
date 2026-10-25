@@ -242,6 +242,36 @@ obs.bind('IsCurrentFurnitureRef', function(...)
     return (current and wanted and current == wanted) and 1 or 0
 end)
 
+-- AI state of FO3/FNV NPCs, published by scripts/omw/fnvai/global.lua:
+-- { package = form id, packageType = PKDT type, sitting = GetSitting, sleeping = GetSleeping }.
+local actorAI = storage.globalSection('ESM4ActorAI')
+local function aiState(actor)
+    return actor and actorAI:get(tostring(actor.id))
+end
+-- `Ref.GetIsCurrentPackage Package`
+obs.bind('GetIsCurrentPackage', function(...)
+    local actor, package = refAndArgs(...)
+    local state = aiState(actor)
+    local wanted = type(package) == 'string' and core.obscript.resolvePackageEditorId(package)
+    return (state and wanted and state.package == wanted) and 1 or 0
+end)
+obs.bind('GetCurrentAIPackage', function(...)
+    local state = aiState(refAndArgs(...))
+    return state and state.packageType or 0
+end)
+-- 0 no, 1 going to the seat or bed, 2 sitting / lying down, 3 seated / asleep, 4 getting up
+obs.bind('GetSitting', function(...)
+    local actor = refAndArgs(...)
+    local state = aiState(actor)
+    if state then return state.sitting or 0 end
+    local current = actor and furniture:get(tostring(actor.id))
+    return (current and current ~= '') and 3 or 0
+end)
+obs.bind('GetSleeping', function(...)
+    local state = aiState(refAndArgs(...))
+    return state and state.sleeping or 0
+end)
+
 obs.bind('GetCurrentTime', function()
     return core.obscript.getGameDate().hour
 end)
@@ -394,7 +424,7 @@ obs._triggerProbe = function()
     local radius2 = (hx * hx + hy * hy + hz * hz) + 64 * 64
     local inv = self.object.rotation:inverse()
     local inside = {}
-    for _, actor in ipairs(nearby.actors) do
+    local function probe(actor)
         local pos = actor.position
         if (pos - center):length2() <= radius2 then
             local function hit(p)
@@ -404,6 +434,15 @@ obs._triggerProbe = function()
             if hit(pos) or hit(pos + util.vector3(0, 0, 64)) then
                 inside[#inside + 1] = actor
             end
+        end
+    end
+    for _, actor in ipairs(nearby.actors) do
+        probe(actor)
+    end
+    -- FO3/FNV NPCs and creatures are not in nearby.actors
+    if core.obscript.getESM4ActorsNear then
+        for _, actor in ipairs(core.obscript.getESM4ActorsNear(self.object, center, math.sqrt(radius2))) do
+            probe(actor)
         end
     end
     return inside

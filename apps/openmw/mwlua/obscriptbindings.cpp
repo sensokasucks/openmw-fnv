@@ -52,9 +52,11 @@
 #include "../mwbase/world.hpp"
 #include "../mwclass/esm4base.hpp"
 #include "../mwclass/esm4door.hpp"
+#include "../mwworld/cellstore.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/globals.hpp"
 #include "../mwworld/store.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "context.hpp"
 #include "luamanagerimp.hpp"
@@ -352,6 +354,34 @@ namespace MWLua
             if (bounds.x() <= 0.f && bounds.y() <= 0.f && bounds.z() <= 0.f)
                 return sol::nullopt;
             return bounds;
+        };
+
+        // ESM4 NPCs and creatures in the scene, in the object's cell, within radius of position. Trigger volumes look
+        // for them here: nearby.actors only lists actors of the base game.
+        api["getESM4ActorsNear"] = [context](const Object& object, const osg::Vec3f& position, float radius,
+                                       sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            MWWorld::CellStore* cell = object.ptr().getCell();
+            if (cell == nullptr)
+                return res;
+            const float radius2 = radius * radius;
+            int index = 1;
+            auto visitor = [&](const MWWorld::Ptr& actor) {
+                if (actor.getRefData().getBaseNode() == nullptr || !actor.getRefData().isEnabled())
+                    return true;
+                if ((actor.getRefData().getPosition().asVec3() - position).length2() > radius2)
+                    return true;
+                MWBase::Environment::get().getWorldModel()->registerPtr(actor);
+                if (context.mType == Context::Global)
+                    res[index++] = GObject(actor);
+                else
+                    res[index++] = LObject(actor);
+                return true;
+            };
+            cell->forEachType<ESM4::Npc>(visitor);
+            cell->forEachType<ESM4::Creature>(visitor);
+            return res;
         };
 
         // Form id of the reference's linked reference (XLKR), nil when it has none.

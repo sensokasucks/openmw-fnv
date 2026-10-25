@@ -139,6 +139,25 @@ namespace MWLua
             res["targets"] = targets;
 
             res["conditions"] = makeObScriptConditions(lua, package.mFoConditions);
+
+            // { idle, topic (form ids, empty for none), script (source text) }
+            auto makeEvent = [&](const ESM4::AIPackage::Event& event) {
+                sol::table e(lua, sol::create);
+                e["idle"] = formIdText(event.mIdle);
+                e["topic"] = formIdText(event.mTopic);
+                e["script"] = event.mScript;
+                return e;
+            };
+            res["onBegin"] = makeEvent(package.mOnBegin);
+            res["onEnd"] = makeEvent(package.mOnEnd);
+            res["onChange"] = makeEvent(package.mOnChange);
+
+            sol::table dialogue(lua, sol::create);
+            dialogue["fov"] = package.mDialogueFov;
+            dialogue["topic"] = formIdText(package.mDialogueTopic);
+            dialogue["flags"] = package.mDialogueFlags;
+            dialogue["type"] = package.mDialogueType;
+            res["dialogue"] = dialogue;
             return res;
         }
 

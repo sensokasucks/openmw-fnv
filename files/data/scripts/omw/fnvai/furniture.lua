@@ -11,6 +11,7 @@
 -- the marker's list of idle animations.
 
 local core = require('openmw.core')
+local storage = require('openmw.storage')
 local types = require('openmw.types')
 local util = require('openmw.util')
 local idles = require('scripts.omw.fnvai.idles')
@@ -66,10 +67,26 @@ end
 
 local taken = {} -- furniture or idle marker id -> npc id
 
+-- The furniture each seated actor uses, for IsCurrentFurnitureRef in scripts (also written for the player by
+-- scripts/omw/activationhandlers.lua): actor id -> furniture reference form id.
+local currentFurniture = storage.globalSection('ESM4CurrentFurniture')
+
+local function setCurrentFurniture(npcId, furniture)
+    local id = nil
+    if furniture ~= nil then
+        local ok, refId = pcall(function() return core.obscript.dialogue.getReferenceId(furniture) end)
+        id = ok and refId or ''
+    end
+    currentFurniture:set(tostring(npcId), id)
+end
+
 function M.release(s)
     local f = s.furn
     if f ~= nil and f.target ~= nil and taken[f.target.object.id] == f.npcId then
         taken[f.target.object.id] = nil
+    end
+    if f ~= nil and f.seated then
+        setCurrentFurniture(f.npcId, nil)
     end
     s.furn = nil
 end
@@ -99,6 +116,29 @@ function M.findFurniture(npc, center, radius, wantSleep)
                         bestDistance = distance
                     end
                 end
+            end
+        end
+    end
+    return best
+end
+
+-- The marker of one piece of furniture the NPC would use, nearest first: seats and lean spots, else beds.
+-- nil when another actor uses it or it has no usable marker.
+-- @return a target as findFurniture returns it, with sleep = true for a bed
+function M.markerOn(npc, obj)
+    if types.ESM4Furniture == nil or not types.ESM4Furniture.objectIsInstance(obj) or not isFree(obj, npc) then
+        return nil
+    end
+    local record = types.ESM4Furniture.record(obj)
+    local best, bestDistance, bestSleep = nil, math.huge, true
+    for _, marker in ipairs(types.ESM4Furniture.markers(obj)) do
+        local sleep = sleepMarkers[marker.type] == true
+        if (sleep or sitMarkers[marker.type]) and markerEnabled(record, marker) and markerDelta[marker.type] ~= nil then
+            local position, yaw = M.markerWorld(obj, marker)
+            local distance = (position - npc.position):length()
+            if (bestSleep and not sleep) or (sleep == bestSleep and distance < bestDistance) then
+                best = { object = obj, marker = marker, position = position, yaw = yaw, sleep = sleep }
+                bestDistance, bestSleep = distance, sleep
             end
         end
     end
@@ -240,6 +280,8 @@ local function arrive(npc, f, now)
     })
     log(('%s uses %s marker %d: %s / %s / %s'):format(npc.recordId, target.object.recordId, target.marker.type,
         enter and enter.editorId or '-', loop.editorId, exit and exit.editorId or '-'))
+    f.seated = true
+    setCurrentFurniture(f.npcId, target.object)
     f.phase = 'use'
     f.nextIdle = now + 4 + math.random() * 8
 end

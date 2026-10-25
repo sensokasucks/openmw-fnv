@@ -2136,6 +2136,25 @@ return {
         bindCommand = function(name, fn)
             obs.bind(name, function(...) return fn(refAndArgs(...)) end)
         end,
+        --- Runs a result script (ObScript source, e.g. an AI package's OnEnd) once
+        -- with `subject` as the object it runs on; label names it in the log.
+        runResultScript = function(source, label, subject)
+            initState()
+            runScript(source, label, subject)
+        end,
+        --- Opens dialogue between the NPC and the player (Dialogue AI packages);
+        -- topic: form id or editor id, nil for the greeting. False when a
+        -- conversation is already going on.
+        startConversation = function(speaker, topic)
+            if session ~= nil then return false end
+            local player = world.players[1]
+            if player == nil then return false end
+            return startDialogue(speaker, player, topic) == true
+        end,
+        --- Whether the player is in a conversation with the NPC.
+        isTalkingTo = function(speaker)
+            return session ~= nil and session.speaker == speaker
+        end,
         --- Installs a CTDA condition function: fn(cond, object, subject, target)
         -- returns the function's value (object is the one the condition runs on).
         setConditionFunction = function(index, fn)

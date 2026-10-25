@@ -160,6 +160,24 @@ namespace ESM4
         Target mTargets[2]; // FO3/FONV: PTDT, PTD2
         std::vector<DialogCondition> mFoConditions; // FO3/FONV, in order
 
+        // FO3/FONV package events: POBA (OnBegin), POEA (OnEnd), POCA (OnChange), each followed by an idle (INAM),
+        // a result script (SCHR, SCDA, SCTX, SCRO...) and a topic (TNAM)
+        struct Event
+        {
+            ESM::FormId mIdle;
+            ESM::FormId mTopic;
+            std::string mScript; // source text (SCTX)
+        };
+        Event mOnBegin;
+        Event mOnEnd;
+        Event mOnChange;
+
+        // FO3/FONV Dialogue package data (PKDD)
+        float mDialogueFov = 0.f; // degrees
+        ESM::FormId mDialogueTopic;
+        std::uint32_t mDialogueFlags = 0; // 1 no headtracking, 0x100 don't control target movement
+        std::uint32_t mDialogueType = 0; // 0 conversation, 1 say to
+
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;
 
