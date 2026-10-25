@@ -1708,6 +1708,79 @@ local function setQuestVar(data)
     publishQuest(quest)
 end
 
+-- ---------------------------------------------------------------- effect scripts
+-- Scripts of Script effects (SCPT type 0x100), run by scripts/omw/fnveffects
+-- for every active effect instance, each with its own locals:
+-- ScriptEffectStart on the first run, ScriptEffectUpdate every frame and
+-- ScriptEffectFinish at the end. Commands without a reference act on the
+-- actor the effect is on.
+
+local effectScripts = {} -- SCPT form id or editor id -> script entry, or false
+
+local function loadEffectScript(scriptId)
+    local cached = effectScripts[scriptId]
+    if cached ~= nil then return cached or nil end
+    effectScripts[scriptId] = false
+    local record = dlg.getScript(scriptId)
+    if record == nil or record.source == '' then return nil end
+    local ok, luaSource = pcall(compiler.compile, record.source)
+    if not ok then
+        log('effect script ' .. record.editorId .. ' does not compile: ' .. tostring(luaSource))
+        return nil
+    end
+    local loaded, chunk = pcall(util.loadCode, stripLocalScriptTail(luaSource), scriptEnv)
+    if not loaded then
+        log('effect script ' .. record.editorId .. ' does not load: ' .. tostring(chunk))
+        return nil
+    end
+    local prevCurrent = obs._current
+    local ran, err = pcall(chunk)
+    local entry = obs._current
+    obs._current = prevCurrent
+    if not ran or entry == nil then
+        log('effect script ' .. record.editorId .. ' failed to initialize: ' .. tostring(err))
+        return nil
+    end
+    -- the shared entry only holds the blocks; each instance brings its locals
+    entry.effect = true
+    for k in pairs(entry.locals) do entry.locals[k] = nil end
+    effectScripts[scriptId] = entry
+    tlog('effect script ' .. record.editorId .. ' loaded')
+    return entry
+end
+
+local effectScriptErrors = {}
+
+-- One run of an effect script with an instance's locals (updated in place).
+local function runEffectScript(scriptId, subject, locals, events, dt)
+    initState()
+    local entry = loadEffectScript(scriptId)
+    if entry == nil then return false end
+    local S = entry.locals
+    local outer = {}
+    for k, v in pairs(S) do outer[k] = v end
+    for k in pairs(outer) do S[k] = nil end
+    for k, v in pairs(locals) do S[k] = v end
+    local prevSubject, prevDt = scriptSubject, obs._dt
+    scriptSubject = subject
+    obs._dt = dt or 0
+    local ok, err = pcall(obs.execute, entry, { events = events })
+    scriptSubject, obs._dt = prevSubject, prevDt
+    local result = {}
+    for k, v in pairs(S) do result[k] = v end
+    for k in pairs(locals) do locals[k] = nil end
+    for k, v in pairs(result) do
+        locals[k] = v
+        S[k] = nil
+    end
+    for k, v in pairs(outer) do S[k] = v end
+    if not ok and not effectScriptErrors[scriptId] then
+        effectScriptErrors[scriptId] = true
+        log('effect script ' .. tostring(entry.name) .. ' failed: ' .. tostring(err))
+    end
+    return true
+end
+
 -- ---------------------------------------------------------------- save/load
 
 local function saveScriptVars()
@@ -1779,6 +1852,23 @@ return {
         checkConditions = function(list, subject)
             initState()
             return conditions.evaluate(list, makeContext(subject, world.players[1]))
+        end,
+        --- Runs an effect script (SCPT type 0x100, by form id or editor id) once
+        -- on `subject` with `locals` (a table owned by the caller, updated in
+        -- place) and pending `events`, e.g. { scripteffectstart = { { ref = caster } } }.
+        -- @return false if the script does not exist or does not compile
+        runEffectScript = runEffectScript,
+        --- Installs an ObScript command for quest, result and effect scripts:
+        -- fn(object, ...) gets the named reference of `Ref.Cmd a b`, or the
+        -- running script's subject for `Cmd a b`, followed by the arguments.
+        bindCommand = function(name, fn)
+            obs.bind(name, function(...) return fn(refAndArgs(...)) end)
+        end,
+        --- Installs a CTDA condition function: fn(cond, object, subject, target)
+        -- returns the function's value (object is the one the condition runs on).
+        setConditionFunction = function(index, fn)
+            functions[index] = fn
+            missingFunctions[index] = nil
         end,
     },
     eventHandlers = {
