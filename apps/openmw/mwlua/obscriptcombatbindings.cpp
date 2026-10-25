@@ -56,8 +56,8 @@ namespace MWLua
             return ESM::RefId(id).serializeText();
         }
 
-        // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), damage, killed,
-        // position }
+        // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
+        // a miss, if anything), damage, killed, position }
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon,
             const Combat::HitResult& hit)
         {
@@ -67,6 +67,8 @@ namespace MWLua
                 data["weapon"] = formIdText(weapon.mId);
                 if (!hit.mTarget.isEmpty())
                     data["target"] = GObject(hit.mTarget);
+                else if (!hit.mObject.isEmpty())
+                    data["object"] = GObject(hit.mObject);
                 data["damage"] = hit.mDamage;
                 data["killed"] = hit.mKilled;
                 data["position"] = hit.mPosition;

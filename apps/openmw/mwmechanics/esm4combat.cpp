@@ -303,6 +303,8 @@ namespace MWMechanics::ESM4Combat
             MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
         float range = wall.mHit ? (wall.mHitPos - origin).length() : sShotRange;
         result.mPosition = wall.mHit ? wall.mHitPos : end;
+        if (wall.mHit)
+            result.mObject = wall.mHitObject;
 
         std::vector<MWWorld::Ptr> candidates;
         for (MWWorld::CellStore* cell : MWBase::Environment::get().getWorldScene()->getActiveCells())
@@ -338,6 +340,7 @@ namespace MWMechanics::ESM4Combat
             {
                 range = *distance;
                 result.mTarget = candidate;
+                result.mObject = MWWorld::Ptr();
                 result.mPosition = origin + dir * *distance;
             }
         }

@@ -239,9 +239,13 @@ function obs.mv(base, name)
     if entry and rawget(entry.locals, name:lower()) ~= nil then
         return entry.locals[name:lower()]
     end
-    -- zero-argument member command in value position: `player.GetLevel`
+    -- zero-argument member command in value position: `player.GetLevel`, `Player.IsWeaponOut`
     if obs._bindings[name:lower()] then
-        return dispatch(name, obs.resolveRef(base))
+        local prev = obs._callBase
+        obs._callBase = base
+        local result = dispatch(name, obs.resolveRef(base))
+        obs._callBase = prev
+        return result
     end
     if entry then
         return entry.locals[name:lower()]
@@ -428,7 +432,7 @@ end
 local dispatchedBlocks = {
     gamemode = true, onactivate = true, onopen = true, onload = true,
     ontriggerenter = true, ontrigger = true, ontriggerleave = true,
-    onhit = true, ondeath = true, onstartcombat = true, oncombatend = true, saytodone = true,
+    onhit = true, onhitwith = true, ondeath = true, onstartcombat = true, oncombatend = true, saytodone = true,
 }
 
 -- Trigger volumes have no physics callback in OpenMW, so every frame the

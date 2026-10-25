@@ -95,6 +95,17 @@ local function showNotice(text)
     updateHud()
 end
 
+-- The global script mirrors this into storage.globalSection('FNVPlayerWeapon') for object
+-- scripts (IsWeaponOut, GetWeaponAnimType, GetEquipped on the player).
+local function publishWeapon()
+    core.sendGlobalEvent('FNVCombat_PlayerWeapon', {
+        weapon = weapon and weapon.id or nil,
+        editorId = weapon and weapon.editorId or nil,
+        animType = weapon and weapon.animType or 0,
+        drawn = weapon ~= nil and drawn,
+    })
+end
+
 local function equip(id)
     local record = combat.getWeapon(id)
     if record == nil then
@@ -110,6 +121,7 @@ local function equip(id)
     I.Controls.overrideCombatControls(true)
     types.Actor.setStance(self, types.Actor.STANCE.Nothing)
     updateHud()
+    publishWeapon()
     return true
 end
 
@@ -119,6 +131,7 @@ local function unequip()
     drawn = false
     I.Controls.overrideCombatControls(false)
     updateHud()
+    publishWeapon()
 end
 
 local function reload()
@@ -156,6 +169,7 @@ input.registerTriggerHandler('ToggleWeapon', async:callback(function()
     if weapon == nil or core.isWorldPaused() then return end
     drawn = not drawn
     updateHud()
+    publishWeapon()
 end))
 
 input.registerActionHandler('Use', async:callback(function(value)
@@ -234,6 +248,10 @@ return {
         end,
     },
     eventHandlers = {
+        -- `player.EquipItem <weapon>` from a script (Doc Mitchell, Sunny Smiles)
+        FNVEquipItem = function(e)
+            if combat.getWeapon(e.item) then equip(e.item) end
+        end,
         FNVCombat_ShotResult = function(e)
             if e.target == nil then return end
             if e.killed then

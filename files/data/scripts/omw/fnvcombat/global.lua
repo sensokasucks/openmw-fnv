@@ -29,6 +29,7 @@
 
 local core = require('openmw.core')
 local types = require('openmw.types')
+local storage = require('openmw.storage')
 local util = require('openmw.util')
 local world = require('openmw.world')
 
@@ -274,10 +275,22 @@ return {
             if player == nil or not player:isValid() or e.weapon == nil then return end
             combat.fire(player, e.weapon, e.origin, e.direction)
         end,
+        FNVCombat_PlayerWeapon = function(e)
+            local section = storage.globalSection('FNVPlayerWeapon')
+            section:set('weapon', e.weapon)
+            section:set('editorId', e.editorId)
+            section:set('animType', e.animType or 0)
+            section:set('drawn', e.drawn == true)
+        end,
         -- From the engine once a shot is resolved
         FNVCombat_Shot = function(e)
             if e.attacker == nil or not e.attacker:isValid() then return end
             local target = e.target
+            -- `Begin OnHitWith` on whatever the shot hit (the VCG02 sarsaparilla bottles)
+            local struck = target or e.object
+            if struck ~= nil and struck:isValid() then
+                scriptEvent(struck, 'OnHitWith', e.attacker)
+            end
             if target ~= nil and target:isValid() and isActor(target) then
                 scriptEvent(target, 'OnHit', e.attacker)
                 if e.killed then scriptEvent(target, 'OnDeath', e.attacker) end

@@ -30,6 +30,7 @@ namespace MWMechanics::ESM4Combat
     struct HitResult
     {
         MWWorld::Ptr mTarget; // empty if nothing that can be hurt was hit
+        MWWorld::Ptr mObject; // the world object that stopped the shot when no actor was hit (OnHitWith)
         osg::Vec3f mPosition; // where the shot ended
         float mDamage = 0.f; // health taken
         bool mKilled = false;

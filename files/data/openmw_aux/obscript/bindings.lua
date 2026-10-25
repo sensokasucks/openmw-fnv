@@ -73,7 +73,7 @@ end
 -- republishes them.
 local refVars = storage.globalSection('ObScriptRefVars')
 
-obs._remoteVar = function(base, name)
+local function storedVar(base, name)
     local q = questData(base)
     if q ~= nil then
         return q.vars[name:lower()] or 0
@@ -84,14 +84,34 @@ obs._remoteVar = function(base, name)
     return vars[name:lower()] or 0
 end
 
+-- What this script set but the storage does not show yet, so a script reads back its own
+-- `set VCG02.nGeckosKilled to VCG02.nGeckosKilled + 1` in the same run (VCG02GeckoDeathSCRIPT).
+-- An entry goes once the stored value changes.
+local pendingVars = {}
+
+obs._remoteVar = function(base, name)
+    local stored = storedVar(base, name)
+    local key = tostring(base):lower() .. '.' .. name:lower()
+    local pending = pendingVars[key]
+    if pending ~= nil then
+        if stored == pending.stored then return pending.value end
+        pendingVars[key] = nil
+    end
+    return stored
+end
+
 obs._remoteSet = function(base, name, value)
+    local stored = storedVar(base, name)
     if questData(base) ~= nil then
         core.sendGlobalEvent('ObScriptSetQuestVar', { quest = base, name = name, value = value })
-        return true
+    else
+        local key = core.obscript.resolveRefEditorId(base)
+        if key == nil then return false end
+        core.sendGlobalEvent('ObScriptSetRefVar', { ref = key, name = name, value = value })
     end
-    local key = core.obscript.resolveRefEditorId(base)
-    if key == nil then return false end
-    core.sendGlobalEvent('ObScriptSetRefVar', { ref = key, name = name, value = value })
+    if stored ~= value then
+        pendingVars[tostring(base):lower() .. '.' .. name:lower()] = { value = value, stored = stored }
+    end
     return true
 end
 
@@ -211,6 +231,29 @@ obs.bind('GetItemCount', function(...)
     end)
     return ok and count or 0
 end)
+-- The player's FNV weapon, mirrored by scripts/omw/fnvcombat into storage.globalSection('FNVPlayerWeapon');
+-- other actors' weapons are not tracked yet.
+local playerWeapon = storage.globalSection('FNVPlayerWeapon')
+obs.bind('IsWeaponOut', function(...)
+    local obj = refAndArgs(...)
+    if obj == nil or not types.Player.objectIsInstance(obj) then return 0 end
+    return playerWeapon:get('drawn') and 1 or 0
+end)
+-- DNAM animation type: 0 hand to hand, 1-2 melee, 3-7 pistols and rifles, 8 handle, 9 launcher, ...
+obs.bind('GetWeaponAnimType', function(...)
+    local obj = refAndArgs(...)
+    if obj == nil or not types.Player.objectIsInstance(obj) or playerWeapon:get('weapon') == nil then return 0 end
+    return playerWeapon:get('animType') or 0
+end)
+obs.bind('GetEquipped', function(...)
+    local obj, item = refAndArgs(...)
+    if obj == nil or type(item) ~= 'string' or not types.Player.objectIsInstance(obj) then return 0 end
+    local editorId, weapon = playerWeapon:get('editorId'), playerWeapon:get('weapon')
+    if (editorId and editorId:lower() == item:lower()) or (weapon and weapon:lower() == item:lower()) then return 1 end
+    return 0
+end)
+-- Destroyed objects ignore activation in the original; nothing here reads the flag yet.
+obs.bind('SetDestroyed', function() return 0 end)
 obs.bind('GetRandomPercent', function() return math.random(0, 99) end)
 obs.bind('GetSelf', function(...)
     local obj = refAndArgs(...)
