@@ -28,8 +28,11 @@
 #define ESM4_EFFECT_H
 
 #include <cstdint>
+#include <vector>
 
 #include <components/esm/formid.hpp>
+
+#include "loadinfo.hpp" // DialogCondition
 
 namespace ESM4
 {
@@ -51,6 +54,33 @@ namespace ESM4
         std::uint8_t unknown3;
     };
 #pragma pack(pop)
+
+    class Reader;
+
+    // One entry of an FO3/FONV effect list (ALCH, SPEL, ENCH, INGR): EFID, EFIT
+    // and the CTDA conditions that follow them.
+    struct EffectItem
+    {
+        enum Range : std::uint32_t
+        {
+            Range_Self = 0,
+            Range_Touch = 1,
+            Range_Target = 2,
+        };
+
+        ESM::FormId mEffect; // MGEF
+        std::uint32_t mMagnitude = 0;
+        std::uint32_t mArea = 0;
+        std::uint32_t mDuration = 0; // seconds; 0 = instant
+        std::uint32_t mRange = Range_Self;
+        std::int32_t mActorValue = -1; // only used by some archetypes
+        std::vector<DialogCondition> mConditions;
+    };
+
+    // Reads EFID/EFIT/CTDA of an FO3/FONV effect list into `effects`; returns
+    // false for any other sub-record. Other games' layouts (TES4 EFIT is 24
+    // bytes, TES5 12) are skipped. `pendingEffect` holds the EFID until its EFIT.
+    bool readEffectSubRecord(Reader& reader, std::vector<EffectItem>& effects, std::uint32_t& pendingEffect);
 }
 
 #endif // ESM4_EFFECT_H

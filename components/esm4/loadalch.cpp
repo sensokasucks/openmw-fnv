@@ -37,9 +37,12 @@ void ESM4::Potion::load(ESM4::Reader& reader)
     mId = reader.getFormIdFromHeader();
     mFlags = reader.hdr().record.flags;
 
+    std::uint32_t pendingEffect = 0;
     while (reader.getSubRecordHeader())
     {
         const ESM4::SubRecordHeader& subHdr = reader.subRecordHeader();
+        if (readEffectSubRecord(reader, mEffects, pendingEffect))
+            continue;
         switch (subHdr.typeId)
         {
             case ESM::fourCC("EDID"):
@@ -92,9 +95,6 @@ void ESM4::Potion::load(ESM4::Reader& reader)
             case ESM::fourCC("MODC"):
             case ESM::fourCC("MODS"):
             case ESM::fourCC("MODF"): // Model data end
-            case ESM::fourCC("EFID"):
-            case ESM::fourCC("EFIT"):
-            case ESM::fourCC("CTDA"):
             case ESM::fourCC("KSIZ"):
             case ESM::fourCC("KWDA"):
             case ESM::fourCC("OBND"):

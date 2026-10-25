@@ -49,6 +49,7 @@
 #include "obscriptaibindings.hpp"
 #include "obscriptcombatbindings.hpp"
 #include "obscriptdialoguebindings.hpp"
+#include "obscripteffectbindings.hpp"
 #include "obscriptstatsbindings.hpp"
 
 namespace sol
@@ -336,6 +337,7 @@ namespace MWLua
         api["ai"] = initObScriptAIBindings(context);
         api["stats"] = initObScriptStatsBindings(context);
         api["combat"] = initObScriptCombatBindings(context);
+        api["effects"] = initObScriptEffectBindings(context);
 
         return LuaUtil::makeReadOnly(api);
     }
