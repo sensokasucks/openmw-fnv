@@ -58,6 +58,18 @@ namespace MWWorld
             return std::visit(Visitor(), mCellRef.mVariant);
         }
 
+        // Linked reference (ESM4 XLKR, GetLinkedRef); zero if none.
+        ESM::FormId getLinkedRef() const
+        {
+            struct Visitor
+            {
+                ESM::FormId operator()(const ESM::CellRef&) { return {}; }
+                ESM::FormId operator()(const ESM4::Reference& ref) { return ref.mLinkedRef; }
+                ESM::FormId operator()(const ESM4::ActorCharacter& ref) { return ref.mLinkedRef; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Id of object being referenced
         ESM::RefId getRefId() const
         {

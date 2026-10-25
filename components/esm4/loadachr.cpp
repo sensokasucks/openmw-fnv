@@ -87,6 +87,12 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
                 reader.get(mCount);
                 break;
             }
+            case ESM::fourCC("XLKR"): // linked reference; TES5 prefixes a keyword
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mLinkedRef);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XRGD"): // ragdoll
             case ESM::fourCC("XRGB"): // ragdoll biped
             case ESM::fourCC("XHRS"): // horse formId
@@ -98,7 +104,6 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
             case ESM::fourCC("XHOR"):
             case ESM::fourCC("XLCM"): // levelled creature
             case ESM::fourCC("XLCN"): // location
-            case ESM::fourCC("XLKR"): // location route?
             case ESM::fourCC("XLRT"): // location type
             //
             case ESM::fourCC("XPRD"):

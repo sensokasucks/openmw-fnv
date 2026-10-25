@@ -71,13 +71,24 @@ function Emitter.new(scriptAst)
     local self = setmetatable({
         ast = scriptAst,
         locals = {},
+        ints = {}, -- lower-case names of short/int/long locals
         lines = {},
         depth = 0,
     }, Emitter)
     for _, v in ipairs(scriptAst.variables) do
-        self.locals[v.name:lower()] = true
+        self:declare(v)
     end
     return self
+end
+
+local INT_TYPES = { short = true, int = true, long = true }
+
+function Emitter:declare(decl)
+    local key = decl.name:lower()
+    self.locals[key] = true
+    if INT_TYPES[decl.type] then
+        self.ints[key] = true
+    end
 end
 
 -- helpers
@@ -91,7 +102,7 @@ function Emitter:collectBlockLocals()
     local function walk(stmts)
         for _, s in ipairs(stmts) do
             if s.kind == 'VarDecl' then
-                self.locals[s.name:lower()] = true
+                self:declare(s)
             elseif s.kind == 'If' then
                 for _, c in ipairs(s.clauses) do
                     walk(c.body)
@@ -121,7 +132,7 @@ function Emitter:expr(n)
     if k == 'Name' then
         local name = n.value
         if self.locals[name:lower()] then
-            return 'S.' .. safeIdent(name)
+            return 'S.' .. safeIdent(name:lower())
         end
         return ('obs.v(%s)'):format(luaString(name))
     end
@@ -155,7 +166,7 @@ function Emitter:exprRef(n)
     if n.kind == 'Name' then
         local name = n.value
         if self.locals[name:lower()] then
-            return 'S.' .. safeIdent(name)
+            return 'S.' .. safeIdent(name:lower())
         end
         return luaString(name)
     end
@@ -188,7 +199,7 @@ function Emitter:arg(n)
     if n.kind == 'Name' then
         local name = n.value
         if self.locals[name:lower()] then
-            return 'S.' .. safeIdent(name)
+            return 'S.' .. safeIdent(name:lower())
         end
         return luaString(name)
     end
@@ -203,7 +214,8 @@ function Emitter:stmt(n)
         return -- declarations hoisted; junk dropped
     end
     if k == 'Return' then
-        self:out('do return end')
+        -- ends the whole script run, not just this block
+        self:out('do return obs.RETURN end')
         return
     end
     if k == 'Set' then
@@ -211,8 +223,11 @@ function Emitter:stmt(n)
         local value = self:expr(n.value)
         if target.kind == 'Name' then
             local name = target.value
-            if self.locals[name:lower()] then
-                self:out(('S.%s = %s'):format(safeIdent(name), value))
+            if self.ints[name:lower()] then
+                -- short/int/long truncate toward zero on assignment
+                self:out(('S.%s = obs.int(%s)'):format(safeIdent(name:lower()), value))
+            elseif self.locals[name:lower()] then
+                self:out(('S.%s = %s'):format(safeIdent(name:lower()), value))
             else
                 self:out(('obs.setv(%s, %s)'):format(luaString(name), value))
             end
@@ -274,7 +289,14 @@ function Emitter:emit()
     local name = self.ast.name or 'anonymous'
     self:out('-- transpiled from ObScript: ' .. name)
     self:out("local obs = require('openmw_aux.obscript.runtime')")
-    self:out(('local S = obs.locals(%s)'):format(luaString(name)))
+    local ints = {}
+    for key in pairs(self.ints) do
+        ints[#ints + 1] = luaString(key)
+    end
+    table.sort(ints)
+    -- the second argument marks a script definition and lists the integer
+    -- variables, so that Quest.var/Ref.var sets truncate too
+    self:out(('local S = obs.locals(%s, { %s })'):format(luaString(name), table.concat(ints, ', ')))
     self:out()
     for _, block in ipairs(self.ast.blocks) do
         local parts = {}

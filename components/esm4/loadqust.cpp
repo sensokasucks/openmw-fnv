@@ -38,6 +38,7 @@ void ESM4::Quest::load(ESM4::Reader& reader)
     mFlags = reader.hdr().record.flags;
 
     QuestLogEntry* entry = nullptr; // log entry the stage sub-records belong to, if any
+    QuestTarget* target = nullptr; // objective target the CTDA sub-records belong to, if any
     auto currentScript = [&]() -> ScriptDefinition& { return entry ? entry->mScript : mScript; };
 
     while (reader.getSubRecordHeader())
@@ -79,7 +80,10 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     TargetCondition cond;
                     reader.get(&cond, 24);
                     cond.reference = 0; // unused in TES4 but keep it clean
-                    (entry ? entry->mConditions : mTargetConditions).push_back(cond);
+                    if (entry)
+                        addDialogCondition(reader, entry->mConditions, cond, false);
+                    else
+                        mTargetConditions.push_back(cond);
                 }
                 else if (subHdr.dataSize == 28)
                 {
@@ -87,7 +91,12 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     reader.get(cond); // FO3/FONV
                     if (cond.reference)
                         reader.adjustFormId(cond.reference);
-                    (entry ? entry->mConditions : mTargetConditions).push_back(cond);
+                    if (entry)
+                        addDialogCondition(reader, entry->mConditions, cond, true);
+                    else if (target)
+                        addDialogCondition(reader, target->mConditions, cond, true);
+                    else
+                        mTargetConditions.push_back(cond);
                 }
                 else
                 {
@@ -124,6 +133,7 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     mStages.emplace_back();
                 }
                 entry = nullptr;
+                target = nullptr;
                 break;
             }
             case ESM::fourCC("QSDT"):
@@ -149,11 +159,37 @@ void ESM4::Quest::load(ESM4::Reader& reader)
                     reader.skipSubRecordData();
                 break;
             case ESM::fourCC("QOBJ"): // FO3
+            {
                 entry = nullptr; // objectives follow the stages
-                reader.skipSubRecordData();
+                target = nullptr;
+                if (subHdr.dataSize == 4) // FO3/FONV: i32 index; TES5 has a u16
+                    reader.get(mObjectives.emplace_back().mIndex);
+                else
+                    reader.skipSubRecordData();
                 break;
-            case ESM::fourCC("QSTA"):
+            }
             case ESM::fourCC("NNAM"): // FO3
+                if (!mObjectives.empty() && mObjectives.back().mText.empty())
+                    reader.getZString(mObjectives.back().mText);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("QSTA"): // FO3/FONV: target reference, flags, 3 unused bytes
+            {
+                if (subHdr.dataSize == 8 && !mObjectives.empty())
+                {
+                    target = &mObjectives.back().mTargets.emplace_back();
+                    reader.getFormId(target->mTarget);
+                    reader.get(target->mFlags);
+                    reader.skipSubRecordData(3);
+                }
+                else
+                {
+                    target = nullptr;
+                    reader.skipSubRecordData();
+                }
+                break;
+            }
             case ESM::fourCC("NAM0"): // FO3
             case ESM::fourCC("SLSD"): // FO3
             case ESM::fourCC("SCVR"): // FO3

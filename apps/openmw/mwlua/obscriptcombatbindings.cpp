@@ -8,6 +8,8 @@
 #include <sol/table.hpp>
 
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadammo.hpp>
+#include <components/esm4/loadflst.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/serialization.hpp>
@@ -73,6 +75,28 @@ namespace MWLua
             });
         }
 
+        // The ammunition a weapon takes: its NAM0 is an AMMO record or a form list of them.
+        void addAmmoTypes(sol::state_view& lua, sol::table& list, ESM::FormId id, int depth)
+        {
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            if (const ESM4::Ammunition* ammo = store.get<ESM4::Ammunition>().search(ESM::RefId(id)))
+            {
+                sol::table t(lua, sol::create);
+                t["id"] = formIdText(ammo->mId);
+                t["editorId"] = ammo->mEditorId;
+                t["name"] = ammo->mFullName;
+                t["shortName"] = ammo->mShortName;
+                t["abbrev"] = ammo->mAbbrev;
+                list[list.size() + 1] = t;
+            }
+            else if (const ESM4::FormIdList* formList = store.get<ESM4::FormIdList>().search(ESM::RefId(id)))
+            {
+                if (depth < 4)
+                    for (ESM::FormId entry : formList->mObjects)
+                        addAmmoTypes(lua, list, entry, depth + 1);
+            }
+        }
+
         sol::table makeWeapon(sol::state_view& lua, const ESM4::Weapon& weapon)
         {
             sol::table t(lua, sol::create);
@@ -83,6 +107,10 @@ namespace MWLua
             t["clipSize"] = weapon.mData.clipSize;
             t["health"] = weapon.mData.health;
             t["ammo"] = formIdText(weapon.mAmmo);
+            sol::table ammoTypes(lua, sol::create);
+            if (!weapon.mAmmo.isZeroOrUnset())
+                addAmmoTypes(lua, ammoTypes, weapon.mAmmo, 0);
+            t["ammoTypes"] = ammoTypes; // { { id, editorId, name, shortName, abbrev }, ... }
             t["fireSound"] = formIdText(weapon.mFireSound);
             t["fireSound2D"] = formIdText(weapon.mFireSound2D);
             t["dryFireSound"] = formIdText(weapon.mDryFireSound);

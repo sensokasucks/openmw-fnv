@@ -124,9 +124,11 @@ set(BUILTIN_DATA_FILES
     openmw_aux/lexer.lua
     openmw_aux/obscript/bindings.lua
     openmw_aux/obscript/compiler.lua
+    openmw_aux/obscript/effects.lua
     openmw_aux/obscript/parser.lua
     openmw_aux/obscript/runtime.lua
     openmw_aux/obscript/stats.lua
+    openmw_aux/obscript/character.lua
     openmw_aux/obscript/transpiler.lua
 
     builtin.omwscripts
@@ -178,10 +180,20 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvdialogue/conditions.lua
     scripts/omw/fnvdialogue/global.lua
     scripts/omw/fnvdialogue/player.lua
+    scripts/omw/fnvchargen/player.lua
     scripts/omw/fnvai/global.lua
+    scripts/omw/fnvai/idles.lua
+    scripts/omw/fnvai/furniture.lua
     scripts/omw/fnvcombat/global.lua
     scripts/omw/fnvcombat/player.lua
+    scripts/omw/fnvhud/global.lua
+    scripts/omw/fnvhud/keys.lua
+    scripts/omw/fnvhud/player.lua
     scripts/omw/fnvstats.lua
+    scripts/omw/fnvcharacter/rules.lua
+    scripts/omw/fnvcharacter/global.lua
+    scripts/omw/fnvcharacter/player.lua
+    scripts/omw/fnveffects/global.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx

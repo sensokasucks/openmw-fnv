@@ -80,7 +80,14 @@ local function optionLine(text, onClick)
     return line
 end
 
+local optionCount = 0
+local closeAt = nil -- real time to close a Goodbye line with nothing to answer
+local closeSpeaker = nil
+
 local function show(data)
+    optionCount = #(data.options or {})
+    closeAt = data.autoClose and (core.getRealTime() + data.autoClose) or nil
+    closeSpeaker = data.speakerObject
     destroyWindow()
     if not open then
         open = true
@@ -145,6 +152,24 @@ local function show(data)
 end
 
 return {
+    engineHandlers = {
+        onFrame = function()
+            if not open or closeAt == nil or core.getRealTime() < closeAt then return end
+            -- wait for the voice too, when there is one
+            local ok, talking = pcall(core.sound.isSayActive, closeSpeaker)
+            if ok and talking then return end
+            closeAt = nil
+            close()
+        end,
+        -- Number keys pick the answer with that number, as in the original.
+        onKeyPress = function(key)
+            if not open then return end
+            local n = tonumber(key.symbol)
+            if n and n >= 1 and n <= optionCount then
+                core.sendGlobalEvent('FNVDialogueChoose', { index = n })
+            end
+        end,
+    },
     eventHandlers = {
         FNVDialogueShow = show,
         FNVDialogueClose = function()

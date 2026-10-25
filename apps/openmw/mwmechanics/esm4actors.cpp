@@ -33,7 +33,7 @@ namespace MWMechanics
         // Used when a locomotion sequence has no root motion to measure
         constexpr float sDefaultWalkSpeed = 90.f;
         constexpr float sDefaultRunSpeed = 300.f;
-        constexpr float sTurnSpeed = osg::PI * 1.5f; // radians per second
+        const float sTurnSpeed = static_cast<float>(osg::PI) * 1.5f; // radians per second (osg::PI is not constexpr everywhere)
 
         std::optional<ESM::FormId> getCellFormId(const MWWorld::Ptr& ptr)
         {
@@ -50,10 +50,31 @@ namespace MWMechanics
             return dynamic_cast<MWRender::ESM4NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(ptr));
         }
 
-        void setLocomotion(const MWWorld::Ptr& ptr, MWRender::ESM4NpcAnimation::Locomotion locomotion)
+        void setLocomotion(
+            const MWWorld::Ptr& ptr, MWRender::ESM4NpcAnimation::Locomotion locomotion, bool force = false)
         {
             if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr))
-                animation->setLocomotion(locomotion);
+                animation->setLocomotion(locomotion, force);
+        }
+
+        void setYaw(const MWWorld::Ptr& ptr, float yaw)
+        {
+            float wrapped = yaw;
+            while (wrapped > osg::PI)
+                wrapped -= 2 * osg::PI;
+            while (wrapped < -osg::PI)
+                wrapped += 2 * osg::PI;
+            MWBase::Environment::get().getWorld()->rotateObject(
+                ptr, osg::Vec3f(0.f, 0.f, wrapped), MWBase::RotationFlag_none);
+        }
+
+        // Marker space (x right, y along the heading) to world: the heading is the yaw the actor faces, measured
+        // like actor rotations (0 = +y, clockwise).
+        osg::Vec3f markerToWorld(const osg::Vec3f& marker, float heading, const osg::Vec3f& offset)
+        {
+            const float s = std::sin(heading);
+            const float c = std::cos(heading);
+            return marker + osg::Vec3f(offset.x() * c + offset.y() * s, -offset.x() * s + offset.y() * c, offset.z());
         }
 
         float wrapAngle(float angle)
@@ -91,6 +112,9 @@ namespace MWMechanics
         if (ESM4Combat::isDead(ptr))
             return false;
         State& state = mStates[ptr.getCellRef().getRefNum()];
+        if (state.mUsePhase != UsePhase::None)
+            finishUsing(ptr, state);
+        state.mIdleTimer = 0.f;
         state.mOptions = options;
         state.mTarget = target;
         state.mTurnTo.reset();
@@ -129,6 +153,9 @@ namespace MWMechanics
         auto it = mStates.find(ptr.getCellRef().getRefNum());
         if (it == mStates.end())
             return;
+        const bool wasUsing = it->second.mUsePhase != UsePhase::None || it->second.mIdleTimer > 0.f;
+        if (wasUsing)
+            finishUsing(ptr, it->second);
         if (it->second.mActionTime > 0.f)
         {
             it->second.mStatus = Status::None;
@@ -136,7 +163,145 @@ namespace MWMechanics
         }
         else
             mStates.erase(it);
-        setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
+        setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle, wasUsing);
+    }
+
+    void ESM4Actors::useFurniture(const MWWorld::Ptr& ptr, const FurnitureUse& use)
+    {
+        if (ESM4Combat::isDead(ptr))
+            return;
+        State& state = mStates[ptr.getCellRef().getRefNum()];
+        if (state.mUsePhase != UsePhase::None)
+            finishUsing(ptr, state);
+        state.mStatus = Status::None;
+        state.mTurnTo.reset();
+        state.mIdleTimer = 0.f;
+        state.mActionTime = 0.f;
+        state.mFurniture = use;
+
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        // The seat is inside the furniture's collision; the actor would be pushed out of it.
+        world.setActorCollisionMode(ptr, false, false);
+        MWWorld::Ptr moved = world.moveObject(ptr, use.mMarker);
+        setYaw(moved, use.mHeading);
+
+        MWRender::ESM4NpcAnimation* animation = getAnimation(moved);
+        float length = 0.f;
+        if (animation != nullptr && !use.mEnter.empty())
+            length = animation->playIdleFONV(use.mEnter, true);
+        Log(Debug::Verbose) << "ESM4 AI: " << moved.getCellRef().getRefNum().toString() << " uses furniture at "
+                            << use.mMarker << " (" << use.mEnter << ", " << length << "s)";
+        if (length > 0.f)
+        {
+            state.mUsePhase = UsePhase::Entering;
+            state.mPhaseTimer = length;
+        }
+        else
+            startUsing(moved, state);
+    }
+
+    void ESM4Actors::startUsing(const MWWorld::Ptr& ptr, State& state)
+    {
+        const FurnitureUse& use = state.mFurniture;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        osg::Vec3f offset = use.mOffset;
+        // Prefer where the entry sequence actually left the root over the nominal marker offset
+        if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr); animation != nullptr && !use.mEnter.empty())
+        {
+            const osg::Vec3f motion = animation->getRootMotion();
+            if (motion.length2() > 1.f)
+                offset = osg::Vec3f(motion.x(), motion.y(), use.mOffset.z());
+        }
+        MWWorld::Ptr moved = world.moveObject(ptr, markerToWorld(use.mMarker, use.mHeading, offset));
+        setYaw(moved, use.mHeading + use.mHeadingDelta);
+        state.mUsePhase = UsePhase::Using;
+        state.mPhaseTimer = 0.f;
+        resumeLoop(moved, state);
+    }
+
+    void ESM4Actors::leaveFurniture(const MWWorld::Ptr& ptr)
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        if (it == mStates.end() || it->second.mUsePhase == UsePhase::None || it->second.mUsePhase == UsePhase::Leaving)
+            return;
+        State& state = it->second;
+        const FurnitureUse& use = state.mFurniture;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::Ptr moved = world.moveObject(ptr, use.mMarker);
+        setYaw(moved, use.mHeading);
+        state.mIdleTimer = 0.f;
+
+        float length = 0.f;
+        MWRender::ESM4NpcAnimation* animation = getAnimation(moved);
+        if (animation != nullptr && !use.mExit.empty())
+            length = animation->playIdleFONV(use.mExit, true);
+        if (length > 0.f)
+        {
+            state.mUsePhase = UsePhase::Leaving;
+            state.mPhaseTimer = length;
+        }
+        else
+            finishUsing(moved, state);
+    }
+
+    void ESM4Actors::finishUsing(const MWWorld::Ptr& ptr, State& state)
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        if (state.mUsePhase == UsePhase::Using || state.mUsePhase == UsePhase::Entering)
+        {
+            // Stand on the marker again, as after the exit sequence
+            MWWorld::Ptr moved = world.moveObject(ptr, state.mFurniture.mMarker);
+            setYaw(moved, state.mFurniture.mHeading);
+        }
+        if (state.mUsePhase != UsePhase::None)
+            world.setActorCollisionMode(ptr, true, true);
+        state.mUsePhase = UsePhase::None;
+        state.mPhaseTimer = 0.f;
+        state.mIdleTimer = 0.f;
+        setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle, true);
+    }
+
+    ESM4Actors::UsePhase ESM4Actors::getUsePhase(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it == mStates.end() ? UsePhase::None : it->second.mUsePhase;
+    }
+
+    void ESM4Actors::playIdle(const MWWorld::Ptr& ptr, const std::string& model)
+    {
+        if (ESM4Combat::isDead(ptr))
+            return;
+        State& state = mStates[ptr.getCellRef().getRefNum()];
+        if (state.mStatus == Status::Moving || state.mActionTime > 0.f || state.mUsePhase == UsePhase::Entering
+            || state.mUsePhase == UsePhase::Leaving)
+            return;
+        MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        if (animation == nullptr)
+            return;
+        // Seated idles leave the root alone; standing ones may shuffle around, which the actor doesn't follow
+        const float length = animation->playIdleFONV(model, false);
+        if (length <= 0.f)
+            return;
+        state.mIdleTimer = length;
+        state.mTurnTo.reset();
+    }
+
+    bool ESM4Actors::isIdlePlaying(const MWWorld::Ptr& ptr) const
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        return it != mStates.end() && it->second.mIdleTimer > 0.f;
+    }
+
+    void ESM4Actors::resumeLoop(const MWWorld::Ptr& ptr, State& state)
+    {
+        state.mIdleTimer = 0.f;
+        MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        if (animation == nullptr)
+            return;
+        if (state.mUsePhase == UsePhase::Using && !state.mFurniture.mLoop.empty()
+            && animation->playIdleFONV(state.mFurniture.mLoop, false) > 0.f)
+            return;
+        animation->setLocomotion(MWRender::ESM4NpcAnimation::Locomotion::Idle, true);
     }
 
     float ESM4Actors::playAction(const MWWorld::Ptr& ptr, std::string_view file)
@@ -161,7 +326,7 @@ namespace MWMechanics
         if (ESM4Combat::isDead(ptr))
             return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
-        if (state.mStatus == Status::Moving)
+        if (state.mStatus == Status::Moving || state.mUsePhase != UsePhase::None)
             return;
         state.mTurnTo = yaw;
     }
@@ -241,6 +406,28 @@ namespace MWMechanics
 
     bool ESM4Actors::updateActor(const MWWorld::Ptr& ptr, State& state, float duration)
     {
+        if (state.mUsePhase == UsePhase::Entering || state.mUsePhase == UsePhase::Leaving)
+        {
+            state.mPhaseTimer -= duration;
+            if (state.mPhaseTimer <= 0.f)
+            {
+                if (state.mUsePhase == UsePhase::Entering)
+                    startUsing(ptr, state);
+                else
+                    finishUsing(ptr, state);
+            }
+            return true;
+        }
+        if (state.mIdleTimer > 0.f)
+        {
+            state.mIdleTimer -= duration;
+            if (state.mIdleTimer <= 0.f)
+                resumeLoop(ptr, state);
+            return true;
+        }
+        if (state.mUsePhase == UsePhase::Using)
+            return true;
+
         if (state.mActionTime > 0.f)
         {
             state.mActionTime -= duration;

@@ -2,6 +2,8 @@
 
 #include "modelproperty.hpp"
 
+#include "../obscriptdialoguebindings.hpp"
+
 #include <components/esm4/loadterm.hpp>
 #include <components/lua/util.hpp>
 #include <components/lua/utilpackage.hpp>
@@ -60,6 +62,8 @@ namespace MWLua
                 t["subMenu"] = formIdOrNil(item.mSubMenu);
                 t["script"] = item.mScriptSource;
                 t["hasConditions"] = item.mHasConditions;
+                sol::state_view view(lua);
+                t["conditions"] = makeObScriptConditions(view, item.mConditions);
                 items[LuaUtil::toLuaIndex(i)] = t;
             }
             return items;

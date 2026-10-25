@@ -2,7 +2,21 @@
 -- (see openmw_aux/obscript/bindings.lua).
 
 local core = require('openmw.core')
+local self = require('openmw.self')
+local types = require('openmw.types')
 local ui = require('openmw.ui')
+local I = require('openmw.interfaces')
+
+local keys = require('scripts.omw.fnvhud.keys')
+
+-- A notice in the FNV HUD's corner (scripts/omw/fnvhud/player.lua), else a message box.
+local function notify(text, duration)
+    if I.FNVHud then
+        I.FNVHud.notify(text, { duration = duration })
+    else
+        ui.showMessage(text)
+    end
+end
 
 -- Substitute `%.0f`-style format specs in a MESG text with the ShowMessage arguments.
 local function formatMessage(text, args)
@@ -25,15 +39,46 @@ return {
                 print('[obscript] ShowMessage: unknown message editor id: ' .. tostring(data.editorId))
                 return
             end
-            local text = formatMessage(msg.text or '', data.args or {})
+            local text = keys.expand(formatMessage(msg.text or '', data.args or {}))
             if msg.title and msg.title ~= '' then
-                text = msg.title .. '\n' .. text
+                text = keys.expand(msg.title) .. '\n' .. text
             end
             if #msg.buttons > 0 then
-                -- No button box yet: list the choices so the player sees what the script offered.
-                text = text .. '\n[' .. table.concat(msg.buttons, ' / ') .. ']'
+                -- a blocking box; GetButtonPressed reads the answer
+                core.obscript.showMessageBox(text, msg.buttons)
+            else
+                notify(text, msg.displayTime)
             end
-            ui.showMessage(text)
+        end,
+        -- A line spoken outside the dialogue window (SayTo, Say).
+        FNVSubtitle = function(data)
+            local line = tostring(data.speaker) .. ': ' .. tostring(data.text)
+            if I.FNVHud then
+                I.FNVHud.subtitle(line, data.duration)
+            else
+                ui.showMessage(line)
+            end
+        end,
+        -- Short notices such as a new quest objective.
+        ObScriptNotify = function(data)
+            notify(tostring(data.text))
+        end,
+        -- DisablePlayerControls / EnablePlayerControls.
+        ObScriptPlayerControls = function(data)
+            local f = data.flags
+            local switches = {
+                { f.movement, types.Player.CONTROL_SWITCH.Controls },
+                { f.movement, types.Player.CONTROL_SWITCH.Jumping },
+                { f.fighting, types.Player.CONTROL_SWITCH.Fighting },
+                { f.fighting, types.Player.CONTROL_SWITCH.Magic },
+                { f.pov, types.Player.CONTROL_SWITCH.ViewMode },
+                { f.looking, types.Player.CONTROL_SWITCH.Looking },
+            }
+            for _, s in ipairs(switches) do
+                if s[1] then
+                    types.Player.setControlSwitch(self, s[2], data.enable)
+                end
+            end
         end,
     },
 }

@@ -37,6 +37,8 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
     mId = reader.getFormIdFromHeader();
     mFlags = reader.hdr().record.flags;
 
+    Event* event = nullptr; // the POBA/POEA/POCA block being read
+
     while (reader.getSubRecordHeader())
     {
         const ESM4::SubRecordHeader& subHdr = reader.subRecordHeader();
@@ -160,22 +162,86 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
 
                 break;
             }
+            case ESM::fourCC("POBA"): // FO3
+            case ESM::fourCC("POEA"): // FO3
+            case ESM::fourCC("POCA"): // FO3
+            {
+                if (subHdr.typeId == ESM::fourCC("POBA"))
+                    event = &mOnBegin;
+                else if (subHdr.typeId == ESM::fourCC("POEA"))
+                    event = &mOnEnd;
+                else
+                    event = &mOnChange;
+                reader.skipSubRecordData();
+                break;
+            }
+            case ESM::fourCC("INAM"): // FO3: the event's idle
+            case ESM::fourCC("TNAM"): // FO3: the event's topic
+            {
+                if (event == nullptr || subHdr.dataSize != 4)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                // 0 means none; adjusting it would turn it into a form id of this plugin
+                std::uint32_t form = 0;
+                reader.get(form);
+                if (form != 0)
+                {
+                    ESM::FormId& id = subHdr.typeId == ESM::fourCC("INAM") ? event->mIdle : event->mTopic;
+                    id = ESM::FormId::fromUint32(form);
+                    reader.adjustFormId(id);
+                }
+                break;
+            }
+            case ESM::fourCC("SCTX"): // FO3: the event's script source
+            {
+                if (event == nullptr)
+                    reader.skipSubRecordData();
+                else
+                    reader.getString(event->mScript);
+                break;
+            }
+            case ESM::fourCC("PKDD"): // FO3
+            {
+                if (subHdr.dataSize < 8)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                reader.get(mDialogueFov);
+                std::uint32_t topic = 0;
+                reader.get(topic);
+                if (topic != 0)
+                {
+                    mDialogueTopic = ESM::FormId::fromUint32(topic);
+                    reader.adjustFormId(mDialogueTopic);
+                }
+                std::uint32_t left = subHdr.dataSize - 8;
+                if (left >= 4)
+                {
+                    reader.get(mDialogueFlags);
+                    left -= 4;
+                }
+                if (left >= 8)
+                {
+                    reader.skipSubRecordData(4); // unused
+                    reader.get(mDialogueType);
+                    left -= 8;
+                }
+                if (left > 0)
+                    reader.skipSubRecordData(left);
+                break;
+            }
             case ESM::fourCC("CTDT"): // always 20 for TES4
-            case ESM::fourCC("TNAM"): // FO3
-            case ESM::fourCC("INAM"): // FO3
             case ESM::fourCC("CNAM"): // FO3
             case ESM::fourCC("SCHR"): // FO3
-            case ESM::fourCC("POBA"): // FO3
-            case ESM::fourCC("POCA"): // FO3
-            case ESM::fourCC("POEA"): // FO3
-            case ESM::fourCC("SCTX"): // FO3
             case ESM::fourCC("SCDA"): // FO3
             case ESM::fourCC("SCRO"): // FO3
             case ESM::fourCC("IDLA"): // FO3
             case ESM::fourCC("IDLC"): // FO3
             case ESM::fourCC("IDLF"): // FO3
             case ESM::fourCC("IDLT"): // FO3
-            case ESM::fourCC("PKDD"): // FO3
             case ESM::fourCC("PKD2"): // FO3
             case ESM::fourCC("PKPT"): // FO3
             case ESM::fourCC("PKED"): // FO3

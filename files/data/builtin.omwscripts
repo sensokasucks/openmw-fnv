@@ -10,13 +10,17 @@ GLOBAL: scripts/omw/settings/global.lua
 GLOBAL: scripts/omw/activationhandlers.lua
 GLOBAL: scripts/omw/obscript.lua
 GLOBAL: scripts/omw/fnvstats.lua
+GLOBAL: scripts/omw/fnvcharacter/global.lua
+PLAYER: scripts/omw/fnvcharacter/player.lua
 PLAYER: scripts/omw/obscript_player.lua
 PLAYER: scripts/omw/esm4terminal.lua
 GLOBAL: scripts/omw/fnvdialogue/global.lua
 PLAYER: scripts/omw/fnvdialogue/player.lua
+PLAYER: scripts/omw/fnvchargen/player.lua
 GLOBAL: scripts/omw/fnvai/global.lua
 GLOBAL: scripts/omw/fnvcombat/global.lua
 GLOBAL: scripts/omw/usehandlers.lua
+GLOBAL: scripts/omw/fnveffects/global.lua
 GLOBAL: scripts/omw/worldeventhandlers.lua
 GLOBAL: scripts/omw/crimes.lua
 CREATURE, NPC, PLAYER: scripts/omw/mechanics/animationcontroller.lua
@@ -27,6 +31,8 @@ MENU: scripts/omw/input/settings.lua
 PLAYER: scripts/omw/input/playercontrols.lua
 PLAYER: scripts/omw/furniture_player.lua
 PLAYER: scripts/omw/fnvcombat/player.lua
+GLOBAL: scripts/omw/fnvhud/global.lua
+PLAYER: scripts/omw/fnvhud/player.lua
 PLAYER: scripts/omw/camera/camera.lua
 PLAYER: scripts/omw/input/actionbindings.lua
 PLAYER: scripts/omw/input/smoothmovement.lua

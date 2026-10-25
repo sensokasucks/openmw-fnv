@@ -57,6 +57,8 @@ namespace MWGui
         void update(float frameDuration);
 
         void setEnabled(bool enabled);
+        /// Don't show the name of the object under the crosshair (a script shows its own prompt).
+        void setFocusTooltipHidden(bool hidden) { mFocusTooltipHidden = hidden; }
 
         bool toggleFullHelp(); ///< show extra info in item tooltips (owner, script)
         bool getFullHelp() const;
@@ -129,6 +131,7 @@ namespace MWGui
         int mLastMouseY;
 
         bool mEnabled;
+        bool mFocusTooltipHidden = false;
 
         bool mFullHelp;
 

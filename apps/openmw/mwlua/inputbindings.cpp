@@ -262,6 +262,8 @@ namespace MWLua
         api["setControlSwitch"] = [input](std::string_view key, bool v) { input->toggleControlSwitch(key, v); };
 
         api["getKeyName"] = [](SDL_Scancode code) { return SDL_GetScancodeName(code); };
+        // What the controls menu shows for an action's key (input.ACTION.*), e.g. "Space" or "#{sMouse} 1".
+        api["_getActionKeyName"] = [input](int action) { return input->getActionKeyBindingName(action); };
 
         api["ACTION"] = LuaUtil::makeStrictReadOnly(LuaUtil::tableFromPairs<std::string_view, MWInput::Actions>(lua,
             {

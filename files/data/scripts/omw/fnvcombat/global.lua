@@ -68,6 +68,14 @@ local function isAlive(obj)
     return combat.canBeHit(obj) and not combat.isDead(obj)
 end
 
+-- Raises an ObScript block (OnHit, OnDeath, OnStartCombat, ...) on the
+-- object's script, if it has one (openmw_aux/obscript/runtime.lua).
+local function scriptEvent(obj, event, ref)
+    if obj ~= nil and obj:isValid() then
+        obj:sendEvent('ObScriptEvent', { event = event, ref = ref })
+    end
+end
+
 local tracked = {} -- id -> actor in an active cell
 local fighting = {} -- id -> { actor, target, fleeing, nextAttack, nextMove }
 local simTime, nextTick = 0, 0
@@ -88,12 +96,14 @@ local function startCombat(actor, target)
     end
     fighting[actor.id] = s
     tracked[actor.id] = actor
+    scriptEvent(actor, 'OnStartCombat', target)
 end
 
 local function stopCombat(actor)
     local s = fighting[actor.id]
     if s then
         fighting[actor.id] = nil
+        scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
             ai.stop(actor)
             if s.gun then combat.drawWeapon(actor, false) end
@@ -268,6 +278,10 @@ return {
         FNVCombat_Shot = function(e)
             if e.attacker == nil or not e.attacker:isValid() then return end
             local target = e.target
+            if target ~= nil and target:isValid() and isActor(target) then
+                scriptEvent(target, 'OnHit', e.attacker)
+                if e.killed then scriptEvent(target, 'OnDeath', e.attacker) end
+            end
             if target ~= nil and target:isValid() and not e.killed and isActor(target) then
                 startCombat(target, e.attacker)
                 callForHelp(target, e.attacker)

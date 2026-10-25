@@ -87,6 +87,7 @@ namespace MWClass::ESM4Stats
     float getCurrent(const MWWorld::Ptr& actor, int av);
 
     void setBase(const MWWorld::Ptr& actor, int av, float value); // SetAV, ForceAV
+    void addBasePoints(const MWWorld::Ptr& actor, int av, float points); // skill points spent at level up
     void modify(const MWWorld::Ptr& actor, int av, float delta); // ModAV
     void damage(const MWWorld::Ptr& actor, int av, float amount); // DamageAV (negative restores)
 
@@ -99,11 +100,17 @@ namespace MWClass::ESM4Stats
         ESM::FormId mActor; // unset for the player
         int mValue;
         std::optional<float> mBase;
+        float mPoints = 0;
         float mModifier = 0;
         float mDamage = 0;
     };
     std::vector<Change> getChanges();
     void setChanges(const std::vector<Change>& changes);
+
+    // The player's tag skills (Barter..Unarmed), which get fAVDTagSkillBonus; set by character creation and saved
+    // by scripts/omw/fnvstats.lua.
+    std::vector<int> getPlayerTagSkills();
+    void setPlayerTagSkills(const std::vector<int>& skills);
 }
 
 #endif // GAME_MWCLASS_ESM4STATS_H

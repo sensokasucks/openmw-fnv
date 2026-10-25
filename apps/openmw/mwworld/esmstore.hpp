@@ -88,6 +88,7 @@ namespace ESM4
     struct Creature;
     struct DefaultObj;
     struct Door;
+    struct Enchantment;
     struct Eyes;
     struct Faction;
     struct Flora;
@@ -100,6 +101,7 @@ namespace ESM4
     struct Hair;
     struct HeadPart;
     struct IdleAnimation;
+    struct IdleMarker;
     struct Ingredient;
     struct ItemMod;
     struct Key;
@@ -110,6 +112,7 @@ namespace ESM4
     struct LevelledNpc;
     struct Light;
     struct LightingTemplate;
+    struct MagicEffect;
     struct Message;
     struct MiscItem;
     struct MovableStatic;
@@ -119,16 +122,20 @@ namespace ESM4
     struct NavMesh;
     struct AIPackage;
     struct Outfit;
+    struct Perk;
     struct PlacedGrenade;
     struct PlacedMissile;
+    struct VoiceType;
     struct Potion;
     struct Projectile;
     struct Quest;
     struct Race;
     struct Reference;
+    struct Reputation;
     struct Script;
     struct Sound;
     struct SoundReference;
+    struct Spell;
     struct Static;
     struct StaticCollection;
     struct Terminal;
@@ -168,7 +175,9 @@ namespace MWWorld
             Store<ESM4::Armor>, Store<ESM4::ArmorAddon>, Store<ESM4::Book>, Store<ESM4::Cell>, Store<ESM4::Clothing>,
             Store<ESM4::Container>, Store<ESM4::Creature>, Store<ESM4::Dialogue>, Store<ESM4::DialogInfo>,
             Store<ESM4::Door>, Store<ESM4::Eyes>, Store<ESM4::Faction>, Store<ESM4::Furniture>, Store<ESM4::GlobalVariable>,
-            Store<ESM4::Flora>, Store<ESM4::Hair>, Store<ESM4::HeadPart>, Store<ESM4::Ingredient>, Store<ESM4::ItemMod>,
+            Store<ESM4::MagicEffect>, Store<ESM4::Spell>, Store<ESM4::Enchantment>,
+            Store<ESM4::Flora>, Store<ESM4::Hair>, Store<ESM4::HeadPart>, Store<ESM4::IdleMarker>,
+            Store<ESM4::Ingredient>, Store<ESM4::ItemMod>,
             Store<ESM4::Key>, Store<ESM4::Land>, Store<ESM4::LandTexture>, Store<ESM4::LevelledCreature>, Store<ESM4::LevelledItem>,
             Store<ESM4::LevelledNpc>, Store<ESM4::Light>, Store<ESM4::Message>, Store<ESM4::MiscItem>, Store<ESM4::MovableStatic>,
             Store<ESM4::NavMesh>, Store<ESM4::Note>, Store<ESM4::Npc>, Store<ESM4::AIPackage>, Store<ESM4::Outfit>, Store<ESM4::Potion>, Store<ESM4::Quest>, Store<ESM4::Race>, Store<ESM4::Reference>,
@@ -176,7 +185,8 @@ namespace MWWorld
             Store<ESM4::StaticCollection>, Store<ESM4::Terminal>, Store<ESM4::TextureSet>, Store<ESM4::Tree>,
             Store<ESM4::Weapon>, Store<ESM4::World>, Store<ESM4::GameSetting>, Store<ESM4::FormIdList>,
             Store<ESM4::IdleAnimation>, Store<ESM4::Class>, Store<ESM4::DefaultObj>, Store<ESM4::LightingTemplate>,
-            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::Projectile>>;
+            Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::VoiceType>,
+            Store<ESM4::Perk>, Store<ESM4::Reputation>, Store<ESM4::Projectile>>;
 
     private:
         template <typename T>

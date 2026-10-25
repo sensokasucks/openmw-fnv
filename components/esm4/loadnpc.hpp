@@ -201,6 +201,7 @@ namespace ESM4
         ESM::FormId mDeathItem;
         std::vector<ESM::FormId> mSpell;
         ESM::FormId mScriptId;
+        ESM::FormId mVoiceType; // VTCK, FO3/FONV
 
         AIData mAIData;
         std::vector<ESM::FormId> mAIPackages; // seems to be in priority order, 0 = highest priority

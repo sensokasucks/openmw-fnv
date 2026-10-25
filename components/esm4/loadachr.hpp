@@ -55,6 +55,7 @@ namespace ESM4
         float mScale = 1.0f;
         ESM::FormId mOwner;
         ESM::FormId mGlobal;
+        ESM::FormId mLinkedRef; // XLKR (FO3/FONV), GetLinkedRef
 
         EnableParent mEsp;
 

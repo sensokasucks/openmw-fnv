@@ -1,8 +1,10 @@
 #include "obscriptdialoguebindings.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -12,17 +14,23 @@
 
 #include <components/esm/refid.hpp>
 #include <components/esm4/dialogue.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddial.hpp>
 #include <components/esm4/loadglob.hpp>
 #include <components/esm4/loadinfo.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadqust.hpp>
 #include <components/esm4/loadscpt.hpp>
+#include <components/esm4/loadvtyp.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
 #include <components/misc/strings/lower.hpp>
+#include <components/resource/resourcesystem.hpp>
+#include <components/vfs/manager.hpp>
+#include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -49,6 +57,8 @@ namespace MWLua
                 return *formId;
             return {};
         }
+
+        void orderByPreviousInfo(std::vector<const ESM4::DialogInfo*>& list);
 
         // Lookup tables over the dialogue records, built on first use (the
         // record stores do not change after the content files are loaded).
@@ -118,11 +128,60 @@ namespace MWLua
                             const int pb = questPriority(b->mQuest);
                             if (pa != pb)
                                 return pa > pb;
+                            if (a->mQuest != b->mQuest)
+                                return a->mQuest < b->mQuest;
                             return a->mLoadIndex < b->mLoadIndex;
                         });
+                    orderByPreviousInfo(list);
                 }
             }
         };
+
+        // Within each quest's run of INFOs, puts every INFO right after the one its PNAM names (so a plugin can
+        // insert lines anywhere); INFOs whose previous INFO is not in the run start a chain, in file order.
+        void orderByPreviousInfo(std::vector<const ESM4::DialogInfo*>& list)
+        {
+            std::vector<const ESM4::DialogInfo*> result;
+            result.reserve(list.size());
+            size_t begin = 0;
+            while (begin < list.size())
+            {
+                size_t end = begin;
+                while (end < list.size() && list[end]->mQuest == list[begin]->mQuest)
+                    ++end;
+                std::map<ESM::FormId, std::vector<const ESM4::DialogInfo*>> followers;
+                std::set<ESM::FormId> inRun;
+                for (size_t i = begin; i < end; ++i)
+                    inRun.insert(list[i]->mId);
+                std::vector<const ESM4::DialogInfo*> heads;
+                for (size_t i = begin; i < end; ++i)
+                {
+                    const ESM4::DialogInfo* info = list[i];
+                    if (!info->mPrevInfo.isZeroOrUnset() && inRun.count(info->mPrevInfo) && info->mPrevInfo != info->mId)
+                        followers[info->mPrevInfo].push_back(info);
+                    else
+                        heads.push_back(info);
+                }
+                std::set<ESM::FormId> placed;
+                std::vector<const ESM4::DialogInfo*> stack(heads.rbegin(), heads.rend());
+                while (!stack.empty())
+                {
+                    const ESM4::DialogInfo* info = stack.back();
+                    stack.pop_back();
+                    if (!placed.insert(info->mId).second)
+                        continue;
+                    result.push_back(info);
+                    auto it = followers.find(info->mId);
+                    if (it != followers.end())
+                        stack.insert(stack.end(), it->second.rbegin(), it->second.rend());
+                }
+                for (size_t i = begin; i < end; ++i) // chains that loop back on themselves
+                    if (placed.insert(list[i]->mId).second)
+                        result.push_back(list[i]);
+                begin = end;
+            }
+            list = std::move(result);
+        }
 
         const DialogueIndex& getIndex()
         {
@@ -289,6 +348,29 @@ namespace MWLua
             res["flags"] = quest.mData.flags;
             res["priority"] = quest.mData.priority;
             res["startGameEnabled"] = (quest.mData.flags & ESM4::Quest::Flag_StartGameEnabled) != 0;
+            res["allowRepeatedStages"] = (quest.mData.flags & ESM4::Quest::Flag_AllowRepeatStages) != 0;
+            res["delay"] = quest.mData.questDelay; // seconds between script runs; 0 = fQuestScriptDelayTime
+            sol::table objectives(lua, sol::create);
+            for (size_t i = 0; i < quest.mObjectives.size(); ++i)
+            {
+                sol::table o(lua, sol::create);
+                o["index"] = quest.mObjectives[i].mIndex;
+                o["text"] = quest.mObjectives[i].mText;
+                // compass targets: { ref = reference form id, ignoresLocks, conditions }
+                sol::table targets(lua, sol::create);
+                for (size_t j = 0; j < quest.mObjectives[i].mTargets.size(); ++j)
+                {
+                    const ESM4::QuestTarget& target = quest.mObjectives[i].mTargets[j];
+                    sol::table t(lua, sol::create);
+                    t["ref"] = formIdText(target.mTarget);
+                    t["ignoresLocks"] = (target.mFlags & ESM4::QuestTarget::Flag_IgnoresLocks) != 0;
+                    t["conditions"] = makeConditions(lua, target.mConditions);
+                    targets[LuaUtil::toLuaIndex(j)] = t;
+                }
+                o["targets"] = targets;
+                objectives[LuaUtil::toLuaIndex(i)] = o;
+            }
+            res["objectives"] = objectives;
             res["script"] = formIdText(quest.mQuestScript);
             res["variables"] = makeScriptVariables(lua, quest.mQuestScript);
             sol::table stages(lua, sol::create);
@@ -305,7 +387,7 @@ namespace MWLua
                     e["flags"] = entry.mFlags;
                     e["log"] = entry.mLogText;
                     e["script"] = entry.mScript.scriptSource;
-                    e["conditionCount"] = entry.mConditions.size();
+                    e["conditions"] = makeConditions(lua, entry.mConditions);
                     entries[LuaUtil::toLuaIndex(j)] = e;
                 }
                 s["entries"] = entries;
@@ -391,6 +473,16 @@ namespace MWLua
             return makeQuest(lua, *quest);
         };
 
+        // Form ids of all quests.
+        api["getAllQuests"] = [](sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const MWWorld::Store<ESM4::Quest>& quests = MWBase::Environment::get().getESMStore()->get<ESM4::Quest>();
+            for (size_t i = 0; i < quests.getSize(); ++i)
+                res[LuaUtil::toLuaIndex(i)] = formIdText(quests.at(i)->mId);
+            return res;
+        };
+
         // Form ids of the quests flagged "start game enabled".
         api["getStartGameEnabledQuests"] = [](sol::this_state s) -> sol::table {
             sol::state_view lua(s);
@@ -440,8 +532,86 @@ namespace MWLua
             res["class"] = formIdText(traits->mClass);
             res["faction"] = formIdText(ESM::FormId::fromUint32(base->mFaction.faction));
             res["factionRank"] = base->mFaction.rank;
+            sol::table factions(lua, sol::create); // faction form id -> rank, every SNAM
+            for (const ESM4::ActorFaction& f : base->mFactions)
+                factions[formIdText(ESM::FormId::fromUint32(f.faction))] = f.rank;
+            res["factions"] = factions;
             res["isFemale"] = MWClass::ESM4Npc::isFemale(ptr);
             res["script"] = formIdText(base->mScriptId);
+            res["voiceType"] = formIdText(base->mVoiceType);
+            return res;
+        };
+
+        // Voice type (VTCK) of an ESM4 NPC or creature reference, "" when it has none.
+        api["getVoiceType"] = [](const Object& object) -> std::string {
+            const MWWorld::Ptr& ptr = object.ptr();
+            if (ptr.getType() == ESM::REC_NPC_4)
+                return formIdText(ptr.get<ESM4::Npc>()->mBase->mVoiceType);
+            if (ptr.getType() == ESM::REC_CREA4)
+                return formIdText(ptr.get<ESM4::Creature>()->mBase->mVoiceType);
+            return {};
+        };
+
+        // Voice file of one response of an INFO said by this NPC or creature, nil when it has none:
+        // sound\voice\<plugin>\<voice type>\<quest>_<topic>_<INFO id>_<response>.ogg, lower case, with the
+        // quest editor id cut to 10 characters, the topic's to 20 and the INFO id without its load-order byte
+        // (as the files in Fallout - Voices1.bsa are named).
+        api["getVoiceFile"] = [](std::string_view infoId, const Object& speaker,
+                                  int response) -> sol::optional<std::string> {
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const ESM4::DialogInfo* info = store.get<ESM4::DialogInfo>().search(ESM::RefId(parseFormId(infoId)));
+            if (info == nullptr || !info->mId.hasContentFile())
+                return sol::nullopt;
+            ESM::FormId voiceTypeId;
+            const MWWorld::Ptr& ptr = speaker.ptr();
+            if (ptr.getType() == ESM::REC_NPC_4)
+                voiceTypeId = ptr.get<ESM4::Npc>()->mBase->mVoiceType;
+            else if (ptr.getType() == ESM::REC_CREA4)
+                voiceTypeId = ptr.get<ESM4::Creature>()->mBase->mVoiceType;
+            const ESM4::VoiceType* voiceType = store.get<ESM4::VoiceType>().search(ESM::RefId(voiceTypeId));
+            const ESM4::Quest* quest = store.get<ESM4::Quest>().search(ESM::RefId(info->mQuest));
+            const ESM4::Dialogue* topic = store.get<ESM4::Dialogue>().search(ESM::RefId(info->mTopic));
+            if (voiceType == nullptr || quest == nullptr || topic == nullptr)
+                return sol::nullopt;
+            const std::vector<std::string>& files = MWBase::Environment::get().getWorld()->getContentFiles();
+            if (static_cast<size_t>(info->mId.mContentFile) >= files.size())
+                return sol::nullopt;
+            char id[16];
+            std::snprintf(id, sizeof(id), "%08x", info->mId.mIndex & 0xFFFFFF);
+            std::string path = "sound\\voice\\" + files[info->mId.mContentFile] + "\\" + voiceType->mEditorId + "\\"
+                + quest->mEditorId.substr(0, 10) + "_" + topic->mEditorId.substr(0, 20) + "_" + id + "_"
+                + std::to_string(response) + ".ogg";
+            path = Misc::StringUtils::lowerCase(path);
+            if (!MWBase::Environment::get().getResourceSystem()->getVFS()->exists(VFS::Path::Normalized(path)))
+                return sol::nullopt;
+            return path;
+        };
+
+        // Script (SCPT) by form id or editor id: { id, editorId, type, enabled, source } or nil.
+        // type: 0 object, 1 quest, 0x100 effect.
+        api["getScript"] = [](std::string_view idOrEditorId, sol::this_state s) -> sol::object {
+            sol::state_view lua(s);
+            const MWWorld::Store<ESM4::Script>& scripts = MWBase::Environment::get().getESMStore()->get<ESM4::Script>();
+            const ESM4::Script* script = scripts.search(ESM::RefId(parseFormId(idOrEditorId)));
+            if (script == nullptr)
+            {
+                static const std::map<std::string, const ESM4::Script*> byEditorId = [&scripts] {
+                    std::map<std::string, const ESM4::Script*> res;
+                    for (size_t i = 0; i < scripts.getSize(); ++i)
+                        res.emplace(Misc::StringUtils::lowerCase(scripts.at(i)->mEditorId), scripts.at(i));
+                    return res;
+                }();
+                auto it = byEditorId.find(Misc::StringUtils::lowerCase(idOrEditorId));
+                if (it == byEditorId.end())
+                    return sol::nil;
+                script = it->second;
+            }
+            sol::table res(lua, sol::create);
+            res["id"] = formIdText(script->mId);
+            res["editorId"] = script->mEditorId;
+            res["type"] = script->mScript.scriptHeader.type;
+            res["enabled"] = (script->mScript.scriptHeader.flag & 0x01) != 0;
+            res["source"] = script->mScript.scriptSource;
             return res;
         };
 
