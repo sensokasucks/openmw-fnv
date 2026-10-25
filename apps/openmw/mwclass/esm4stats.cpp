@@ -109,6 +109,8 @@ namespace MWClass::ESM4Stats
             "DamageThreshold",
         };
 
+        bool isPlayerTagSkill(int av);
+
         float gmst(std::string_view name)
         {
             return MWWorld::ESM4GameSettings::getFloat(name);
@@ -354,8 +356,11 @@ namespace MWClass::ESM4Stats
                     return record->mFO3Stats.skills[skill];
                 const float attribute = getPermanent(actor, sGoverningAttribute[skill]);
                 const float luck = getPermanent(actor, Luck);
-                return gmst(sSkillBaseSettings[skill]) + gmst("fAVDSkillPrimaryBonusMult") * attribute
+                float value = gmst(sSkillBaseSettings[skill]) + gmst("fAVDSkillPrimaryBonusMult") * attribute
                     + std::ceil(gmst("fAVDSkillLuckBonusMult") * luck);
+                if (player && isPlayerTagSkill(av))
+                    value += gmst("fAVDTagSkillBonus");
+                return value;
             }
 
             switch (av)
@@ -433,6 +438,9 @@ namespace MWClass::ESM4Stats
             }
         }
 
+        // The player's tag skills, chosen in character creation (saved by scripts/omw/fnvstats.lua).
+        std::vector<int> sPlayerTagSkills;
+
         Delta& deltaFor(const MWWorld::Ptr& actor, int av)
         {
             return sChanges[keyOf(actor)][av];
@@ -441,6 +449,11 @@ namespace MWClass::ESM4Stats
         bool valid(int av)
         {
             return av >= 0 && av < Count;
+        }
+
+        bool isPlayerTagSkill(int av)
+        {
+            return std::find(sPlayerTagSkills.begin(), sPlayerTagSkills.end(), av) != sPlayerTagSkills.end();
         }
     }
 
@@ -567,5 +580,18 @@ namespace MWClass::ESM4Stats
             delta.mModifier = change.mModifier;
             delta.mDamage = change.mDamage;
         }
+    }
+
+    std::vector<int> getPlayerTagSkills()
+    {
+        return sPlayerTagSkills;
+    }
+
+    void setPlayerTagSkills(const std::vector<int>& skills)
+    {
+        sPlayerTagSkills.clear();
+        for (int av : skills)
+            if (av >= Barter && av <= Unarmed && !isPlayerTagSkill(av))
+                sPlayerTagSkills.push_back(av);
     }
 }

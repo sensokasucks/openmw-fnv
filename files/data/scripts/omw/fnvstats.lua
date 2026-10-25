@@ -52,22 +52,44 @@ return {
         --- Apply op 'setBase', 'modify' or 'damage'.
         change = change,
         getLevel = function(actor) return stats.getLevel(actor) end,
+        --- The player's tag skills, as actor value numbers.
+        getTagSkills = function() return stats.getTagSkills() end,
+        --- Replace the player's tag skills (a list of names such as 'Guns' or numbers).
+        setTagSkills = function(skills) stats._setTagSkills(skills) end,
     },
     engineHandlers = {
         onInit = function()
             stats._setChanges({})
+            stats._setTagSkills({})
         end,
         onSave = function()
-            return { changes = stats._getChanges() }
+            return { changes = stats._getChanges(), tagSkills = stats.getTagSkills() }
         end,
         onLoad = function(data)
             stats._setChanges(data and data.changes or {})
+            stats._setTagSkills(data and data.tagSkills or {})
         end,
     },
     eventHandlers = {
         -- from local ObScript (openmw_aux.obscript.bindings)
         FNVStatsChange = function(data)
             change(data.object, data.op, data.av, data.value)
+        end,
+        -- from the character creation menus (scripts/omw/fnvchargen/player.lua)
+        FNVChargenSetName = function(data)
+            local name = tostring(data.name or ''):gsub('^%s+', ''):gsub('%s+$', '')
+            if name ~= '' then stats._setPlayerName(name) end
+        end,
+        FNVChargenSetSex = function(data)
+            stats._setPlayerSex(data.female == true)
+        end,
+        FNVChargenSetBase = function(data)
+            for av, value in pairs(data.values or {}) do
+                change(data.player, 'setBase', av, value)
+            end
+        end,
+        FNVChargenSetTagSkills = function(data)
+            stats._setTagSkills(data.skills or {})
         end,
     },
 }
