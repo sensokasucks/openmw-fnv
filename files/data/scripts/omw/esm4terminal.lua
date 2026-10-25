@@ -62,7 +62,9 @@ local function addNote(id, quiet)
     knownSet[rec.id] = true
     knownNotes[#knownNotes + 1] = rec.id
     if not quiet then
-        ui.showMessage('Note added: ' .. noteTitle(rec))
+        local fmt = core.getFNVGMST and core.getFNVGMST('sComputersAddedNote') or 'Note Added: %s'
+        local text = fmt:gsub('%%s', function() return noteTitle(rec) end)
+        if I.FNVHud then I.FNVHud.notify(text) else ui.showMessage(text) end
     end
     return true
 end
@@ -450,6 +452,10 @@ local function unlockTerminal(terminal, rec)
         return false
     end
     hacked[terminal.id] = true
+    local xp = core.getFNVGMST and core.getFNVGMST('iXPRewardHackComputer' .. name:gsub(' ', ''))
+    if type(xp) == 'number' and xp > 0 then
+        core.sendGlobalEvent('FNVCharacterCommand', { name = 'rewardXP', args = { xp } })
+    end
     return true, ('Terminal hacked (%s).'):format(name)
 end
 

@@ -5,6 +5,16 @@ local core = require('openmw.core')
 local self = require('openmw.self')
 local types = require('openmw.types')
 local ui = require('openmw.ui')
+local I = require('openmw.interfaces')
+
+-- A notice in the FNV HUD's corner (scripts/omw/fnvhud/player.lua), else a message box.
+local function notify(text, duration)
+    if I.FNVHud then
+        I.FNVHud.notify(text, { duration = duration })
+    else
+        ui.showMessage(text)
+    end
+end
 
 -- Substitute `%.0f`-style format specs in a MESG text with the ShowMessage arguments.
 local function formatMessage(text, args)
@@ -35,16 +45,21 @@ return {
                 -- a blocking box; GetButtonPressed reads the answer
                 core.obscript.showMessageBox(text, msg.buttons)
             else
-                ui.showMessage(text)
+                notify(text, msg.displayTime)
             end
         end,
         -- A line spoken outside the dialogue window (SayTo, Say).
         FNVSubtitle = function(data)
-            ui.showMessage(tostring(data.speaker) .. ': ' .. tostring(data.text))
+            local line = tostring(data.speaker) .. ': ' .. tostring(data.text)
+            if I.FNVHud then
+                I.FNVHud.subtitle(line, data.duration)
+            else
+                ui.showMessage(line)
+            end
         end,
         -- Short notices such as a new quest objective.
         ObScriptNotify = function(data)
-            ui.showMessage(tostring(data.text))
+            notify(tostring(data.text))
         end,
         -- DisablePlayerControls / EnablePlayerControls.
         ObScriptPlayerControls = function(data)

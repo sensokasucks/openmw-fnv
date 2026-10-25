@@ -136,8 +136,10 @@ namespace
                 if type(h) ~= 'table' then
                     return 'no engineHandlers'
                 end
-                h.onUpdate(0.25)
+                -- engine callbacks queue events; the next update runs the script once,
+                -- its blocks in source order
                 h.onActivated('someactor')
+                h.onUpdate(0.25)
                 local dtSeen = obs._dt
                 local save = h.onSave()
                 return #log, log[1], log[2], dtSeen, type(save.locals)
@@ -157,7 +159,9 @@ namespace
                 end)
                 local h = obs.makeLocalScript().engineHandlers
                 h.onActivated(playerObj)
+                h.onUpdate(0)
                 h.onActivated(npc)
+                h.onUpdate(0)
                 return results[1], results[2], obs.v('GetActionRef'),
                     (obs.v('GetActionRef') == obs.v('player'))
             end,
@@ -167,7 +171,9 @@ namespace
                 obs.on('OnLoad', function() log[#log + 1] = 'loaded:' .. tostring(obs._actionRef) end)
                 local h = obs.makeLocalScript().engineHandlers
                 h.onActive()
+                h.onUpdate(0)
                 h.onActive()
+                h.onUpdate(0)
                 return #log, log[1]
             end,
 

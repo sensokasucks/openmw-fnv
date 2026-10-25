@@ -56,6 +56,7 @@ local state = {
     quests = {},
     saidOnce = {},   -- INFO form id -> true
     saidAt = {},     -- INFO form id -> game time (s) it was last said, for Say Once a Day
+    factions = {},    -- reference form id -> { [faction form id] = rank, or false when removed }
     knownTopics = {}, -- topic form id -> true: topics from AddTopic and INFO add-topics (top-level ones are always known)
     talkedTo = {},   -- NPC reference form id -> true
 }
@@ -312,14 +313,23 @@ functions[68] = function(cond, obj) -- GetIsClass
     local a = actorData(obj)
     return a ~= nil and a.class == cond.param1Form
 end
-functions[71] = function(cond, obj) -- GetInFaction (only the first faction is loaded)
+-- An NPC's rank in a faction: its record's ranks, changed by AddToFaction,
+-- RemoveFromFaction and SetFactionRank; nil when not a member.
+local function factionRank(a, factionId)
+    local changes = state.factions[a.reference]
+    local changed = changes and changes[factionId]
+    if changed ~= nil then
+        return changed or nil
+    end
+    return a.factions[factionId]
+end
+functions[71] = function(cond, obj) -- GetInFaction
     local a = actorData(obj)
-    return a ~= nil and a.faction == cond.param1Form
+    return a ~= nil and factionRank(a, cond.param1Form) ~= nil
 end
 functions[73] = function(cond, obj) -- GetFactionRank
     local a = actorData(obj)
-    if a ~= nil and a.faction == cond.param1Form then return a.factionRank end
-    return -1
+    return a ~= nil and factionRank(a, cond.param1Form) or -1
 end
 functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
@@ -410,9 +420,32 @@ functions[415] = function(_, obj) return obj ~= nil end -- Exists
 functions[353] = function(_, obj) return obj ~= nil end -- IsActor
 functions[254] = function() return 1 end -- GetIsPlayableRace
 functions[524] = function() return 1 end -- IsWin32
+-- Reputation, perks and karma (scripts/omw/fnvcharacter/global.lua)
+local character = require('openmw_aux.obscript.character')
+local characterRules = require('scripts.omw.fnvcharacter.rules')
+local function characterState()
+    return I.FNVCharacter and I.FNVCharacter.getState()
+end
+functions[573] = function(cond) -- GetReputation rep (1 fame, 0 infamy)
+    return character.points(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[574] = function(cond) -- GetReputationPct
+    return character.percent(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[575] = function(cond) -- GetReputationThreshold rep axis (0 mixed, 1 fame, 2 infamy)
+    return character.threshold(characterState(), character.reputation(cond.param1Form), cond.param2)
+end
+functions[449] = function(cond, obj) -- HasPerk (only the player has perks)
+    if not isPlayer(obj) then return 0 end
+    return character.perkRank(characterState(), character.perk(cond.param1Form)) > 0
+end
+functions[474] = function(cond, obj) -- GetIsAlignment 0 good, 1 neutral, 2 evil, 3 very good, 4 very evil
+    if obj == nil or not stats.hasActorValues(obj) then return 0 end
+    return characterRules.alignmentOf(stats.get(obj, 'Karma'), character.gmst) == cond.param1
+end
 -- states the engine does not track for ESM4 actors yet: always "no"
 for _, f in ipairs({ 36, 45, 49, 61, 63, 64, 91, 98, 101, 125, 141, 159, 182, 224, 242, 286, 289, 309, 354,
-    365, 382, 435, 436, 449, 454, 455, 462, 523, 573, 574, 575, 586, 619 }) do
+    365, 382, 435, 436, 454, 455, 462, 523, 586, 619 }) do
     functions[f] = function() return 0 end
 end
 
@@ -1028,7 +1061,7 @@ local function tickGreetings(dt)
     local distance = gmst('fAIMinGreetingDistance', 150)
     local cooldown = gmst('fAIGreetingTimer', 20)
     for _, npc in ipairs(world.activeActors) do
-        if types.ESM4NPC.objectIsInstance(npc) and npc.cell == player.cell
+        if types.ESM4NPC.objectIsInstance(npc) and npc.cell and player.cell and npc.cell.id == player.cell.id
             and (npc.position - player.position):length() <= distance
             and simTime - (lastHello[npc.id] or -cooldown) >= cooldown
             and not isSpeaking(npc) and not isDead(npc)
@@ -1048,11 +1081,11 @@ end
 -- blocks run once for it. A menu nobody registered closes at once.
 local registeredMenus = {} -- lower-case command name -> true
 local pendingMenus = {}
-local function openStandInMenu(name, menuType)
+local function openStandInMenu(name, menuType, args)
     if registeredMenus[name:lower()] then
         local player = world.players[1]
         if player then
-            player:sendEvent('FNVOpenMenu', { name = name, menuType = menuType })
+            player:sendEvent('FNVOpenMenu', { name = name, menuType = menuType, args = args or {} })
             return
         end
     end
@@ -1166,6 +1199,16 @@ require('openmw_aux.obscript.stats').install(obs, {
     change = function(object, op, av, value) I.FNVStats.change(object, op, av, value) end,
 })
 
+-- RewardXP, RewardKarma, AddReputation, HasPerk... (scripts/omw/fnvcharacter/global.lua)
+require('openmw_aux.obscript.character').install(obs, {
+    subject = function() return speakerOr(nil) end,
+    resolve = speakerOr,
+    data = function() return I.FNVCharacter and I.FNVCharacter.getState() end,
+    command = function(name, ...)
+        if I.FNVCharacter then I.FNVCharacter.command(name, ...) end
+    end,
+})
+
 obs.bind('SetStage', function(q, stage)
     local quest = questArg(q)
     if quest then setStage(quest, stage) end
@@ -1223,22 +1266,12 @@ obs.bind('GetQuestCompleted', function(q)
     return (quest and questState(quest).completed) and 1 or 0
 end)
 
-local function objectiveText(quest, index)
-    for _, o in ipairs(quest.objectives) do
-        if o.index == index then return o.text end
-    end
-    return ''
-end
-
 obs.bind('SetObjectiveDisplayed', function(q, index, flag)
     local quest = questArg(q)
     index = math.floor(tonumber(index) or 0)
     if quest and obs.b(flag or 1) then
+        -- the HUD shows the new objective (scripts/omw/fnvhud/global.lua)
         local o = questState(quest).objectives
-        if o[index] == nil then
-            local text = objectiveText(quest, index)
-            if text ~= '' then playerEvent('ObScriptNotify', { text = text }) end
-        end
         if o[index] ~= 'completed' then o[index] = 'displayed' end
         publishQuest(quest)
     end
@@ -1270,15 +1303,16 @@ end)
 
 -- `player.AddItem Item count` / `AddItem Item count` (the speaker); only the
 -- player's inventory is supported.
-obs.bind('AddItem', function(a, b, c)
-    local ref, item, count = nil, a, b
-    if type(a) == 'string' and type(b) == 'string' then ref, item, count = a, b, c end
+obs.bind('AddItem', function(a, b, c, d)
+    local ref, item, count, hideMessage = nil, a, b, c
+    if type(a) == 'string' and type(b) == 'string' then ref, item, count, hideMessage = a, b, c, d end
     local target = speakerOr(ref)
     if not isPlayer(target) then
         tlog('AddItem to a non-player is ignored: ' .. tostring(item))
         return 0
     end
-    core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1 })
+    core.sendGlobalEvent('ObScriptAddItem', { item = item, count = count or 1,
+        silent = hideMessage ~= nil and obs.b(hideMessage) })
     return 0
 end)
 
@@ -1424,15 +1458,15 @@ obs.bind('EnablePlayerControls', function(...) return playerControls(true, ...) 
 
 -- Character creation menus: stand-ins (see openStandInMenu). 1036 is the
 -- race menu, as VCG01SCRIPT's `MenuMode 1036` block shows.
-obs.bind('ShowRaceMenu', function() openStandInMenu('ShowRaceMenu', 1036) return 0 end)
+obs.bind('ShowRaceMenu', function(...) openStandInMenu('ShowRaceMenu', 1036, { ... }) return 0 end)
 for _, name in ipairs({ 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowLoveTesterMenuParams' }) do
-    obs.bind(name, function() openStandInMenu(name, nil) return 0 end)
+    obs.bind(name, function(...) openStandInMenu(name, nil, { ... }) return 0 end)
 end
 
 -- Presentation commands with no effect on script flow; logged once each.
 local quietStubs = {}
-for _, name in ipairs({ 'AddScriptPackage', 'RemoveScriptPackage', 'ApplyImageSpaceModifier',
+for _, name in ipairs({ 'ApplyImageSpaceModifier',
     'RemoveImageSpaceModifier', 'SetDestroyed', 'PlayIdle', 'AutoDisplayObjectives', 'AutoSave',
     'AddAchievement', 'SexChange', 'Look', 'StopLook', 'SetScreenSplatterFade', 'PlaySound', 'PlaySound3D' }) do
     obs.bind(name, function()
@@ -1497,6 +1531,198 @@ end
 obs.bind('MoveTo', moveTo)
 obs.bind('MoveToMarker', moveTo)
 obs.bind('MoveToMarkerWithFade', moveTo)
+
+-- ---------------------------------------------------- more commands, by how often FNV uses them
+
+local function combatApi(name)
+    return I.FNVCombat and I.FNVCombat[name]
+end
+
+-- `Ref.StartCombat Target` / `StopCombat`
+obs.bind('StartCombat', function(...)
+    local actor, target = refAndArgs(...)
+    local start = combatApi('startCombat')
+    target = resolveObject(target) or world.players[1]
+    if actor and target and start then start(actor, target) end
+    return 0
+end)
+obs.bind('StopCombat', function(...)
+    local actor = refAndArgs(...)
+    local stop = combatApi('stopCombat')
+    if actor and stop then stop(actor) end
+    return 0
+end)
+obs.bind('IsInCombat', function(...)
+    local actor = refAndArgs(...)
+    local check = combatApi('isInCombat')
+    return (actor and check and check(actor)) and 1 or 0
+end)
+obs.bind('GetCombatTarget', function(...)
+    local actor = refAndArgs(...)
+    local get = combatApi('getTarget')
+    return actor and get and get(actor) or 0
+end)
+-- `Ref.KillActor [Killer]`
+obs.bind('KillActor', function(...)
+    local actor = refAndArgs(...)
+    local kill = combatApi('kill')
+    if actor and kill and not isDead(actor) then kill(actor) end
+    return 0
+end)
+
+-- `Ref.AddScriptPackage Package` / `Ref.RemoveScriptPackage`
+obs.bind('AddScriptPackage', function(...)
+    local npc, package = refAndArgs(...)
+    local packageId = type(package) == 'string' and core.obscript.resolvePackageEditorId(package)
+    if npc and packageId and types.ESM4NPC.objectIsInstance(npc) and I.FNVAI and I.FNVAI.setScriptPackage then
+        I.FNVAI.setScriptPackage(npc, packageId)
+    end
+    return 0
+end)
+obs.bind('RemoveScriptPackage', function(...)
+    local npc = refAndArgs(...)
+    if npc and types.ESM4NPC.objectIsInstance(npc) and I.FNVAI and I.FNVAI.setScriptPackage then
+        I.FNVAI.setScriptPackage(npc, nil)
+    end
+    return 0
+end)
+
+-- `Ref.AddToFaction Faction rank`, `Ref.RemoveFromFaction Faction`,
+-- `Ref.SetFactionRank Faction rank` (-1 removes), `GetInFaction`, `GetFactionRank`.
+local function setFactionRank(npc, faction, rank)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    if a == nil or not factionId then
+        tlog('faction change: unknown NPC or faction ' .. tostring(faction))
+        return
+    end
+    local changes = state.factions[a.reference] or {}
+    state.factions[a.reference] = changes
+    if rank == nil or rank < 0 then
+        changes[factionId] = false
+    else
+        changes[factionId] = math.floor(rank)
+    end
+end
+obs.bind('AddToFaction', function(...)
+    local npc, faction, rank = refAndArgs(...)
+    setFactionRank(npc, faction, tonumber(rank) or 0)
+    return 0
+end)
+obs.bind('RemoveFromFaction', function(...)
+    local npc, faction = refAndArgs(...)
+    setFactionRank(npc, faction, nil)
+    return 0
+end)
+obs.bind('SetFactionRank', function(...)
+    local npc, faction, rank = refAndArgs(...)
+    setFactionRank(npc, faction, tonumber(rank) or -1)
+    return 0
+end)
+obs.bind('GetInFaction', function(...)
+    local npc, faction = refAndArgs(...)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    return (a and factionId and factionRank(a, factionId) ~= nil) and 1 or 0
+end)
+obs.bind('GetFactionRank', function(...)
+    local npc, faction = refAndArgs(...)
+    local a = actorData(npc)
+    local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
+    return (a and factionId and factionRank(a, factionId)) or -1
+end)
+
+-- `Ref.Lock [level]` / `Ref.Unlock`
+obs.bind('Lock', function(...)
+    local obj, level = refAndArgs(...)
+    if obj then pcall(types.Lockable.lock, obj, math.floor(tonumber(level) or 0)) end
+    return 0
+end)
+obs.bind('Unlock', function(...)
+    local obj = refAndArgs(...)
+    if obj then pcall(types.Lockable.unlock, obj) end
+    return 0
+end)
+obs.bind('GetLocked', function(...)
+    local obj = refAndArgs(...)
+    local ok, locked = pcall(types.Lockable.isLocked, obj)
+    return (ok and locked) and 1 or 0
+end)
+
+-- MarkForDelete and RemoveMe: the reference goes away (at once here; the
+-- original waits until it is unloaded).
+local function removeRef(...)
+    local obj = refAndArgs(...)
+    if obj and obj:isValid() and not isPlayer(obj) then
+        pcall(function() obj:remove() end)
+    end
+    return 0
+end
+obs.bind('MarkForDelete', removeRef)
+obs.bind('RemoveMe', removeRef)
+
+-- `Ref.PlaceAtMe Base [count]`: new objects at the reference; returns the last one.
+obs.bind('PlaceAtMe', function(...)
+    local anchor, base, count = refAndArgs(...)
+    local recordId = type(base) == 'string' and core.obscript.resolveBaseEditorId(base)
+    if anchor == nil or not recordId or anchor.cell == nil then
+        tlog('PlaceAtMe: unknown object ' .. tostring(base))
+        return 0
+    end
+    local placed = 0
+    for _ = 1, math.max(1, math.floor(tonumber(count) or 1)) do
+        local ok, obj = pcall(world.createObject, recordId, 1)
+        if ok and obj then
+            obj:teleport(anchor.cell, anchor.position, { rotation = anchor.rotation })
+            placed = obj
+        end
+    end
+    return placed
+end)
+
+-- `Ref.GetItemCount Item`
+obs.bind('GetItemCount', function(...)
+    local obj, item = refAndArgs(...)
+    local recordId = type(item) == 'string' and core.obscript.resolveItemEditorId(item)
+    if obj == nil or not recordId then return 0 end
+    local ok, count = pcall(function()
+        local inventory = types.Actor.objectIsInstance(obj) and types.Actor.inventory(obj)
+            or types.Container.inventory(obj)
+        return inventory:countOf(recordId)
+    end)
+    return ok and count or 0
+end)
+
+obs.bind('GetRandomPercent', function() return math.random(0, 99) end)
+obs.bind('GetCurrentTime', function() return clockValue('gamehour') end)
+
+-- `Ref.GetSelf`: the reference the script runs on.
+obs.bind('GetSelf', function(...)
+    local obj = refAndArgs(...)
+    return obj or 0
+end)
+
+-- `Ref.GetIsReference Other`
+obs.bind('GetIsReference', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    return (obj ~= nil and other ~= nil and obj == other) and 1 or 0
+end)
+
+-- `Ref.GetDistance Other`: distance in the same cell, else very far.
+obs.bind('GetDistance', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    if obj == nil or other == nil or obj.cell == nil or other.cell == nil or obj.cell.id ~= other.cell.id then
+        return 999999
+    end
+    return (obj.position - other.position):length()
+end)
+obs.bind('GetInSameCell', function(...)
+    local obj, other = refAndArgs(...)
+    other = resolveObject(other)
+    return (obj ~= nil and other ~= nil and obj.cell ~= nil and other.cell ~= nil and obj.cell.id == other.cell.id) and 1 or 0
+end)
 
 obs.bind('player', function() return 'player' end)
 
@@ -1680,6 +1906,10 @@ local forwardedCommands = {
     setobjectivedisplayed = true, setobjectivecompleted = true,
     sayto = true, say = true, startconversation = true, forcegreet = true, evaluatepackage = true, evp = true, resetai = true,
     disableplayercontrols = true, enableplayercontrols = true,
+    addscriptpackage = true, removescriptpackage = true, addtofaction = true, removefromfaction = true,
+    setfactionrank = true, startcombat = true, stopcombat = true, killactor = true, lock = true, unlock = true,
+    markfordelete = true, removeme = true, placeatme = true, moveto = true, movetomarker = true,
+    movetomarkerwithfade = true, addtopic = true, showmessage = true,
     showracemenu = true, getplayername = true, shownamemenu = true, showspecialmenu = true,
     showtagskillmenu = true, settagskills = true, showtraitmenu = true, showlovetestermenuparams = true,
 }
@@ -1951,6 +2181,7 @@ return {
             state.initialized = true
             state.saidAt = state.saidAt or {}
             state.knownTopics = state.knownTopics or {}
+            state.factions = state.factions or {}
             for k, v in pairs(data.globals or {}) do obs._globals[k] = v end
             loadScriptVars(data.vars)
             publishAllQuests()

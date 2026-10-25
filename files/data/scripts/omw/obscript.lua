@@ -78,9 +78,16 @@ return {
             end
             local count = math.max(1, math.floor(tonumber(data.count) or 1))
             local obj = world.createObject(recordId, count)
+            local name = core.obscript.combat and core.obscript.combat.getName(obj) or ''
             local ok = pcall(function()
                 obj:moveInto(types.Actor.inventory(world.players[1]))
             end)
+            if ok and not data.silent and name ~= '' then
+                -- "Stimpak (2) added" in the HUD's corner
+                world.players[1]:sendEvent('FNVHudNotify', {
+                    text = count > 1 and ('%s (%d) added'):format(name, count) or (name .. ' added'),
+                })
+            end
             if not ok then
                 -- ESM4 inventory support is not implemented yet; drop the item
                 -- and record the limitation instead of erroring.

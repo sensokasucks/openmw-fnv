@@ -304,6 +304,12 @@ namespace MWGui
             mCellNameBox->setVisible(false);
         if (mWeaponSpellTimer < 0)
             mWeaponSpellBox->setVisible(false);
+        if (mFalloutStyle)
+        {
+            mCellNameBox->setVisible(false);
+            mWeaponSpellBox->setVisible(false);
+            mEnemyHealth->setVisible(false);
+        }
 
         mEnemyHealthTimer -= dt;
         if (mEnemyHealth->getVisible() && mEnemyHealthTimer < 0)
@@ -490,6 +496,7 @@ namespace MWGui
 
     void HUD::setHmsVisible(bool visible)
     {
+        visible = visible && !mFalloutStyle;
         mHealth->setVisible(visible);
         mMagicka->setVisible(visible);
         mStamina->setVisible(visible);
@@ -498,32 +505,43 @@ namespace MWGui
 
     void HUD::setWeapVisible(bool visible)
     {
+        visible = visible && !mFalloutStyle;
         mWeapBox->setVisible(visible);
         updatePositions();
     }
 
     void HUD::setSpellVisible(bool visible)
     {
+        visible = visible && !mFalloutStyle;
         mSpellBox->setVisible(visible);
         updatePositions();
     }
 
     void HUD::setSneakVisible(bool visible)
     {
+        mSneakHidden = visible;
+        visible = visible && !mFalloutStyle;
         mSneakBox->setVisible(visible);
         updatePositions();
     }
 
     void HUD::setEffectVisible(bool visible)
     {
+        visible = visible && !mFalloutStyle;
         mEffectBox->setVisible(visible);
         updatePositions();
     }
 
     void HUD::setMinimapVisible(bool visible)
     {
+        visible = visible && !mFalloutStyle;
         mMinimapBox->setVisible(visible);
         updatePositions();
+    }
+
+    void HUD::setFalloutStyle(bool enabled)
+    {
+        mFalloutStyle = enabled;
     }
 
     void HUD::updatePositions()

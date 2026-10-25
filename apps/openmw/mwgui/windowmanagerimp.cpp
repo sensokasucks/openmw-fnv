@@ -1175,6 +1175,7 @@ namespace MWGui
 
     void WindowManager::setFocusObject(const MWWorld::Ptr& focus)
     {
+        mFocusObject = focus.isEmpty() ? MWWorld::SafePtr() : MWWorld::SafePtr(focus);
         mToolTips->setFocusObject(focus);
 
         const int showOwned = Settings::game().mShowOwned;
@@ -1814,6 +1815,20 @@ namespace MWGui
         updateVisible();
         mMessageBoxManager->setVisible(mHudEnabled);
         return mHudEnabled;
+    }
+
+    void WindowManager::setFalloutHud(bool enabled)
+    {
+        if (mHud == nullptr || mHud->isFalloutStyle() == enabled)
+            return;
+        mHud->setFalloutStyle(enabled);
+        mToolTips->setFocusTooltipHidden(enabled);
+        updateVisible();
+    }
+
+    bool WindowManager::isSneakHidden() const
+    {
+        return mHud != nullptr && mHud->isSneakHidden();
     }
 
     bool WindowManager::getRestEnabled()

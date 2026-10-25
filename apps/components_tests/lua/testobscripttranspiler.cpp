@@ -69,7 +69,7 @@ namespace
         const std::string lua = transpile("scn MyScript\n");
         EXPECT_THAT(lua, HasSubstr("-- transpiled from ObScript: MyScript"));
         EXPECT_THAT(lua, HasSubstr("local obs = require('openmw_aux.obscript.runtime')"));
-        EXPECT_THAT(lua, HasSubstr("local S = obs.locals(\"MyScript\")"));
+        EXPECT_THAT(lua, HasSubstr("local S = obs.locals(\"MyScript\", {  })"));
         EXPECT_THAT(lua, HasSubstr("return obs.makeLocalScript()"));
     }
 
@@ -87,15 +87,16 @@ namespace
         const std::string lua = transpile(
             "scn S\nshort MyVar\nbegin GameMode\n"
             "set MyVar to 1\nset OtherQuestVar to 2\nend\n");
-        // declared locals live on S; unknown names go through the runtime
-        EXPECT_THAT(lua, HasSubstr("S.MyVar = 1"));
+        // declared locals live on S (lower case: ObScript names ignore case), short
+        // and long truncate; unknown names go through the runtime
+        EXPECT_THAT(lua, HasSubstr("S.myvar = obs.int(1)"));
         EXPECT_THAT(lua, HasSubstr("obs.setv(\"OtherQuestVar\", 2)"));
     }
 
     TEST_F(ObScriptTranspilerTest, DigitLedLocalGetsSafeIdentifier)
     {
         const std::string lua = transpile("scn S\nshort 2ndVar\nbegin GameMode\nset 2ndVar to 5\nend\n");
-        EXPECT_THAT(lua, HasSubstr("S._2ndVar = 5"));
+        EXPECT_THAT(lua, HasSubstr("S._2ndvar = obs.int(5)"));
     }
 
     TEST_F(ObScriptTranspilerTest, CrossScriptVariables)
@@ -104,7 +105,7 @@ namespace
             "scn S\nshort x\nbegin GameMode\n"
             "set MyQuest.var to x\nset x to MyQuest.var\nend\n");
         EXPECT_THAT(lua, HasSubstr("obs.msetv(\"MyQuest\", \"var\", S.x)"));
-        EXPECT_THAT(lua, HasSubstr("S.x = obs.mv(\"MyQuest\", \"var\")"));
+        EXPECT_THAT(lua, HasSubstr("S.x = obs.int(obs.mv(\"MyQuest\", \"var\"))"));
     }
 
     TEST_F(ObScriptTranspilerTest, CallsFreeAndMember)
@@ -127,6 +128,20 @@ namespace
         // &&/|| operands go through ObScript truthiness (nonzero)
         EXPECT_THAT(lua, HasSubstr("elseif obs.b((obs.b((S.x > 1)) and obs.b((S.x < 5)))) then"));
         EXPECT_THAT(lua, HasSubstr("else"));
+    }
+
+    TEST_F(ObScriptTranspilerTest, OrBindsTighterThanAnd)
+    {
+        // the original compiler makes `a || b && c` mean `(a || b) && c`
+        const std::string lua = transpile("scn S
+short a
+begin GameMode
+if a == 1 || a == 2 && a == 3
+endif
+end
+");
+        EXPECT_THAT(lua,
+            HasSubstr("obs.b((obs.b((obs.b((S.a == 1)) or obs.b((S.a == 2)))) and obs.b((S.a == 3))))"));
     }
 
     TEST_F(ObScriptTranspilerTest, MissingComparisonOperand)
@@ -152,13 +167,14 @@ namespace
         // ...while a spaced minus subtracts
         EXPECT_THAT(lua, HasSubstr("(obs.f(\"GetAV\", \"Luck\") - 1)"));
         // and so does one after something that takes no arguments
-        EXPECT_THAT(lua, HasSubstr("S.x = (S.x - 1)"));
+        EXPECT_THAT(lua, HasSubstr("S.x = obs.int((S.x - 1))"));
     }
 
     TEST_F(ObScriptTranspilerTest, ReturnAndStray)
     {
         const std::string lua = transpile("scn S\nbegin GameMode\nreturn\nend\nDisable\n");
-        EXPECT_THAT(lua, HasSubstr("do return end"));
+        // Return ends the whole script run, not just the block
+        EXPECT_THAT(lua, HasSubstr("do return obs.RETURN end"));
         // statements outside any block collect into a __stray handler
         EXPECT_THAT(lua, HasSubstr("obs.on('__stray', function()"));
         EXPECT_THAT(lua, HasSubstr("obs.f(\"Disable\")"));

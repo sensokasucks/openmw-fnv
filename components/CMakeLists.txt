@@ -266,6 +266,7 @@ add_component_dir (esm4
     loadnpc
     loadotft
     loadpack
+    loadperk
     loadpgrd
     loadpgre
     loadpwat
@@ -274,6 +275,7 @@ add_component_dir (esm4
     loadrace
     loadrefr
     loadregn
+    loadrepu
     loadroad
     loadsbsp
     loadscol

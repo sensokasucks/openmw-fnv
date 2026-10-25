@@ -356,6 +356,18 @@ namespace MWLua
                 sol::table o(lua, sol::create);
                 o["index"] = quest.mObjectives[i].mIndex;
                 o["text"] = quest.mObjectives[i].mText;
+                // compass targets: { ref = reference form id, ignoresLocks, conditions }
+                sol::table targets(lua, sol::create);
+                for (size_t j = 0; j < quest.mObjectives[i].mTargets.size(); ++j)
+                {
+                    const ESM4::QuestTarget& target = quest.mObjectives[i].mTargets[j];
+                    sol::table t(lua, sol::create);
+                    t["ref"] = formIdText(target.mTarget);
+                    t["ignoresLocks"] = (target.mFlags & ESM4::QuestTarget::Flag_IgnoresLocks) != 0;
+                    t["conditions"] = makeConditions(lua, target.mConditions);
+                    targets[LuaUtil::toLuaIndex(j)] = t;
+                }
+                o["targets"] = targets;
                 objectives[LuaUtil::toLuaIndex(i)] = o;
             }
             res["objectives"] = objectives;
@@ -520,6 +532,10 @@ namespace MWLua
             res["class"] = formIdText(traits->mClass);
             res["faction"] = formIdText(ESM::FormId::fromUint32(base->mFaction.faction));
             res["factionRank"] = base->mFaction.rank;
+            sol::table factions(lua, sol::create); // faction form id -> rank, every SNAM
+            for (const ESM4::ActorFaction& f : base->mFactions)
+                factions[formIdText(ESM::FormId::fromUint32(f.faction))] = f.rank;
+            res["factions"] = factions;
             res["isFemale"] = MWClass::ESM4Npc::isFemale(ptr);
             res["script"] = formIdText(base->mScriptId);
             res["voiceType"] = formIdText(base->mVoiceType);

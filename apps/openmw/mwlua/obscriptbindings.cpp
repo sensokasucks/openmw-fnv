@@ -16,19 +16,32 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadachr.hpp>
+#include <components/esm4/loadacti.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadbook.hpp>
+#include <components/esm4/loadcell.hpp>
 #include <components/esm4/loadclot.hpp>
+#include <components/esm4/loadcont.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddoor.hpp>
+#include <components/esm4/loadfact.hpp>
 #include <components/esm4/loadingr.hpp>
 #include <components/esm4/loadkeym.hpp>
+#include <components/esm4/loadligh.hpp>
+#include <components/esm4/loadlvlc.hpp>
+#include <components/esm4/loadlvln.hpp>
 #include <components/esm4/loadmesg.hpp>
 #include <components/esm4/loadmisc.hpp>
+#include <components/esm4/loadmstt.hpp>
 #include <components/esm4/loadnote.hpp>
+#include <components/esm4/loadnpc.hpp>
+#include <components/esm4/loadpack.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscpt.hpp>
+#include <components/esm4/loadsoun.hpp>
+#include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
@@ -137,6 +150,76 @@ namespace MWLua
             return resolve(index, editorId);
         };
 
+        // Base records that can be placed in the world (`PlaceAtMe <EditorId>`): items, actors, leveled
+        // actors and placeable objects.
+        api["resolveBaseEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+                auto addAll = [&](const auto& s) {
+                    for (size_t i = 0; i < s.getSize(); ++i)
+                    {
+                        const auto& record = *s.at(i);
+                        if (!record.mEditorId.empty())
+                            res.emplace(Misc::StringUtils::lowerCase(record.mEditorId), ESM::RefId(record.mId));
+                    }
+                };
+                addAll(store.get<ESM4::Ammunition>());
+                addAll(store.get<ESM4::Armor>());
+                addAll(store.get<ESM4::Book>());
+                addAll(store.get<ESM4::Ingredient>());
+                addAll(store.get<ESM4::Key>());
+                addAll(store.get<ESM4::MiscItem>());
+                addAll(store.get<ESM4::Potion>());
+                addAll(store.get<ESM4::Weapon>());
+                addAll(store.get<ESM4::Npc>());
+                addAll(store.get<ESM4::Creature>());
+                addAll(store.get<ESM4::LevelledNpc>());
+                addAll(store.get<ESM4::LevelledCreature>());
+                addAll(store.get<ESM4::Activator>());
+                addAll(store.get<ESM4::Container>());
+                addAll(store.get<ESM4::Light>());
+                addAll(store.get<ESM4::Static>());
+                addAll(store.get<ESM4::MovableStatic>());
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // Factions, for `AddToFaction <EditorId> <rank>` and friends.
+        api["resolveFactionEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::Faction>& factions
+                    = MWBase::Environment::get().getESMStore()->get<ESM4::Faction>();
+                for (size_t i = 0; i < factions.getSize(); ++i)
+                {
+                    const ESM4::Faction& faction = *factions.at(i);
+                    if (!faction.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(faction.mEditorId), ESM::RefId(faction.mId));
+                }
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // AI packages, for `AddScriptPackage <EditorId>`.
+        api["resolvePackageEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::AIPackage>& packages
+                    = MWBase::Environment::get().getESMStore()->get<ESM4::AIPackage>();
+                for (size_t i = 0; i < packages.getSize(); ++i)
+                {
+                    const ESM4::AIPackage& package = *packages.at(i);
+                    if (!package.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(package.mEditorId), ESM::RefId(package.mId));
+                }
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
         // Persistent placed references (e.g. `GSSchoolTerminal01Ref.Disable`).
         // Notes, for `AddNote <EditorId>`.
         api["resolveNoteEditorId"] = [resolve](std::string_view editorId) {
@@ -173,6 +256,60 @@ namespace MWLua
                 return res;
             }();
             return resolve(index, editorId);
+        };
+
+        // Sound records (SOUN), e.g. the HUD's `UIQuestNew`.
+        api["resolveSoundEditorId"] = [resolve](std::string_view editorId) {
+            static const EditorIdIndex index = [] {
+                EditorIdIndex res;
+                const MWWorld::Store<ESM4::Sound>& sounds = MWBase::Environment::get().getESMStore()->get<ESM4::Sound>();
+                for (size_t i = 0; i < sounds.getSize(); ++i)
+                {
+                    const ESM4::Sound& sound = *sounds.at(i);
+                    if (!sound.mEditorId.empty())
+                        res.emplace(Misc::StringUtils::lowerCase(sound.mEditorId), ESM::RefId(sound.mId));
+                }
+                return res;
+            }();
+            return resolve(index, editorId);
+        };
+
+        // Where a placed reference (REFR, ACHR, ACRE) starts, from its record, so that scripts can find it while its
+        // cell isn't loaded: { position, cell = cell id, isExterior, worldSpaceId }, or nil.
+        api["getReferenceLocation"] = [](std::string_view formId, sol::this_state s) -> sol::object {
+            const ESM::RefId refId = ESM::RefId::deserializeText(formId);
+            const ESM::FormId* formIdPtr = refId.getIf<ESM::FormId>();
+            if (formIdPtr == nullptr)
+                return sol::nil;
+            const ESM::FormId id = *formIdPtr;
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const ESM::Position* pos = nullptr;
+            ESM::RefId parent;
+            if (const ESM4::Reference* ref = store.get<ESM4::Reference>().search(id))
+            {
+                pos = &ref->mPos;
+                parent = ref->mParent;
+            }
+            else if (const ESM4::ActorCharacter* achr = store.get<ESM4::ActorCharacter>().search(id))
+            {
+                pos = &achr->mPos;
+                parent = achr->mParent;
+            }
+            else if (const ESM4::ActorCreature* acre = store.get<ESM4::ActorCreature>().search(id))
+            {
+                pos = &acre->mPos;
+                parent = acre->mParent;
+            }
+            const ESM4::Cell* cell = pos ? store.get<ESM4::Cell>().search(parent) : nullptr;
+            if (cell == nullptr)
+                return sol::nil;
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            res["position"] = pos->asVec3();
+            res["cell"] = cell->mId.serializeText();
+            res["isExterior"] = cell->isExterior();
+            res["worldSpaceId"] = cell->isExterior() ? cell->mParent.serializeText() : std::string();
+            return res;
         };
 
         // Message boxes (MESG) for `ShowMessage <EditorId> [args...]`.
