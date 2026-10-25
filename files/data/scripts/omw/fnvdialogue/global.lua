@@ -864,10 +864,22 @@ local function isSpeaking(obj)
 end
 
 -- ------------------------------------------------ menus the engine doesn't have yet
--- Character creation menus are not built yet. Opening one runs the quest
--- scripts' MenuMode blocks once, as if the player had closed it right away.
+-- Character creation menus (race, name, SPECIAL, tag skills, traits) are
+-- player scripts that register here with the global event
+-- `FNVRegisterMenu { name = <command> }` (or I.FNVDialogue.registerMenu). Opening
+-- one sends it `FNVOpenMenu { name, menuType }`; when it closes it sends the
+-- global event `FNVMenuClosed { menuType }`, and the quest scripts' MenuMode
+-- blocks run once for it. A menu nobody registered closes at once.
+local registeredMenus = {} -- lower-case command name -> true
 local pendingMenus = {}
 local function openStandInMenu(name, menuType)
+    if registeredMenus[name:lower()] then
+        local player = world.players[1]
+        if player then
+            player:sendEvent('FNVOpenMenu', { name = name, menuType = menuType })
+            return
+        end
+    end
     log('(not implemented yet: ' .. name .. ', closed at once)')
     pendingMenus[#pendingMenus + 1] = menuType
 end
@@ -1527,6 +1539,12 @@ return {
             local quest = getQuest(q)
             if quest then setStage(quest, stage) end
         end,
+        --- Declares that a player script shows the menu a command opens
+        -- (`ShowRaceMenu`, `GetPlayerName`, `ShowSPECIALMenu`, `SetTagSkills`,
+        -- `ShowTraitMenu`, ...); see openStandInMenu.
+        registerMenu = function(commandName)
+            registeredMenus[commandName:lower()] = true
+        end,
         --- A quest variable (Quest.var) for debugging.
         getQuestVar = function(q, name)
             local quest = getQuest(q)
@@ -1557,6 +1575,12 @@ return {
             session = nil
         end,
         ObScriptQuestCommand = runForwardedCommand,
+        FNVRegisterMenu = function(data)
+            registeredMenus[tostring(data.name):lower()] = true
+        end,
+        FNVMenuClosed = function(data)
+            pendingMenus[#pendingMenus + 1] = data.menuType
+        end,
         ObScriptLocals = function(data)
             if data.object == nil or not data.object:isValid() then return end
             local key = dlg.getReferenceId(data.object)
