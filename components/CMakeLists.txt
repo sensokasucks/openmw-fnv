@@ -268,6 +268,7 @@ add_component_dir (esm4
     loadpgre
     loadpwat
     loadqust
+    loadvtyp
     loadrace
     loadrefr
     loadregn

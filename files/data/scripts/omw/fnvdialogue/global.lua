@@ -821,17 +821,76 @@ local function publishAllQuests()
     flushQuests()
 end
 
--- ------------------------------------------------ lines spoken outside the dialogue window
+-- ------------------------------------------------ spoken lines
+-- An INFO is said response by response. A response with a voice file
+-- (dlg.getVoiceFile) plays as 3D speech on the speaker and lasts as long as
+-- the sound; without one it lasts as long as its subtitle (inferred:
+-- fNoticeTextTimePerCharacter 0.06 s per character, at least 2 s, plus
+-- fSubtitleSpeechDelay 0.15 s).
+--
 -- SayTo and friends: the speaker says the topic's first eligible line to the
--- target. The INFO's begin script runs when the line starts and its end
--- script when it finishes. Voice files are not played yet, so a line lasts as
--- long as its subtitle (inferred: fNoticeTextTimePerCharacter 0.06 s per
--- character, at least 2 s, plus fSubtitleSpeechDelay 0.15 s).
+-- target, with subtitles. The INFO's begin script runs when the line starts
+-- and its end script when it finishes. In the dialogue window the same speech
+-- plays without subtitles, and the window runs the end script itself.
 
-local speaking = {} -- { speaker, info, label, timeLeft }
+local speaking = {} -- { speaker, info, responses, index, timeLeft, voiced, subtitles, onDone }
+
+local VOICE_GRACE = 0.3 -- seconds before a started voice counts as finished when the sound isn't reported playing
 
 local function lineDuration(text)
     return math.max(2.0, #text * 0.06) + 0.15
+end
+
+local function speakerName(speaker)
+    local actor = dlg.getActor(speaker)
+    if actor == nil then return '' end
+    return actor.name ~= '' and actor.name or actor.editorId
+end
+
+-- Starts the next response of a line; false when there is none left.
+local function nextResponse(line)
+    line.index = line.index + 1
+    local response = line.responses[line.index]
+    if response == nil then return false end
+    local text = response.text or ''
+    local file = line.speaker:isValid() and dlg.getVoiceFile(line.info.id, line.speaker, response.number)
+    line.voiced = false
+    line.timeLeft = lineDuration(text)
+    line.elapsed = 0
+    if file then
+        local ok, err = pcall(core.sound.say, file, line.speaker)
+        if ok then
+            line.voiced = true
+        else
+            tlog('voice ' .. file .. ' did not play: ' .. tostring(err))
+        end
+    end
+    if line.subtitles and text ~= '' then
+        world.players[1]:sendEvent('FNVSubtitle', { speaker = speakerName(line.speaker), text = text })
+    end
+    return true
+end
+
+local function stopSpeech(line)
+    if line.voiced and line.speaker:isValid() then
+        pcall(core.sound.stopSay, line.speaker)
+    end
+end
+
+local function startSpeech(speaker, info, subtitles, onDone)
+    for _, line in ipairs(speaking) do
+        if line.speaker == speaker then line.interrupted = true end
+    end
+    local responses = {}
+    for _, r in ipairs(info.responses) do responses[#responses + 1] = r end
+    table.sort(responses, function(a, b) return (a.number or 0) < (b.number or 0) end)
+    local line = { speaker = speaker, info = info, responses = responses, index = 0,
+        subtitles = subtitles, onDone = onDone }
+    speaking[#speaking + 1] = line
+    if not nextResponse(line) then
+        line.timeLeft = 0
+    end
+    return line
 end
 
 local function sayLine(speaker, target, topicIdOrEditorId)
@@ -852,34 +911,44 @@ local function sayLine(speaker, target, topicIdOrEditorId)
     end
     tlog(('SayTo: %s says %s INFO %s'):format(actor.editorId, topic.editorId, info.id))
     markSaid(info)
-    for _, line in ipairs(speaking) do
-        if line.speaker == speaker then line.interrupted = true end
-    end
-    local text = infoText(info)
-    local line = { speaker = speaker, info = info, topic = topic.editorId, label = 'INFO ' .. info.id,
-        timeLeft = lineDuration(text) }
-    speaking[#speaking + 1] = line
-    runScript(info.scriptBegin, line.label .. ' begin', speaker)
+    local label = 'INFO ' .. info.id
+    local endDone = false
+    runScript(info.scriptBegin, label .. ' begin', speaker)
     if hasFlag(info.flags, INFO_RUN_IMMEDIATELY) then
-        runScript(info.scriptEnd, line.label .. ' end', speaker)
-        line.endDone = true
+        runScript(info.scriptEnd, label .. ' end', speaker)
+        endDone = true
     end
-    if text ~= '' then
-        world.players[1]:sendEvent('FNVSubtitle', {
-            speaker = actor.name ~= '' and actor.name or actor.editorId,
-            text = text,
-            duration = line.timeLeft,
-        })
-    end
+    startSpeech(speaker, info, true, function()
+        if not endDone then
+            runScript(info.scriptEnd, label .. ' end', speaker)
+        end
+        -- `Begin SayToDone Topic` on the speaker's own script
+        if speaker:isValid() then
+            speaker:sendEvent('ObScriptEvent', { event = 'SayToDone', ref = topic.editorId })
+        end
+    end)
     return true
+end
+
+local function lineOver(line, dt)
+    if line.interrupted then return true end
+    line.elapsed = line.elapsed + dt
+    if line.voiced then
+        if line.elapsed < VOICE_GRACE then return false end
+        local ok, active = pcall(core.sound.isSayActive, line.speaker)
+        if ok and active then return false end
+    else
+        line.timeLeft = line.timeLeft - dt
+        if line.timeLeft > 0 then return false end
+    end
+    return not nextResponse(line)
 end
 
 local function tickSpeaking(dt)
     local finished = {}
     local still = {}
     for _, line in ipairs(speaking) do
-        line.timeLeft = line.timeLeft - dt
-        if line.timeLeft <= 0 or line.interrupted then
+        if lineOver(line, dt) then
             finished[#finished + 1] = line
         else
             still[#still + 1] = line
@@ -887,13 +956,8 @@ local function tickSpeaking(dt)
     end
     speaking = still
     for _, line in ipairs(finished) do
-        if not line.endDone then
-            runScript(line.info.scriptEnd, line.label .. ' end', line.speaker)
-        end
-        -- `Begin SayToDone Topic` on the speaker's own script
-        if line.speaker:isValid() then
-            line.speaker:sendEvent('ObScriptEvent', { event = 'SayToDone', ref = line.topic })
-        end
+        if line.interrupted then stopSpeech(line) end
+        if line.onDone then line.onDone() end
     end
 end
 
@@ -902,6 +966,19 @@ local function isSpeaking(obj)
         if line.speaker == obj then return true end
     end
     return false
+end
+
+-- Ends a speaker's speech at once (the player left the dialogue window or moved on).
+local function stopSpeaking(obj)
+    local still = {}
+    for _, line in ipairs(speaking) do
+        if line.speaker == obj then
+            stopSpeech(line)
+        else
+            still[#still + 1] = line
+        end
+    end
+    speaking = still
 end
 
 -- ------------------------------------------------ menus the engine doesn't have yet
@@ -1444,11 +1521,12 @@ end
 -- In the dialogue window an INFO's end script runs when its line is over,
 -- which (without voice) is when the player moves on: picks an answer or
 -- leaves. A topic the end script starts (StartConversation) is said next.
-local function finishLine()
+local function finishLine(keepSpeech)
     local s = session
     local info = s and s.saying
     if info == nil then return end
     s.saying = nil
+    if not keepSpeech then stopSpeaking(s.speaker) end
     runScript(info.scriptEnd, 'INFO ' .. info.id .. ' end', s.speaker)
 end
 
@@ -1460,8 +1538,10 @@ local function say(info, topic)
     runScript(info.scriptBegin, 'INFO ' .. info.id .. ' begin', s.speaker)
     if session == nil then return end -- a script ended the conversation
     s.saying = info
+    stopSpeaking(s.speaker)
+    startSpeech(s.speaker, info, false, nil)
     if hasFlag(info.flags, INFO_RUN_IMMEDIATELY) then
-        finishLine()
+        finishLine(true)
         if session == nil then return end
     end
     s.goodbye = hasFlag(info.flags, INFO_GOODBYE)

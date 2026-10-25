@@ -1,6 +1,7 @@
 #include "obscriptdialoguebindings.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -19,11 +20,16 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadqust.hpp>
 #include <components/esm4/loadscpt.hpp>
+#include <components/esm4/loadvtyp.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
 #include <components/misc/strings/lower.hpp>
+#include <components/resource/resourcesystem.hpp>
+#include <components/vfs/manager.hpp>
+#include <components/vfs/pathutil.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -476,6 +482,41 @@ namespace MWLua
             if (ptr.getType() == ESM::REC_CREA4)
                 return formIdText(ptr.get<ESM4::Creature>()->mBase->mVoiceType);
             return {};
+        };
+
+        // Voice file of one response of an INFO said by this NPC or creature, nil when it has none:
+        // sound\voice\<plugin>\<voice type>\<quest>_<topic>_<INFO id>_<response>.ogg, lower case, with the
+        // quest editor id cut to 10 characters, the topic's to 20 and the INFO id without its load-order byte
+        // (as the files in Fallout - Voices1.bsa are named).
+        api["getVoiceFile"] = [](std::string_view infoId, const Object& speaker,
+                                  int response) -> sol::optional<std::string> {
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const ESM4::DialogInfo* info = store.get<ESM4::DialogInfo>().search(ESM::RefId(parseFormId(infoId)));
+            if (info == nullptr || !info->mId.hasContentFile())
+                return sol::nullopt;
+            ESM::FormId voiceTypeId;
+            const MWWorld::Ptr& ptr = speaker.ptr();
+            if (ptr.getType() == ESM::REC_NPC_4)
+                voiceTypeId = ptr.get<ESM4::Npc>()->mBase->mVoiceType;
+            else if (ptr.getType() == ESM::REC_CREA4)
+                voiceTypeId = ptr.get<ESM4::Creature>()->mBase->mVoiceType;
+            const ESM4::VoiceType* voiceType = store.get<ESM4::VoiceType>().search(ESM::RefId(voiceTypeId));
+            const ESM4::Quest* quest = store.get<ESM4::Quest>().search(ESM::RefId(info->mQuest));
+            const ESM4::Dialogue* topic = store.get<ESM4::Dialogue>().search(ESM::RefId(info->mTopic));
+            if (voiceType == nullptr || quest == nullptr || topic == nullptr)
+                return sol::nullopt;
+            const std::vector<std::string>& files = MWBase::Environment::get().getWorld()->getContentFiles();
+            if (static_cast<size_t>(info->mId.mContentFile) >= files.size())
+                return sol::nullopt;
+            char id[16];
+            std::snprintf(id, sizeof(id), "%08x", info->mId.mIndex & 0xFFFFFF);
+            std::string path = "sound\\voice\\" + files[info->mId.mContentFile] + "\\" + voiceType->mEditorId + "\\"
+                + quest->mEditorId.substr(0, 10) + "_" + topic->mEditorId.substr(0, 20) + "_" + id + "_"
+                + std::to_string(response) + ".ogg";
+            path = Misc::StringUtils::lowerCase(path);
+            if (!MWBase::Environment::get().getResourceSystem()->getVFS()->exists(VFS::Path::Normalized(path)))
+                return sol::nullopt;
+            return path;
         };
 
         // Script (SCPT) by form id or editor id: { id, editorId, type, enabled, source } or nil.

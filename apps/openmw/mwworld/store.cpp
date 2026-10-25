@@ -1298,3 +1298,4 @@ template class MWWorld::TypedDynamicStore<ESM4::LightingTemplate>;
 template class MWWorld::TypedDynamicStore<ESM4::Music>;
 template class MWWorld::TypedDynamicStore<ESM4::PlacedGrenade>;
 template class MWWorld::TypedDynamicStore<ESM4::PlacedMissile>;
+template class MWWorld::TypedDynamicStore<ESM4::VoiceType>;

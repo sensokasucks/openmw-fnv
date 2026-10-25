@@ -90,6 +90,7 @@
 #include <components/esm4/loadpack.hpp>
 #include <components/esm4/loadpgre.hpp>
 #include <components/esm4/loadqust.hpp>
+#include <components/esm4/loadvtyp.hpp>
 #include <components/esm4/loadrace.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscol.hpp>
