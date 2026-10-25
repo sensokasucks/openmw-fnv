@@ -68,6 +68,9 @@ namespace NifBullet
         std::unique_ptr<btCompoundShape, Resource::DeleteCollisionShape> mAvoidCompoundShape;
 
         osg::ref_ptr<Resource::BulletShape> mShape;
+
+        // Nodes moved by a NiMultiTargetTransformController higher up the tree (Bethesda embedded animations)
+        std::set<const Nif::NiAVObject*> mAnimatedTargets;
     };
 
 }
