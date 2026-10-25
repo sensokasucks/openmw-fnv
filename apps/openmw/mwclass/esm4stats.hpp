@@ -63,6 +63,7 @@ namespace MWClass::ESM4Stats
         Speech = 43,
         Survival = 44,
         Unarmed = 45,
+        UnarmedDamage = 56,
         Assistance = 57,
         IgnoreCrippledLimbs = 72,
         DamageThreshold = 76,

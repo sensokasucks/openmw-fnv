@@ -566,8 +566,8 @@ namespace MWMechanics::ESM4Combat
     {
         if (attacker.getType() == ESM::REC_CREA4)
             return Stats::getCurrent(attacker, Stats::MeleeDamage);
-        // FNV unarmed: fUnarmedDamageMult with the Unarmed skill, roughly 1-10 for people
-        return 1.f + Stats::getCurrent(attacker, Stats::Unarmed) / 10.f;
+        // fAVDUnarmedDamageBase + fAVDUnarmedDamageMult x Unarmed
+        return Stats::getCurrent(attacker, Stats::UnarmedDamage);
     }
 
     bool attack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, float reach)
