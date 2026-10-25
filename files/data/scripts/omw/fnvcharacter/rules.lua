@@ -93,6 +93,21 @@ function M.tier(points, value, gmst)
     return 0
 end
 
+-- GetReputationThreshold (0x616a90): the value for fame tier f and infamy tier i
+-- on axis 0 (mixed), 1 (fame) or 2 (infamy); 0 for pairs not listed, nil for another axis.
+local thresholds = {
+    [0] = { ['1,1'] = 3, ['2,2'] = 4, ['3,3'] = 5, ['2,3'] = 2, ['3,2'] = 2 },
+    [1] = { ['1,0'] = 4, ['2,0'] = 5, ['3,0'] = 6, ['2,1'] = 2, ['3,1'] = 3 },
+    [2] = { ['0,1'] = 4, ['0,2'] = 5, ['0,3'] = 6, ['1,2'] = 2, ['1,3'] = 3 },
+}
+
+function M.threshold(axis, fameTier, infamyTier)
+    local map = thresholds[tonumber(axis)]
+    if map == nil then return nil end
+    if fameTier == 0 and infamyTier == 0 then return 1 end
+    return map[fameTier .. ',' .. infamyTier] or 0
+end
+
 -- The named standing for fame tier f and infamy tier i (the 16 states of the Pip-Boy).
 local standings = {
     [0] = { [0] = 'Neutral', 'Shunned', 'Hated', 'Vilified' },

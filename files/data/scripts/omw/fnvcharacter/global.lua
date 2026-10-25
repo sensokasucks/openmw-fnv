@@ -293,7 +293,7 @@ local function repEntry(rep)
 end
 
 local function standing(rep)
-    return rules.standing(character.threshold(state, rep, 1), character.threshold(state, rep, 0))
+    return rules.standing(character.tier(state, rep, 1), character.tier(state, rep, 0))
 end
 
 local function changeReputation(repKey, which, fn)
@@ -367,9 +367,13 @@ return {
         setReputation = commands.setReputation,
         --- Fame (which = 1) or infamy (which = 0) points with a reputation (editor id or form id).
         getReputation = function(rep, which) return character.points(state, character.reputation(rep), which) end,
-        --- Tier 0..3 (GetReputationThreshold).
-        getReputationThreshold = function(rep, which)
-            return character.threshold(state, character.reputation(rep), which)
+        --- Tier 0..3 of fame (which = 1) or infamy (which = 0).
+        getReputationTier = function(rep, which)
+            return character.tier(state, character.reputation(rep), which)
+        end,
+        --- GetReputationThreshold: axis 0 mixed, 1 fame, 2 infamy.
+        getReputationThreshold = function(rep, axis)
+            return character.threshold(state, character.reputation(rep), axis)
         end,
         --- Named standing ('Neutral', 'Liked', 'Smiling Troublemaker', ...).
         getStanding = function(rep)

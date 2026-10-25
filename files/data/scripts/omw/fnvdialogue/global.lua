@@ -417,7 +417,7 @@ end
 functions[574] = function(cond) -- GetReputationPct
     return character.percent(characterState(), character.reputation(cond.param1Form), cond.param2)
 end
-functions[575] = function(cond) -- GetReputationThreshold: tier 0..3
+functions[575] = function(cond) -- GetReputationThreshold rep axis (0 mixed, 1 fame, 2 infamy)
     return character.threshold(characterState(), character.reputation(cond.param1Form), cond.param2)
 end
 functions[449] = function(cond, obj) -- HasPerk (only the player has perks)

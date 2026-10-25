@@ -66,9 +66,15 @@ function M.points(data, rep, which)
     return entry and entry[kind(which)] or 0
 end
 
-function M.threshold(data, rep, which)
+-- Tier 0..3 of the fame (which = 1) or infamy (which = 0) points.
+function M.tier(data, rep, which)
     if rep == nil then return 0 end
     return rules.tier(M.points(data, rep, which), rep.value, gmst)
+end
+
+-- GetReputationThreshold rep axis (0 mixed, 1 fame, 2 infamy); nil for another axis.
+function M.threshold(data, rep, axis)
+    return rules.threshold(math.floor(tonumber(axis) or -1), M.tier(data, rep, 1), M.tier(data, rep, 0))
 end
 
 function M.percent(data, rep, which)
@@ -181,7 +187,7 @@ function M.install(obs, env)
         return M.percent(env.data(), repArg(rep, 'GetReputationPct'), which)
     end)
     obs.bind('GetReputationThreshold', function(rep, which)
-        return M.threshold(env.data(), repArg(rep, 'GetReputationThreshold'), which)
+        return M.threshold(env.data(), repArg(rep, 'GetReputationThreshold'), which) or 0
     end)
 
     -- Perks are only tracked for the player: `player.AddPerk Perk`, `HasPerk Perk`.
