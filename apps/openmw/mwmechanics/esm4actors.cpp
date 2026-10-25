@@ -33,7 +33,7 @@ namespace MWMechanics
         // Used when a locomotion sequence has no root motion to measure
         constexpr float sDefaultWalkSpeed = 90.f;
         constexpr float sDefaultRunSpeed = 300.f;
-        constexpr float sTurnSpeed = osg::PI * 1.5f; // radians per second
+        const float sTurnSpeed = static_cast<float>(osg::PI) * 1.5f; // radians per second (osg::PI is not constexpr everywhere)
 
         std::optional<ESM::FormId> getCellFormId(const MWWorld::Ptr& ptr)
         {
