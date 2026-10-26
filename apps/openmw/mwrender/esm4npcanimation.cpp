@@ -737,13 +737,16 @@ namespace MWRender
         public:
             // from: the bone's pose when the sequence was replaced. rest: its pose in the skeleton, which a bone
             // the new sequence has no track (or no translation or rotation keys) for goes back to.
+            // started: set once any bone of the blend has been posed, i.e. the switch has been drawn
             BlendFromPose(const osg::Vec3f& fromTranslation, const osg::Quat& fromRotation,
-                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration)
+                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration,
+                std::shared_ptr<bool> started)
                 : mFromTranslation(fromTranslation)
                 , mFromRotation(fromRotation)
                 , mRestTranslation(restTranslation)
                 , mRestRotation(restRotation)
                 , mDuration(duration)
+                , mStarted(std::move(started))
             {
             }
 
@@ -752,6 +755,7 @@ namespace MWRender
                 const double now = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
                 if (!mStart)
                     mStart = now;
+                *mStarted = true;
                 // What the sequence posed the bone in this frame; where it didn't write over the blend of the
                 // frame before, the bone is headed for its rest pose
                 osg::Vec3f translation = node->getMatrix().getTrans();
@@ -782,6 +786,7 @@ namespace MWRender
             osg::Vec3f mRestTranslation;
             osg::Quat mRestRotation;
             float mDuration;
+            std::shared_ptr<bool> mStarted;
             std::optional<double> mStart;
             bool mWritten = false;
             bool mDone = false;
@@ -856,6 +861,9 @@ namespace MWRender
                     mStart = now;
                 const float elapsed
                     = mSkipToEnd ? mDuration : std::min(mDuration, static_cast<float>(now - *mStart));
+                // just short of the end, which a loop-type sequence's own wrap maps back onto its first key
+                if (elapsed >= mDuration && mDuration > 0.01f)
+                    return mReverse ? 0.001f : mDuration - 0.001f;
                 return mReverse ? mDuration - elapsed : elapsed;
             }
 
@@ -872,6 +880,9 @@ namespace MWRender
     {
         // Sequence time counted from the frame the sequence started on, so one-shot sequences (furniture entries,
         // special idles) begin at their first key; looping ones cycle on from there.
+        // A one-shot sequence (mEnd > 0) holds its last frame from there: the AI that played it moves on by its own
+        // clock, a frame or so later, and a sequence whose cycle type is loop would otherwise show its first pose
+        // again for that frame before the next sequence takes over.
         class RelativeTimeSource : public SceneUtil::ControllerSource
         {
         public:
@@ -880,8 +891,11 @@ namespace MWRender
                 const double now = nv->getFrameStamp()->getSimulationTime();
                 if (!mStart)
                     mStart = now;
-                return static_cast<float>(now - *mStart);
+                const float time = static_cast<float>(now - *mStart);
+                return mEnd > 0.f ? std::min(time, mEnd) : time;
             }
+
+            float mEnd = 0.f;
 
         private:
             std::optional<double> mStart;
@@ -908,7 +922,7 @@ namespace MWRender
             playLocomotion();
     }
 
-    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion)
+    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion, bool once)
     {
         if (mDead)
             return 0.f;
@@ -920,8 +934,13 @@ namespace MWRender
         }
         // Replaces any attack in progress; the caller resumes the locomotion when it is done
         mInAction = false;
-        return playKeyframesFONV(
-            path, std::make_shared<RelativeTimeSource>(), !keepRootMotion, sDefaultBlendTime, keepRootMotion);
+        const auto source = std::make_shared<RelativeTimeSource>();
+        const float length
+            = playKeyframesFONV(path, source, !keepRootMotion, sDefaultBlendTime, keepRootMotion);
+        // (just short of the end: a loop's own wrap maps the end itself back onto the first key)
+        if (once && length > 0.01f)
+            source->mEnd = length - 0.001f;
+        return length;
     }
 
     void ESM4NpcAnimation::resumeLocomotion()
@@ -1119,6 +1138,7 @@ namespace MWRender
         // carries the actor with them (a furniture entry or exit): the actor is moved onto the seat as the next
         // sequence starts, and the roots must jump with it.
         std::map<NifOsg::MatrixTransform*, RestPose> blendFrom;
+        std::size_t reusedPoses = 0;
         if (blendTime > 0.f)
         {
             for (auto& [node, callback] : mLoopCallbacks)
@@ -1129,6 +1149,17 @@ namespace MWRender
                 const std::string& name = transform->getName();
                 if ((keepsRootMotion || mKeepsRootMotion) && (name == "Bip01" || name == "Bip01 NonAccum"))
                     continue;
+                // A sequence replaced before it was ever shown (two switches in one frame: an idle, then a walk)
+                // left its bones at rest, not in the pose on screen; blend from what the screen still shows.
+                if (mBlendStarted != nullptr && !*mBlendStarted)
+                {
+                    if (auto shown = mBlendFrom.find(transform); shown != mBlendFrom.end())
+                    {
+                        blendFrom[transform] = shown->second;
+                        ++reusedPoses;
+                        continue;
+                    }
+                }
                 blendFrom[transform] = { transform->getMatrix().getTrans(), getNifRotation(*transform) };
             }
         }
@@ -1223,21 +1254,27 @@ namespace MWRender
         mKeepsRootMotion = keepsRootMotion;
 
         // Last on each bone, after the new tracks (and the root's motion stripping) have posed it
+        auto started = std::make_shared<bool>(false);
         for (const auto& [transform, from] : blendFrom)
         {
             const auto rest = mRestPoses.find(transform);
             if (rest == mRestPoses.end())
                 continue;
-            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(
-                from.mTranslation, from.mRotation, rest->second.mTranslation, rest->second.mRotation, blendTime);
+            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(from.mTranslation, from.mRotation,
+                rest->second.mTranslation, rest->second.mRotation, blendTime, started);
             transform->addUpdateCallback(blend);
             mLoopCallbacks.emplace_back(transform, blend);
         }
+        mBlendStarted = blendFrom.empty() ? nullptr : started;
+        mBlendFrom.clear();
+        for (const auto& [transform, from] : blendFrom)
+            mBlendFrom[transform] = from;
         attachLookCallback();
 
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
                             << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
-                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed;
+                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed
+                            << (reusedPoses > 0 ? ", replacing one not yet shown" : "");
         return duration;
     }
 

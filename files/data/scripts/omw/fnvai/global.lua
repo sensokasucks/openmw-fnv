@@ -270,6 +270,29 @@ end
 
 -- ---------------------------------------------------------------- moving between cells
 
+-- Head tracking outside conversations: an NPC near the player turns its head to
+-- them (FalloutNV.exe: fAIMaxHeadTrackDistance 400; the choice is looked at again
+-- every fUpdateDelaySecondsMin..Max:HeadTracking, 1 to 1.5 s). The head turns no
+-- further than a neck allows and gives up on someone behind (ESM4NpcAnimation).
+local function gmstFloat(name, default)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    return type(value) == 'number' and value or default
+end
+
+local function headTrack(npc, s, now)
+    if not ai.lookAt or now < (s.nextLook or 0) then return end
+    s.nextLook = now + 1 + math.random() * 0.5
+    local p = player()
+    local want = false
+    if p ~= nil and (sameCell(npc.cell, p.cell) or (npc.cell.isExterior and p.cell.isExterior)) then
+        want = (p.position - npc.position):length() <= gmstFloat('fAIMaxHeadTrackDistance', 400)
+    end
+    if want ~= (s.looking or false) then
+        s.looking = want
+        ai.lookAt(npc, want and p or nil)
+    end
+end
+
 local function playerSees(npc)
     local p = player()
     if p == nil then return false end
@@ -1033,7 +1056,14 @@ return {
                         s.nextEvaluation = simTime + EVALUATE_EVERY
                         evaluate(npc, s)
                     end
-                    if not talking then tick(npc, s) end
+                    if not talking then
+                        tick(npc, s)
+                        headTrack(npc, s, simTime)
+                    else
+                        -- the conversation has the head; it ends looking at no one
+                        s.looking = nil
+                        s.nextLook = simTime + 1
+                    end
                     publish(id, npc, s)
                 end
             end
