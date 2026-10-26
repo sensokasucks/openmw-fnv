@@ -48,7 +48,8 @@ local function close()
 end
 
 local function text(str, color, size)
-    return { type = ui.TYPE.Text, props = { text = str, textSize = size or 17, textColor = color or normalColor, autoSize = true } }
+    return { type = ui.TYPE.Text, props = { text = str, textSize = size or 17, textColor = color or normalColor, autoSize = true,
+        font = 'FalloutFont2' } }
 end
 
 local function gap(height)

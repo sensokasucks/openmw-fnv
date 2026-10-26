@@ -1,5 +1,7 @@
 #include "textedit.hpp"
 
+#include <MyGUI_ResourceManager.h>
+
 #include "alignment.hpp"
 
 namespace LuaUi
@@ -22,6 +24,12 @@ namespace LuaUi
 
     void LuaTextEdit::updateProperties()
     {
+        // as LuaText's "font": a font loaded by Gui::FontLoader, before the size, which a new font resets
+        std::string font = propertyValue("font", std::string());
+        if (font.empty() || !MyGUI::ResourceManager::getInstance().isExist(font))
+            font = "DefaultFont";
+        if (mEditBox->getFontName() != font)
+            mEditBox->setFontName(font);
         mEditBox->setFontHeight(propertyValue("textSize", 10));
         mEditBox->setTextColour(propertyValue("textColor", MyGUI::Colour(0, 0, 0, 1)));
         mEditBox->setEditWordWrap(propertyValue("wordWrap", false));
@@ -81,7 +89,7 @@ namespace LuaUi
     {
         static std::vector<std::string_view> usedProps = std::invoke([this] {
             std::vector<std::string_view> props = { "text", "textSize", "textColor", "wordWrap", "textAlignH",
-                "textAlignV", "multiline", "readOnly", "autoSize" };
+                "textAlignV", "multiline", "readOnly", "autoSize", "font" };
             auto baseProps = WidgetExtension::allUsedProperties();
             props.insert(props.end(), baseProps.begin(), baseProps.end());
             return props;

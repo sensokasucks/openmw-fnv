@@ -15,6 +15,7 @@ namespace MWState
     {
         bool mQuitRequest;
         bool mAskLoadRecent;
+        bool mFalloutDeathShown = false;
         bool mNewGameRequest = false;
         std::optional<std::pair<const Character*, std::filesystem::path>> mLoadRequest;
         State mState;

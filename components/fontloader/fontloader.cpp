@@ -266,6 +266,43 @@ namespace Gui
         if (!MyGUI::ResourceManager::getInstance().isExist(scrollFontId.mValue)
             && !Misc::StringUtils::ciEqual(scrollFont, "DemonicLetters"))
             loadFont(scrollFontId, "DemonicLetters");
+
+        loadFalloutFonts();
+    }
+
+    void FontLoader::loadFalloutFonts()
+    {
+        // FO3/FNV's fonts, where their archives are loaded: Fallout_default.ini's sFontFile_1 .. sFontFile_8, as
+        // "FalloutFont1" .. "FalloutFont8", the numbers the game's menus pick fonts by (1: the glowing Monofonto
+        // of most menus, 2: plain Monofonto, 3: a smaller glowing one, 5: Fixedsys of the terminals, 6: the
+        // dialogue's, 8: Futura caps of titles). Their format is Morrowind's .fnt and .tex.
+        constexpr VFS::Path::NormalizedView dir("textures/fonts");
+        constexpr std::array<std::pair<std::string_view, std::string_view>, 8> fonts{ {
+            { "FalloutFont1", "glow_monofonto_large" },
+            { "FalloutFont2", "monofonto_large" },
+            { "FalloutFont3", "glow_monofonto_medium" },
+            { "FalloutFont4", "monofonto_verylarge02_dialogs2" },
+            { "FalloutFont5", "fixedsys_comp_uniform_width" },
+            { "FalloutFont6", "glow_monofonto_vl_dialogs" },
+            { "FalloutFont7", "baked-in_monofonto_large" },
+            { "FalloutFont8", "glow_futura_caps_large" },
+        } };
+        constexpr VFS::Path::ExtensionView fnt("fnt");
+        for (const auto& [id, file] : fonts)
+        {
+            const VFS::Path::Normalized path = VFS::Path::join(dir, file, fnt);
+            const Files::IStreamPtr stream = mVFS->find(path);
+            if (!stream)
+                continue;
+            try
+            {
+                loadBitmapFont(FontId{ id }, path, *stream, dir, true);
+            }
+            catch (const std::exception& e)
+            {
+                Log(Debug::Error) << "Failed to load " << path << ": " << e.what();
+            }
+        }
     }
 
     void FontLoader::loadFont(FontId fontId, std::string_view fileName)
@@ -277,7 +314,7 @@ namespace Gui
 
         if (const Files::IStreamPtr stream = mVFS->find(fntPath))
         {
-            loadBitmapFont(fontId, fntPath, *stream);
+            loadBitmapFont(fontId, fntPath, *stream, fonts);
             return;
         }
 
@@ -405,7 +442,8 @@ namespace Gui
         float ascent;
     } GlyphInfo;
 
-    void FontLoader::loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream)
+    void FontLoader::loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream,
+        VFS::Path::NormalizedView textureDir, bool fallout)
     {
         Log(Debug::Info) << "Loading bitmap font file " << path;
 
@@ -442,9 +480,8 @@ namespace Gui
         // Create the font texture
         const std::string name(nameBuffer);
 
-        constexpr VFS::Path::NormalizedView fonts("fonts");
         constexpr VFS::Path::ExtensionView tex("tex");
-        const VFS::Path::Normalized bitmapPath = VFS::Path::join(fonts, name, tex);
+        const VFS::Path::Normalized bitmapPath = VFS::Path::join(textureDir, name, tex);
 
         Files::IStreamPtr bitmapFile = mVFS->get(bitmapPath);
 
@@ -493,9 +530,27 @@ namespace Gui
 
         root->addAttribute("name", fontId.mValue);
 
+        // FO3/FNV glyphs reach above and below the font size (Monofonto Large: 4 .. 39 of 31 pixels), and MyGUI
+        // cuts what is outside the line: the line takes in all of them
+        float top = 0.f;
+        float lineHeight = fontSize;
+        if (fallout)
+        {
+            float bottom = fontSize;
+            top = fontSize;
+            for (const GlyphInfo& glyph : data)
+            {
+                if (glyph.height <= 0.f)
+                    continue;
+                top = std::min(top, fontSize - glyph.ascent);
+                bottom = std::max(bottom, fontSize - glyph.ascent + glyph.height);
+            }
+            lineHeight = bottom - top;
+        }
+
         MyGUI::xml::ElementPtr defaultHeight = root->createChild("Property");
         defaultHeight->addAttribute("key", "DefaultHeight");
-        defaultHeight->addAttribute("value", fontSize);
+        defaultHeight->addAttribute("value", lineHeight);
         MyGUI::xml::ElementPtr source = root->createChild("Property");
         source->addAttribute("key", "Source");
         source->addAttribute("value", bitmapPath);
@@ -622,6 +677,13 @@ namespace Gui
         additional.emplace(69, 0x0401); // Ё (Cyrillic Capital Letter Io) => E (latin capital E)
         additional.emplace(137, 0x0451); // ё (Cyrillic Small Letter Io) => ë (latin small E-diaeresis)
 
+        if (fallout)
+        {
+            // plain Windows-1252: only the cursor and the missing-glyph marker below
+            additional.clear();
+            omitted.clear();
+        }
+
         // ASCII vertical bar, use this as text input cursor
         additional.emplace(124, MyGUI::FontCodeType::Cursor);
 
@@ -635,8 +697,9 @@ namespace Gui
             float w = data[i].top_right.x * width - x1;
             float h = data[i].bottom_left.y * height - y1;
 
-            ToUTF8::Utf8Encoder encoder(mEncoding);
-            unsigned long unicodeVal = getUnicode(static_cast<unsigned char>(i), encoder, mEncoding);
+            const ToUTF8::FromType encoding = fallout ? ToUTF8::WINDOWS_1252 : mEncoding;
+            ToUTF8::Utf8Encoder encoder(encoding);
+            unsigned long unicodeVal = getUnicode(static_cast<unsigned char>(i), encoder, encoding);
             const std::string coord = MyGUI::utility::toString(x1) + " " + MyGUI::utility::toString(y1) + " "
                 + MyGUI::utility::toString(w) + " " + MyGUI::utility::toString(h);
             float advance = data[i].width + data[i].kerningRight;
@@ -644,7 +707,7 @@ namespace Gui
             if (advance == 0.f && data[i].width != 0.f)
                 advance = std::numeric_limits<float>::min();
             const std::string bearing = MyGUI::utility::toString(data[i].kerningLeft) + ' '
-                + MyGUI::utility::toString((fontSize - data[i].ascent));
+                + MyGUI::utility::toString((fontSize - data[i].ascent - top));
             const MyGUI::IntSize size(static_cast<int>(data[i].width), static_cast<int>(data[i].height));
 
             MyGUI::xml::ElementPtr code = codes->createChild("Code");

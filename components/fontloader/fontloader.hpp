@@ -46,7 +46,12 @@ namespace Gui
         void loadFonts();
         void loadFont(FontId fontId, std::string_view fontName);
 
-        void loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream);
+        void loadFalloutFonts();
+
+        /// @param textureDir where the font's .tex is
+        /// @param fallout a FO3/FNV font: plain Windows-1252, without Morrowind's glyph substitutions
+        void loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream,
+            VFS::Path::NormalizedView textureDir, bool fallout = false);
         void loadTrueTypeFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream);
 
         FontLoader(const FontLoader&);

@@ -91,6 +91,12 @@ namespace MWLua
         api["_setFalloutHud"] = [luaManager = context.mLuaManager](bool enabled) {
             luaManager->addAction([enabled] { MWBase::Environment::get().getWindowManager()->setFalloutHud(enabled); });
         };
+        // OpenMW's settings window, for the FNV pause menu's Settings (scripts/omw/fnvmenus).
+        api["_toggleSettingsWindow"] = [luaManager = context.mLuaManager]() {
+            luaManager->addAction([] { MWBase::Environment::get().getWindowManager()->toggleSettingsWindow(); });
+        };
+        api["_isSettingsWindowVisible"]
+            = []() { return MWBase::Environment::get().getWindowManager()->isSettingsWindowVisible(); };
         // The player sneaks and nobody has noticed them (the Morrowind sneak icon).
         api["_isSneakHidden"] = []() { return MWBase::Environment::get().getWindowManager()->isSneakHidden(); };
         if (!menu)

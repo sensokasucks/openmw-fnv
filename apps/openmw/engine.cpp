@@ -831,6 +831,10 @@ void OMW::Engine::prepareEngine()
         mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding, mExportFonts,
         Version::getOpenmwVersionDescription(), mCfgMgr);
     mEnvironment.setWindowManager(*mWindowManager);
+    const bool fallout = std::any_of(mContentFiles.begin(), mContentFiles.end(), [](const std::string& file) {
+        return Misc::StringUtils::ciEqual(file, "FalloutNV.esm") || Misc::StringUtils::ciEqual(file, "Fallout3.esm");
+    });
+    mWindowManager->setFalloutContent(fallout);
 
     mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,
         keybinderUserExists, userGameControllerdb, gameControllerdb, mGrab);
@@ -893,7 +897,8 @@ void OMW::Engine::prepareEngine()
     auto dataLoading = std::async(std::launch::async,
         [&] { mWorld->loadData(mFileCollections, mContentFiles, mGroundcoverFiles, mEncoder.get(), &asyncListener); });
 
-    if (!mSkipMenu)
+    // Morrowind's company logo is not FNV's
+    if (!mSkipMenu && !mWindowManager->isFalloutContent())
     {
         std::string_view logo = Fallback::Map::getString("Movies_Company_Logo");
         if (!logo.empty())
@@ -1012,13 +1017,18 @@ void OMW::Engine::go()
         // start in main menu
         mWindowManager->pushGuiMode(MWGui::GM_MainMenu);
 
-        if (mVFS->exists(MWSound::titleMusic))
+        // FNV's title theme, and no Morrowind logo video
+        constexpr VFS::Path::NormalizedView falloutTitleMusic("music/special/maintitle.mp3");
+        const bool fallout = mWindowManager->isFalloutContent() && mVFS->exists(falloutTitleMusic);
+        if (fallout)
+            mSoundManager->streamMusic(falloutTitleMusic, MWSound::MusicType::Normal);
+        else if (mVFS->exists(MWSound::titleMusic))
             mSoundManager->streamMusic(MWSound::titleMusic, MWSound::MusicType::Normal);
         else
             Log(Debug::Warning) << "Title music not found";
 
         std::string_view logo = Fallback::Map::getString("Movies_Morrowind_Logo");
-        if (!logo.empty())
+        if (!logo.empty() && !mWindowManager->isFalloutContent())
             mWindowManager->playVideo(logo, /*allowSkipping*/ true, /*overrideSounds*/ false);
     }
     else

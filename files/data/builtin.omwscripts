@@ -43,6 +43,9 @@ GLOBAL: scripts/omw/fnvradio/global.lua
 PLAYER: scripts/omw/fnvradio/player.lua
 GLOBAL: scripts/omw/fnvmusic/global.lua
 PLAYER: scripts/omw/fnvmusic/player.lua
+GLOBAL: scripts/omw/fnvmenus/global.lua
+PLAYER: scripts/omw/fnvmenus/player.lua
+MENU: scripts/omw/fnvmenus/menu.lua
 PLAYER: scripts/omw/camera/camera.lua
 PLAYER: scripts/omw/input/actionbindings.lua
 PLAYER: scripts/omw/input/smoothmovement.lua

@@ -832,6 +832,13 @@ namespace MWGui
         }
         else if (showInDialogueMode != MWGui::ShowInDialogueMode_Only)
         {
+            // The Fallout HUD shows notices in its corner (scripts/omw/fnvhud)
+            if (mHud != nullptr && mHud->isFalloutStyle())
+            {
+                MyGUI::UString text = MyGUI::LanguageManager::getInstance().replaceTags(MyGUI::UString(message));
+                MWBase::Environment::get().getLuaManager()->falloutMessage(text.asUTF8());
+                return;
+            }
             mMessageBoxManager->createMessageBox(message);
         }
     }
@@ -1828,6 +1835,17 @@ namespace MWGui
         // updateVisible() leaves the sneak box alone
         mHud->setSneakVisible(mHud->isSneakHidden());
         updateVisible();
+    }
+
+    void WindowManager::setFalloutContent(bool enabled)
+    {
+        mFalloutContent = enabled;
+        mLoadingScreen->setFalloutStyle(enabled);
+    }
+
+    bool WindowManager::isFalloutHud() const
+    {
+        return mHud != nullptr && mHud->isFalloutStyle();
     }
 
     bool WindowManager::isSneakHidden() const

@@ -43,7 +43,10 @@ return {
             if msg.title and msg.title ~= '' then
                 text = keys.expand(msg.title) .. '\n' .. text
             end
-            if #msg.buttons > 0 then
+            if #msg.buttons > 0 and I.FNVMenus and core.obscript.setButtonPressed then
+                -- FNV's message box (message_menu.xml); GetButtonPressed reads the answer
+                I.FNVMenus.messageBox(text, msg.buttons)
+            elseif #msg.buttons > 0 then
                 -- a blocking box; GetButtonPressed reads the answer
                 core.obscript.showMessageBox(text, msg.buttons)
             else
