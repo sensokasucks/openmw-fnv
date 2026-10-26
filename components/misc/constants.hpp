@@ -31,6 +31,9 @@ namespace Constants
     // ESM4 cells are twice smaller, so the active grid should have more cells.
     constexpr int ESM4CellGridRadius = CellGridRadius * 2;
 
+    // User value (osg::Matrixf) on a loaded NIF holding its root node's transform, which the reader discards
+    const std::string DiscardedRootTransform = "DiscardedRootTransform";
+
     // A label to mark night/day visual switches
     const std::string NightDayLabel = "NightDaySwitch";
 

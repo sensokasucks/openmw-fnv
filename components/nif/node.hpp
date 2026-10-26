@@ -83,6 +83,8 @@ namespace Nif
         // Node flags. Interpretation depends on the record type.
         uint32_t mFlags;
         NiTransform mTransform;
+        // The root node's own transform, which the reader replaces with identity (see NiNode::read)
+        NiTransform mDiscardedTransform = NiTransform::getIdentity();
         osg::Vec3f mVelocity;
         NiPropertyList mProperties;
         BoundingVolume mBounds;

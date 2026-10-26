@@ -21,6 +21,7 @@
 #include <osg/Transform>
 
 #include <components/debug/debuglog.hpp>
+#include <components/misc/constants.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -241,7 +242,12 @@ namespace MWRender
         auto found = nodeMap.find(headBone);
         if (found == nodeMap.end())
             return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
-        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(mHeadBinding);
+        // The game keeps a head part's root transform, which the NIF reader drops; some parts need it (HairBun.NIF
+        // turns its root one way and its shapes back, so without it the bun hangs in front of the face).
+        osg::Matrixf root;
+        if (!templateNode->getUserValue(Constants::DiscardedRootTransform, root))
+            root.makeIdentity();
+        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(root * mHeadBinding);
         found->second->addChild(binding);
         return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
     }

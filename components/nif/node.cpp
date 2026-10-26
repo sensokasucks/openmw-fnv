@@ -187,6 +187,7 @@ namespace Nif
         // We want to do this on world scene graph level rather than local scene graph level.
         if (mRecordIndex == 0 && !Misc::StringUtils::ciEqual(mName, "bip01"))
         {
+            mDiscardedTransform = mTransform;
             mTransform = Nif::NiTransform::getIdentity();
         }
     }

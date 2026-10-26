@@ -665,6 +665,11 @@ namespace NifOsg
                 created->accept(keepNodes);
             }
 
+            // The root transform the reader discarded, for FO3/FONV head parts: some (e.g. HairBun.NIF) rotate their
+            // root one way and their shapes back, and the game keeps both (see MWRender::ESM4NpcAnimation).
+            if (!roots.front()->mDiscardedTransform.isIdentity())
+                created->setUserValue(Constants::DiscardedRootTransform, roots.front()->mDiscardedTransform.toMatrix());
+
             RemoveLodOverlapVisitor removeLodOverlaps;
             created->accept(removeLodOverlaps);
 
