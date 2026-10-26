@@ -7,7 +7,8 @@
 --           Skills, Perks (and traits), General (level, karma, reputations)
 --   ITEMS   Weapons, Apparel, Aid, Misc, Ammo: hover for details, click (or
 --           Enter) to equip, wear, take off or use, R to drop one (shift: all)
---   DATA    World Map (wheel to zoom, drag to move, click a discovered place
+--   DATA    Local Map (OpenMW's top-down render, doors, quest targets),
+--           World Map (wheel to zoom, drag to move, click a discovered place
 --           twice to fast travel), Quests (click one to make it the compass's
 --           quest), Notes
 --
@@ -18,7 +19,7 @@
 -- must not, so I.FNVPipBoy.setPauseWhileOpen(false) keeps it running (saved
 -- with the game).
 --
--- Not done yet: the local map, the radio, item condition, the limb
+-- Not done yet: the radio, item condition, the limb
 -- condition figure on the Status page, the 3D Pip-Boy on the arm.
 --
 -- From the Lua console (`luap`):
@@ -81,7 +82,7 @@ local TABS = {
     { id = 'items', name = 'ITEMS', subs = {
         { id = 'weapon', name = 'Weapons' }, { id = 'apparel', name = 'Apparel' }, { id = 'aid', name = 'Aid' },
         { id = 'misc', name = 'Misc' }, { id = 'ammo', name = 'Ammo' } } },
-    { id = 'data', name = 'DATA', subs = { { id = 'map', name = 'World Map' }, { id = 'quests', name = 'Quests' },
+    { id = 'data', name = 'DATA', subs = { { id = 'local', name = 'Local Map' }, { id = 'map', name = 'World Map' }, { id = 'quests', name = 'Quests' },
         { id = 'notes', name = 'Notes' } } },
 }
 
@@ -481,7 +482,7 @@ local function buildRows()
     if sub == 'general' then return generalRows() end
     if sub == 'quests' then return questRows() end
     if sub == 'notes' then return noteRows() end
-    if sub == 'map' then return {} end
+    if sub == 'map' or sub == 'local' then return {} end
     return itemRows(sub)
 end
 
@@ -849,6 +850,95 @@ local function mapView(width, height)
     return content
 end
 
+-- ------------------------------------------------------------ the local map
+
+local localZoom = { exterior = 360, interior = 1400 } -- screen pixels per map tile
+local localMap = nil -- the last core.obscript.getLocalMap()
+local localMapTime = -1
+local localRerender = true -- render the cells around the player again on the next ask (once per opening)
+
+local tileTextures = {}
+local function localTileTexture(tile)
+    -- render targets are stored bottom row first: show them flipped
+    if tileTextures[tile.texture] == nil then
+        tileTextures[tile.texture] = ui.texture { path = tile.texture, offset = v2(0, tile.height),
+            size = v2(tile.width, -tile.height) }
+    end
+    return tileTextures[tile.texture]
+end
+
+local function localView(width, height)
+    local content = {}
+    local now = core.getRealTime()
+    if localMap == nil or now - localMapTime > 0.5 then
+        local ok, res = pcall(core.obscript.getLocalMap, localRerender)
+        localRerender = false
+        localMap = ok and res or nil
+        localMapTime = now
+    end
+    local ok, here = pcall(core.obscript.localMapPoint, self.position)
+    if localMap == nil or not ok or here == nil then
+        content[1] = text('No map here.', { position = v2(0, 0), size = v2(width, 24), textAlignH = ui.ALIGNMENT.Center })
+        return content
+    end
+    local zoom = localMap.interior and localZoom.interior or localZoom.exterior
+    local center = v2(width / 2, height / 2)
+    local origin = v2(here.x + here.u, -here.y + here.v)
+    local function toScreen(point)
+        return (v2(point.x + point.u, -point.y + point.v) - origin) * zoom + center
+    end
+    local tiles = {}
+    for _, tile in ipairs(localMap.tiles) do
+        local topLeft = (v2(tile.x, -tile.y) - origin) * zoom + center
+        if topLeft.x < width and topLeft.y < height and topLeft.x + zoom > 0 and topLeft.y + zoom > 0 then
+            tiles[#tiles + 1] = { type = ui.TYPE.Image,
+                props = { resource = localTileTexture(tile), position = topLeft, size = v2(zoom, zoom),
+                    color = color } }
+        end
+    end
+    content[#content + 1] = { type = ui.TYPE.Widget, props = { size = v2(width, height) }, content = ui.content(tiles) }
+    content[#content + 1] = rect(v2(0, 0), v2(width, 1), color, 0.6)
+    content[#content + 1] = rect(v2(0, height - 1), v2(width, 1), color, 0.6)
+
+    local function inside(p)
+        return p.x >= 0 and p.y >= 0 and p.x <= width and p.y <= height
+    end
+    local doorTex = texture('interface/icons/local map/icon_local_door.dds')
+    local m = data.map
+    for _, door in ipairs(m and m.doors or {}) do
+        local okDoor, point = pcall(core.obscript.localMapPoint, door.position)
+        local p = okDoor and point and toScreen(point)
+        if p and inside(p) then
+            if doorTex then
+                content[#content + 1] = { type = ui.TYPE.Image,
+                    props = { resource = doorTex, position = p - v2(10, 10), size = v2(20, 20), color = color } }
+            else
+                content[#content + 1] = rect(p - v2(5, 5), v2(10, 10), color)
+            end
+            if door.name ~= '' then
+                content[#content + 1] = text(door.name, { position = p + v2(12, -9), textSize = SMALL })
+            end
+        end
+    end
+    for _, q in ipairs(I.FNVHud and I.FNVHud.getQuestMarkers() or {}) do
+        local okQuest, point = pcall(core.obscript.localMapPoint, q.position)
+        local p = okQuest and point and toScreen(point)
+        if p and inside(p) then
+            content[#content + 1] = rect(p - v2(7, 18), v2(14, 14), color)
+            content[#content + 1] = rect(p - v2(1, 4), v2(2, 6), color)
+        end
+    end
+    content[#content + 1] = rect(center - v2(7, 7), v2(14, 14), color)
+    content[#content + 1] = rect(center - v2(3, 3), v2(6, 6), darkColor)
+
+    content[#content + 1] = rect(v2(0, height - 26), v2(width, 26), backColor, 0.8)
+    content[#content + 1] = text(self.cell and self.cell.name or '', { position = v2(8, height - 24),
+        size = v2(width - 16, 22), textAlignH = ui.ALIGNMENT.Center })
+    content[#content + 1] = text('Wheel) Zoom', { position = v2(width - 220, 4), size = v2(212, 20),
+        textSize = SMALL, textColor = dimColor, textAlignH = ui.ALIGNMENT.End })
+    return content
+end
+
 local function visibleRows(listHeight)
     return math.floor(listHeight / ROW)
 end
@@ -880,11 +970,12 @@ render = function()
         rect(v2(PAD, 58), v2(WIDTH - 2 * PAD, 2), color, 0.6),
     }
 
-    if sub == 'map' then
+    if sub == 'map' or sub == 'local' then
+        local view = sub == 'map' and mapView or localView
         content[#content + 1] = {
             type = ui.TYPE.Widget,
             props = { position = v2(PAD, listTop), size = v2(WIDTH - 2 * PAD, listHeight) },
-            content = ui.content(mapView(WIDTH - 2 * PAD, listHeight)),
+            content = ui.content(view(WIDTH - 2 * PAD, listHeight)),
         }
     end
 
@@ -906,14 +997,14 @@ render = function()
 
     local detailX = PAD + LIST_WIDTH + 40
     local detailWidth = WIDTH - detailX - PAD
-    if sub ~= 'map' then content[#content + 1] = {
+    if sub ~= 'map' and sub ~= 'local' then content[#content + 1] = {
         type = ui.TYPE.Widget,
         props = { position = v2(detailX, listTop), size = v2(detailWidth, listHeight) },
         content = ui.content(detailPanel(rows[sel], detailWidth, listHeight)),
     } end
 
     if message then
-        local messageY = sub == 'map' and 76 or HEIGHT - 128
+        local messageY = (sub == 'map' or sub == 'local') and 76 or HEIGHT - 128
         content[#content + 1] = text(message, { position = v2(PAD, messageY), size = v2(WIDTH - 2 * PAD, 20),
             textSize = SMALL, textAlignH = ui.ALIGNMENT.Center })
     end
@@ -974,6 +1065,7 @@ local function show(tab)
     end
     if not open then
         open = true
+        localRerender = true
         if not pauseWhileOpen then I.UI.setPauseOnMode('Interface', false) end
         closingByScript = true
         I.UI.setMode('Interface', { windows = {} })
@@ -1081,6 +1173,12 @@ return {
         end,
         onMouseWheel = function(vertical)
             if not open or vertical == 0 then return end
+            if currentSub() == 'local' then
+                local key = localMap and localMap.interior and 'interior' or 'exterior'
+                localZoom[key] = math.max(120, math.min(4000, localZoom[key] * (vertical > 0 and 1.25 or 0.8)))
+                render()
+                return
+            end
             if currentSub() == 'map' then
                 mapZoom = math.max(0.08, math.min(1, mapZoom * (vertical > 0 and 0.8 or 1.25)))
                 render()
@@ -1089,6 +1187,8 @@ return {
             moveSelection(vertical > 0 and -1 or 1)
         end,
         onFrame = function(dt)
+            -- the local map's tiles arrive a frame after they are asked for
+            if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
             if viewRestoreFrames > 0 and I.UI.getMode() == nil then
                 viewRestoreFrames = viewRestoreFrames - 1
                 local mode = camera.getMode()

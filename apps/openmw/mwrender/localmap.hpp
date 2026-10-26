@@ -54,6 +54,10 @@ namespace MWRender
          */
         void requestMap(const MWWorld::CellStore* cell);
 
+        /// Render an exterior cell's map again even if it was rendered before (e.g. while the cell was still
+        /// loading, which leaves it black).
+        void forceExteriorMap(const MWWorld::CellStore* cell);
+
         void addCell(MWWorld::CellStore* cell);
         void removeExteriorCell(int x, int y);
 
@@ -100,6 +104,9 @@ namespace MWRender
         osg::Group* getRoot();
 
         MyGUI::IntRect getInteriorGrid() const;
+
+        bool isInterior() const { return mInterior; }
+        int getMapWorldSize() const { return mMapWorldSize; }
 
     private:
         osg::ref_ptr<osg::Group> mRoot;

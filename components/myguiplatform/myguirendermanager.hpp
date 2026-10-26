@@ -26,6 +26,7 @@ namespace osg
     class Camera;
     class RenderInfo;
     class StateSet;
+    class Texture2D;
 }
 
 namespace MyGUIPlatform
@@ -94,6 +95,9 @@ namespace MyGUIPlatform
         void destroyTexture(MyGUI::ITexture* texture) override;
         /** @see RenderManager::getTexture */
         MyGUI::ITexture* getTexture(const std::string& name) override;
+
+        /// Make an OSG texture (a render target) available under `name`, replacing what was there.
+        void registerExternalTexture(const std::string& name, osg::Texture2D* texture);
 
         // Called by the update traversal
         void update();

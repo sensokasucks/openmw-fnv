@@ -1,5 +1,7 @@
 #include "image.hpp"
 
+#include <utility>
+
 #include <MyGUI_RenderManager.h>
 
 #include "resources.hpp"
@@ -39,11 +41,28 @@ namespace LuaUi
         deleteAllItems();
         TextureResource* resource = propertyValue<TextureResource*>("resource", nullptr);
         MyGUI::IntCoord atlasCoord;
+        // a negative size shows the region mirrored (render targets are stored bottom row first)
+        bool flipH = false;
+        bool flipV = false;
         if (resource)
         {
-            atlasCoord
-                = MyGUI::IntCoord(static_cast<int>(resource->mOffset.x()), static_cast<int>(resource->mOffset.y()),
-                    static_cast<int>(resource->mSize.x()), static_cast<int>(resource->mSize.y()));
+            flipH = resource->mSize.x() < 0;
+            flipV = resource->mSize.y() < 0;
+            int width = static_cast<int>(resource->mSize.x());
+            int height = static_cast<int>(resource->mSize.y());
+            int x = static_cast<int>(resource->mOffset.x());
+            int y = static_cast<int>(resource->mOffset.y());
+            if (flipH)
+            {
+                x += width;
+                width = -width;
+            }
+            if (flipV)
+            {
+                y += height;
+                height = -height;
+            }
+            atlasCoord = MyGUI::IntCoord(x, y, width, height);
             setImageTexture(resource->mPath);
         }
 
@@ -63,6 +82,18 @@ namespace LuaUi
         mTileRect->updateSize(MyGUI::IntSize(tileH ? atlasCoord.width : 0, tileV ? atlasCoord.height : 0));
         setImageTile(atlasCoord.size());
         setImageCoord(atlasCoord);
+        if ((flipH || flipV) && textureSize.width > 0 && textureSize.height > 0)
+        {
+            float left = static_cast<float>(atlasCoord.left) / textureSize.width;
+            float right = static_cast<float>(atlasCoord.right()) / textureSize.width;
+            float top = static_cast<float>(atlasCoord.top) / textureSize.height;
+            float bottom = static_cast<float>(atlasCoord.bottom()) / textureSize.height;
+            if (flipH)
+                std::swap(left, right);
+            if (flipV)
+                std::swap(top, bottom);
+            mTileRect->_setUVSet(MyGUI::FloatRect(left, top, right, bottom));
+        }
 
         setColour(propertyValue("color", MyGUI::Colour(1, 1, 1, 1)));
 

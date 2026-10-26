@@ -43,6 +43,11 @@ namespace ESM
     class ESMWriter;
 }
 
+namespace MWRender
+{
+    class LocalMap;
+}
+
 namespace MWMechanics
 {
     class AttributeValue;
@@ -272,6 +277,9 @@ namespace MWBase
         /// returns the index of the pressed button or -1 if no button was pressed
         /// (->MessageBoxmanager->InteractiveMessageBox)
         virtual int readPressedButton() = 0;
+
+        /// The renderer of the local map textures (for the FNV Pip-Boy's local map).
+        virtual MWRender::LocalMap* getLocalMapRender() = 0;
 
         virtual void updateConsoleObjectPtr(const MWWorld::Ptr& currentPtr, const MWWorld::Ptr& newPtr) = 0;
 

@@ -280,6 +280,8 @@ namespace MWGui
             bool block = false, int defaultFocus = -1) override;
 
         int readPressedButton() override; ///< returns the index of the pressed button or -1 if no button was pressed
+
+        MWRender::LocalMap* getLocalMapRender() override { return mLocalMapRender.get(); }
                                           ///< (->MessageBoxmanager->InteractiveMessageBox)
 
         void update(float duration);

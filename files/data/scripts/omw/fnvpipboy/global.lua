@@ -277,7 +277,18 @@ local function mapData(player)
             if qws == ws then quest[#quest + 1] = q end
         end
     end
-    return { worldSpaceId = ws, map = map, markers = markers, player = here, quest = quest }
+    -- doors out of the player's cell, for the local map
+    local doors = {}
+    local ok, list = pcall(function() return player.cell:getAll(types.ESM4Door) end)
+    if ok then
+        for _, door in ipairs(list) do
+            if door.enabled and types.ESM4Door.isTeleport(door) then
+                local dest = types.ESM4Door.destCell(door)
+                doors[#doors + 1] = { position = door.position, name = dest and dest.name or '' }
+            end
+        end
+    end
+    return { worldSpaceId = ws, map = map, markers = markers, player = here, quest = quest, doors = doors }
 end
 
 local function fastTravel(player, markerId)

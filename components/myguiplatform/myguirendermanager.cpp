@@ -529,6 +529,13 @@ namespace MyGUIPlatform
         mTextures.erase(item);
     }
 
+    void RenderManager::registerExternalTexture(const std::string& name, osg::Texture2D* texture)
+    {
+        OSGTexture osgTexture(texture);
+        osgTexture.setName(name);
+        mTextures.insert_or_assign(name, std::move(osgTexture));
+    }
+
     MyGUI::ITexture* RenderManager::getTexture(const std::string& name)
     {
         if (name.empty())

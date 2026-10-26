@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -48,6 +49,10 @@
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
 #include <components/misc/strings/lower.hpp>
+#include <components/myguiplatform/myguirendermanager.hpp>
+
+#include <MyGUI_Types.h>
+#include <osg/Texture2D>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -58,6 +63,8 @@
 #include "../mwclass/esm4base.hpp"
 #include "../mwclass/esm4door.hpp"
 #include "../mwworld/cellstore.hpp"
+#include "../mwworld/scene.hpp"
+#include "../mwrender/localmap.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/globals.hpp"
 #include "../mwworld/store.hpp"
@@ -467,6 +474,120 @@ namespace MWLua
                 t["rotation"] = ref.mPos.rot[2];
                 res.add(t);
             }
+            return res;
+        };
+
+        // The local map of the cells around the player (OpenMW's top-down renders): { interior, tiles = { { x, y,
+        // texture (a name for ui.texture), width, height } } }. A tile covers one map segment; x grows east, y
+        // north. Rendering and registering the textures happen after the Lua frame, so a call returns what the
+        // previous one asked for (empty at first). getLocalMap(true) renders the 3x3 cells around the player again.
+        struct LocalMapTile
+        {
+            int mX, mY, mWidth, mHeight;
+            std::string mTexture;
+        };
+        struct LocalMapState
+        {
+            std::mutex mMutex;
+            bool mInterior = false;
+            std::vector<LocalMapTile> mTiles;
+            int mGeneration = 0;
+        };
+        static LocalMapState sLocalMap;
+        api["getLocalMap"] = [context](sol::this_state s, sol::optional<bool> rerender) -> sol::object {
+            context.mLuaManager->addAction(
+                [force = rerender.value_or(false)] {
+                    MWRender::LocalMap* localMap
+                        = MWBase::Environment::get().getWindowManager()->getLocalMapRender();
+                    const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+                    if (localMap == nullptr || player.isEmpty() || player.getCell() == nullptr)
+                        return;
+                    const MWWorld::CellStore* cell = player.getCell();
+                    std::vector<LocalMapTile> tiles;
+                    const int generation = ++sLocalMap.mGeneration;
+                    auto addTile = [&](int x, int y, bool interior) {
+                        osg::ref_ptr<osg::Texture2D> texture = localMap->getMapTexture(x, y);
+                        if (!texture)
+                            return;
+                        const std::string name = "localmap/" + std::string(interior ? "i" : "e") + std::to_string(x)
+                            + "_" + std::to_string(y) + "_" + std::to_string(generation % 4);
+                        MyGUIPlatform::RenderManager::getInstance().registerExternalTexture(name, texture.get());
+                        tiles.push_back({ x, y, texture->getTextureWidth(), texture->getTextureHeight(), name });
+                    };
+                    if (cell->isExterior())
+                    {
+                        for (const MWWorld::CellStore* active :
+                            MWBase::Environment::get().getWorldScene()->getActiveCells())
+                        {
+                            if (!active->isExterior()
+                                || active->getCell()->getWorldSpace() != cell->getCell()->getWorldSpace())
+                                continue;
+                            const int dx = active->getCell()->getGridX() - cell->getCell()->getGridX();
+                            const int dy = active->getCell()->getGridY() - cell->getCell()->getGridY();
+                            if (force && std::abs(dx) <= 1 && std::abs(dy) <= 1)
+                                localMap->forceExteriorMap(active);
+                            else
+                                localMap->requestMap(active);
+                            addTile(active->getCell()->getGridX(), active->getCell()->getGridY(), false);
+                        }
+                    }
+                    else
+                    {
+                        localMap->requestMap(cell);
+                        const MyGUI::IntRect grid = localMap->getInteriorGrid();
+                        for (int x = grid.left; x <= grid.right; ++x)
+                            for (int y = grid.top; y <= grid.bottom; ++y)
+                                addTile(x, y, true);
+                    }
+                    std::lock_guard lock(sLocalMap.mMutex);
+                    sLocalMap.mInterior = !cell->isExterior();
+                    sLocalMap.mTiles = std::move(tiles);
+                },
+                "obscriptLocalMapAction");
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            sol::table tiles(lua, sol::create);
+            std::lock_guard lock(sLocalMap.mMutex);
+            for (const LocalMapTile& tile : sLocalMap.mTiles)
+            {
+                sol::table t(lua, sol::create);
+                t["x"] = tile.mX;
+                t["y"] = tile.mY;
+                t["texture"] = tile.mTexture;
+                t["width"] = tile.mWidth;
+                t["height"] = tile.mHeight;
+                tiles.add(t);
+            }
+            res["interior"] = sLocalMap.mInterior;
+            res["tiles"] = tiles;
+            return res;
+        };
+
+        // Where a world position is on the local map: { x, y (the tile), u, v (0..1 in the tile, v down) }.
+        api["localMapPoint"] = [](const osg::Vec3f& position, sol::this_state s) -> sol::object {
+            MWRender::LocalMap* localMap = MWBase::Environment::get().getWindowManager()->getLocalMapRender();
+            if (localMap == nullptr)
+                return sol::nil;
+            float u = 0.f;
+            float v = 0.f;
+            int x = 0;
+            int y = 0;
+            if (localMap->isInterior())
+                localMap->worldToInteriorMapPosition(osg::Vec2f(position.x(), position.y()), u, v, x, y);
+            else
+            {
+                const float size = static_cast<float>(localMap->getMapWorldSize());
+                x = static_cast<int>(std::floor(position.x() / size));
+                y = static_cast<int>(std::floor(position.y() / size));
+                u = (position.x() - size * x) / size;
+                v = 1.f - (position.y() - size * y) / size;
+            }
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            res["x"] = x;
+            res["y"] = y;
+            res["u"] = u;
+            res["v"] = v;
             return res;
         };
 
