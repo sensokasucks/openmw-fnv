@@ -641,9 +641,9 @@ namespace MWRender
             applyFaceGen(*node, headParts[i].mesh, traits);
             addFaceMorphs(*node, headParts[i].mesh);
             // The race picks the skin (old races have their own head texture); the NPC's EYES record picks the
-            // eye colour.
-            if (eyes && (i == 6 || i == 7))
-                overrideDiffuse(*node, eyes->mIcon);
+            // eye colour, and without one the game uses EyeDefault.dds (BSFaceGenManager, FUN_006558b0).
+            if (i == 6 || i == 7)
+                overrideDiffuse(*node, eyes ? std::string_view(eyes->mIcon) : "textures/characters/eyes/eyedefault.dds");
             else if (osg::ref_ptr<osg::Image> skin = getTexture(headParts[i].texture))
             {
                 // The NPC's complexion is morphed onto the race's face texture.

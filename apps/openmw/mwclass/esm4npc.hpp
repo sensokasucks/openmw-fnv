@@ -50,6 +50,9 @@ namespace MWClass
         void insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
             MWPhysics::PhysicsSystem& physics) const override;
 
+        // Drawn at the race's height (FO3/FNV child races are 0.8); collision keeps its own size
+        void adjustScale(const MWWorld::ConstPtr& ptr, osg::Vec3f& scale, bool rendering) const override;
+
         bool hasToolTip(const MWWorld::ConstPtr& ptr) const override { return true; }
         MWGui::ToolTipInfo getToolTipInfo(const MWWorld::ConstPtr& ptr, int count) const override
         {

@@ -221,6 +221,16 @@ namespace MWClass
         ESM4Impl::insertActorBody(ptr, rotation, physics, osg::Vec3f(20.f, 20.f, 64.f * height), false);
     }
 
+    void ESM4Npc::adjustScale(const MWWorld::ConstPtr& ptr, osg::Vec3f& scale, bool rendering) const
+    {
+        if (!rendering)
+            return; // the collision body is sized by race height already (insertObjectPhysics)
+        const ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mRace == nullptr)
+            return;
+        scale *= data.mIsFemale ? data.mRace->mHeightFemale : data.mRace->mHeightMale;
+    }
+
     const ESM4::Race* ESM4Npc::getRace(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mRace;
