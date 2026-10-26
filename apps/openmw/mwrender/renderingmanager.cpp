@@ -1218,6 +1218,11 @@ namespace MWRender
         mPlayerNode->addChild(mPlayerBodyNode);
         mPlayerBodyRef = ref;
         mPlayerBody = new ESM4NpcAnimation(ptr, mPlayerBodyNode, mResourceSystem);
+        if (!mPlayerBodyWeapon.empty())
+        {
+            mPlayerBody->showWeapon(mPlayerBodyWeapon);
+            mPlayerBody->setIdleSequence(mPlayerBodyAimIdle);
+        }
         if (!mPlayerBodyIdle.empty())
             mPlayerBody->playIdleFONV(mPlayerBodyIdle, false);
 
@@ -1225,6 +1230,7 @@ namespace MWRender
         mPlayerNode->addCullCallback(mHideMorrowindBody);
         mPlayerBodyLastPosition = player.getRefData().getPosition().asVec3();
         mPlayerBodySpeed = 0.f;
+        mPlayerBodyVelocity = osg::Vec3f();
     }
 
     void RenderingManager::setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel)
@@ -1247,6 +1253,18 @@ namespace MWRender
             mPlayerBody->playIdleFONV(model, false);
     }
 
+    void RenderingManager::setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle)
+    {
+        if (model == mPlayerBodyWeapon && aimIdle == mPlayerBodyAimIdle)
+            return;
+        mPlayerBodyWeapon = model;
+        mPlayerBodyAimIdle = aimIdle;
+        if (mPlayerBody == nullptr)
+            return;
+        mPlayerBody->showWeapon(mPlayerBodyWeapon);
+        mPlayerBody->setIdleSequence(mPlayerBodyWeapon.empty() ? std::string_view() : mPlayerBodyAimIdle);
+    }
+
     void RenderingManager::updatePlayerBody(float dt, bool paused)
     {
         if (mPlayerBody == nullptr)
@@ -1264,6 +1282,8 @@ namespace MWRender
         moved.z() = 0.f;
         const float speed = std::min(moved.length() / dt, 1000.f);
         mPlayerBodySpeed += (speed - mPlayerBodySpeed) * std::min(1.f, dt * 8.f);
+        if (speed < 1000.f)
+            mPlayerBodyVelocity += (moved / dt - mPlayerBodyVelocity) * std::min(1.f, dt * 8.f);
         if (!mPlayerBodyIdle.empty())
             return;
         using Locomotion = ESM4NpcAnimation::Locomotion;
@@ -1271,6 +1291,23 @@ namespace MWRender
         {
             mPlayerBody->setLocomotion(Locomotion::Idle);
             return;
+        }
+        // Which way the player moves relative to where they face, from the smoothed velocity so a stop or a
+        // slide along a wall doesn't flip the loop
+        if (mPlayerBodyVelocity.length() >= 15.f)
+        {
+            const float yaw = mPlayerAnimation->getPtr().getRefData().getPosition().rot[2];
+            const osg::Vec3f forward(std::sin(yaw), std::cos(yaw), 0.f);
+            const osg::Vec3f right(std::cos(yaw), -std::sin(yaw), 0.f);
+            const float along = mPlayerBodyVelocity * forward;
+            const float across = mPlayerBodyVelocity * right;
+            using Direction = ESM4NpcAnimation::Direction;
+            Direction direction = Direction::Forward;
+            if (std::abs(across) > std::abs(along) * 1.2f)
+                direction = across > 0.f ? Direction::Right : Direction::Left;
+            else if (along < 0.f)
+                direction = Direction::Backward;
+            mPlayerBody->setLocomotionDirection(direction);
         }
         mPlayerBody->setLocomotion(mPlayerBodySpeed > 200.f ? Locomotion::Run : Locomotion::Walk);
         const float sequenceSpeed = mPlayerBody->getLocomotionSpeed();

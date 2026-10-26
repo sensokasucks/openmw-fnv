@@ -235,6 +235,8 @@ namespace MWRender
         void setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel);
         // Loops an idle KF (e.g. a furniture sit) on the body; empty goes back to standing and walking.
         void setPlayerBodyIdle(std::string_view model);
+        // The weapon in the body's hand (a WEAP model) and the aim idle of its animation type; empty puts it away.
+        void setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle);
 
         void processChangedSettings(const Settings::CategorySettingVector& settings);
 
@@ -358,8 +360,11 @@ namespace MWRender
         osg::ref_ptr<osg::Callback> mHideMorrowindBody;
         std::vector<ESM::FormId> mPlayerBodyApparel;
         std::string mPlayerBodyIdle;
+        std::string mPlayerBodyWeapon;
+        std::string mPlayerBodyAimIdle;
         osg::Vec3f mPlayerBodyLastPosition;
         float mPlayerBodySpeed = 0.f;
+        osg::Vec3f mPlayerBodyVelocity;
 
         void createPlayerBody();
         void updatePlayerBody(float dt, bool paused);

@@ -959,20 +959,37 @@ namespace MWRender
         return source->mDuration;
     }
 
+    void ESM4NpcAnimation::setLocomotionDirection(Direction direction)
+    {
+        if (direction == mDirection)
+            return;
+        mDirection = direction;
+        if (mLocomotion != Locomotion::Idle && !mInAction && !mDead)
+            playLocomotion();
+    }
+
     void ESM4NpcAnimation::playLocomotion()
     {
-        switch (mLocomotion)
+        if (mLocomotion == Locomotion::Idle)
         {
-            case Locomotion::Idle:
-                playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
-                break;
-            case Locomotion::Walk:
-                playLoopFONV("mtforward.kf", true);
-                break;
-            case Locomotion::Run:
-                playLoopFONV("mtfastforward.kf", true);
-                break;
+            playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
+            return;
         }
+        static constexpr std::string_view directions[] = { "forward", "backward", "left", "right" };
+        const std::string suffix = std::string(mLocomotion == Locomotion::Run ? "fast" : "")
+            + std::string(directions[static_cast<int>(mDirection)]) + ".kf";
+        // With a weapon drawn the game plays the weapon's own loop where there is one (2hrforward.kf...); the
+        // rest fall back to the plain mt loops.
+        if (mIdleSequence.size() > 6 && Misc::StringUtils::ciEndsWith(mIdleSequence, "aim.kf"))
+        {
+            const std::string weaponLoop = mIdleSequence.substr(0, mIdleSequence.size() - 6) + suffix;
+            if (!findLoopFONV(weaponLoop).empty())
+            {
+                playLoopFONV(weaponLoop, true);
+                return;
+            }
+        }
+        playLoopFONV("mt" + suffix, true);
     }
 
     void ESM4NpcAnimation::setIdleSequence(std::string_view file)
@@ -1018,6 +1035,9 @@ namespace MWRender
         // the whole model hangs off the bone as it is.
         mWeapon = sceneManager->getInstance(templateNode);
         bone->addChild(mWeapon);
+        Log(Debug::Verbose) << "Weapon " << model << " on bone '" << bone->getName() << "' (" << bone->className()
+                            << ") mask " << std::hex << mWeapon->getNodeMask() << std::dec << " parents "
+                            << bone->getNumParents() << " for " << mPtr.toString();
     }
 
     void ESM4NpcAnimation::playDeath(bool instant)
@@ -1075,27 +1095,42 @@ namespace MWRender
         return mLocomotionSpeed;
     }
 
-    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    VFS::Path::Normalized ESM4NpcAnimation::findLoopFONV(std::string_view file) const
     {
-        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
-        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
         const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
         const std::string_view skeleton = skeletonPath.value();
         const size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
-            return;
-        // Walks and runs are per sex (locomotion/male, locomotion/female), the idle is shared
+            return {};
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        // Walks and runs are per sex (locomotion/male, locomotion/female), children have their own
+        // (locomotion/child), the idle is shared
         const std::string dir = std::string(skeleton.substr(0, slash)) + "/locomotion/";
-        VFS::Path::Normalized path(
-            dir + (isFemale() ? "female/" : "male/") + std::string(file));
-        if (!mResourceSystem->getVFS()->exists(path))
+        const ESM4::Race* race = mPtr.getType() == ESM::REC_NPC_4 ? MWClass::ESM4Npc::getRace(mPtr) : nullptr;
+        const bool child = race != nullptr && race->mHeightMale < 0.95f; // the child races are the 0.8 ones
+        VFS::Path::Normalized path;
+        if (child)
+            path = VFS::Path::Normalized(dir + "child/" + std::string(file));
+        if (path.empty() || !vfs.exists(path))
+            path = VFS::Path::Normalized(dir + (isFemale() ? "female/" : "male/") + std::string(file));
+        if (!vfs.exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
         // Creatures keep their idle next to the skeleton (creatures/nvgecko/mtidle.kf)
-        if (!mResourceSystem->getVFS()->exists(path))
+        if (!vfs.exists(path))
             path = VFS::Path::Normalized(std::string(skeleton.substr(0, slash + 1)) + std::string(file));
-        if (!mResourceSystem->getVFS()->exists(path))
+        if (!vfs.exists(path))
+            return {};
+        return path;
+    }
+
+    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    {
+        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
+        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
+        const VFS::Path::Normalized path = findLoopFONV(file);
+        if (path.empty())
         {
-            Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
+            Log(Debug::Verbose) << "No " << file << " for " << mPtr.getCellRef().getRefId();
             return;
         }
 
