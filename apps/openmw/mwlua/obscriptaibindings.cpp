@@ -387,6 +387,18 @@ namespace MWLua
                 "obscriptAISetEmotionAction");
         };
 
+        // startLipSync(npc, voiceFile): the NPC's face follows the voice file's lip sync (.lip) while it says it.
+        api["startLipSync"] = [context](const Object& object, std::string voiceFile) {
+            context.mLuaManager->addAction(
+                [object = Object(object), voiceFile = std::move(voiceFile)] {
+                    auto* animation = dynamic_cast<MWRender::ESM4NpcAnimation*>(
+                        MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+                    if (animation != nullptr)
+                        animation->startLipSync(voiceFile);
+                },
+                "obscriptAIStartLipSyncAction");
+        };
+
         return LuaUtil::makeReadOnly(api);
     }
 }

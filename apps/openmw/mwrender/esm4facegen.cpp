@@ -9,6 +9,7 @@
 
 #include <osg/Geometry>
 #include <osg/Image>
+#include <osg/Math>
 #include <osg/Group>
 #include <osg/NodeVisitor>
 
@@ -216,6 +217,66 @@ namespace MWRender
             return tri;
         }
 
+        // FO3/FONV .lip, as FalloutNV.exe reads it (FUN_004d5350, FUN_004d5570): a 12 byte header (1, the
+        // unpacked size, 1 if packed), then the data, packed by turning each run of zero bytes into 0 and a
+        // uint16 length. Unpacked: frame count, lead-in (negative, in frames), and 16 + 17 floats per frame. The
+        // exe multiplies the three head turns by a constant (degrees to radians).
+        std::shared_ptr<const LipSync> readLip(std::istream& stream, std::string_view name)
+        {
+            std::uint32_t header[3];
+            stream.read(reinterpret_cast<char*>(header), sizeof(header));
+            if (!stream || header[0] != 1 || header[1] > (1u << 24))
+            {
+                Log(Debug::Warning) << "Unsupported lip sync file: " << name;
+                return nullptr;
+            }
+            std::vector<char> data;
+            data.reserve(header[1]);
+            if (header[2] & 1)
+            {
+                char c = 0;
+                while (data.size() < header[1] && stream.get(c))
+                {
+                    if (c != 0)
+                    {
+                        data.push_back(c);
+                        continue;
+                    }
+                    std::uint16_t run = 0;
+                    stream.read(reinterpret_cast<char*>(&run), sizeof(run));
+                    data.insert(data.end(), run, 0);
+                }
+            }
+            else
+            {
+                data.resize(header[1]);
+                stream.read(data.data(), data.size());
+            }
+            if (data.size() < 8)
+            {
+                Log(Debug::Warning) << "Truncated lip sync file: " << name;
+                return nullptr;
+            }
+            std::uint32_t count = 0;
+            std::int32_t leadIn = 0;
+            std::memcpy(&count, data.data(), 4);
+            std::memcpy(&leadIn, data.data() + 4, 4);
+            auto lip = std::make_shared<LipSync>();
+            lip->mLeadIn = leadIn < 0 ? -leadIn / LipSync::sFrameRate : 0.f;
+            const std::size_t frameSize = sizeof(LipSync::Frame);
+            if (count > 1000000 || data.size() < 8 + count * frameSize)
+            {
+                Log(Debug::Warning) << "Truncated lip sync file: " << name;
+                return nullptr;
+            }
+            lip->mFrames.resize(count);
+            std::memcpy(lip->mFrames.data(), data.data() + 8, count * frameSize);
+            for (auto& frame : lip->mFrames)
+                for (std::size_t i = 30; i < 33; ++i)
+                    frame[i] = osg::DegreesToRadians(frame[i]);
+            return lip;
+        }
+
         template <class T, class Read>
         std::shared_ptr<const T> getCached(const VFS::Path::Normalized& path, const VFS::Manager& vfs, Read read)
         {
@@ -377,6 +438,23 @@ namespace MWRender
             }
         }
         return result;
+    }
+
+    const std::array<std::string_view, 16> sLipSyncPhonemes = { "Aah", "BigAah", "BMP", "ChJSh", "DST", "Ee", "Eh",
+        "FV", "I", "K", "N", "Oh", "OohQ", "R", "Th", "W" };
+
+    const std::array<std::string_view, 14> sLipSyncModifiers = { "BlinkLeft", "BlinkRight", "BrowDownLeft",
+        "BrowDownRight", "BrowInLeft", "BrowInRight", "BrowUpLeft", "BrowUpRight", "LookDown", "LookLeft", "LookRight",
+        "LookUp", "SquintLeft", "SquintRight" };
+
+    std::shared_ptr<const LipSync> getLipSync(std::string_view voiceFile, const VFS::Manager& vfs)
+    {
+        std::string path = VFS::Path::normalizeFilename(voiceFile);
+        const std::size_t dot = path.find_last_of('.');
+        if (dot == std::string::npos)
+            return nullptr;
+        path.replace(dot, std::string::npos, ".lip");
+        return getCached<LipSync>(VFS::Path::Normalized(path), vfs, readLip);
     }
 
     struct FaceMorphs::Target

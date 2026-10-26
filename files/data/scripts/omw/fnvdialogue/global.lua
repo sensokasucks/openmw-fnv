@@ -961,6 +961,9 @@ local function nextResponse(line)
     local ai = core.obscript.ai
     if ai and ai.setEmotion and line.speaker:isValid() and types.ESM4NPC.objectIsInstance(line.speaker) then
         ai.setEmotion(line.speaker, response.emotion or 0, response.emotionValue or 0)
+        if line.voiced and ai.startLipSync then
+            ai.startLipSync(line.speaker, file)
+        end
     end
     if line.subtitles and text ~= '' then
         world.players[1]:sendEvent('FNVSubtitle', { speaker = speakerName(line.speaker), text = text })

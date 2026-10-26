@@ -365,6 +365,15 @@ namespace MWRender
         mSilentTime = 0.f;
     }
 
+    void ESM4NpcAnimation::startLipSync(std::string_view voiceFile)
+    {
+        mLipSync = getLipSync(voiceFile, *mResourceSystem->getVFS());
+        mLipSyncTime = mLipSync ? mLipSync->mLeadIn : 0.f;
+        Log(Debug::Verbose) << "Lip sync for " << voiceFile << ": "
+                            << (mLipSync ? std::to_string(mLipSync->mFrames.size()) + " frames" : "none");
+        mSilentTime = 0.f;
+    }
+
     void ESM4NpcAnimation::updateFace(float duration)
     {
         if (mFace == nullptr || mFace->empty())
@@ -380,9 +389,27 @@ namespace MWRender
         }
         std::uniform_real_distribution<float> random(0.f, 1.f);
 
-        // Mouth: opens with the loudness of the voice line, quickly, and closes a little slower.
         const MWBase::SoundManager* sounds = MWBase::Environment::get().getSoundManager();
         const bool talking = sounds->sayActive(mPtr);
+
+        // The line's lip sync, if it has one, drives the mouth, brows and eyes frame by frame.
+        const LipSync::Frame* lipFrame = nullptr;
+        LipSync::Frame interpolated{};
+        if (mLipSync != nullptr && (!talking || mLipSyncTime >= mLipSync->getDuration()))
+            mLipSync = nullptr;
+        if (mLipSync != nullptr)
+        {
+            mLipSyncTime += duration;
+            const float position = std::max(0.f, mLipSyncTime * LipSync::sFrameRate);
+            const std::size_t first = std::min(static_cast<std::size_t>(position), mLipSync->mFrames.size() - 1);
+            const std::size_t second = std::min(first + 1, mLipSync->mFrames.size() - 1);
+            const float blend = std::min(1.f, position - first);
+            for (std::size_t i = 0; i < interpolated.size(); ++i)
+                interpolated[i] = mLipSync->mFrames[first][i] * (1.f - blend) + mLipSync->mFrames[second][i] * blend;
+            lipFrame = &interpolated;
+        }
+
+        // Without lip sync the mouth opens with the loudness of the voice line, quickly, and closes a little slower.
         const float loudness = talking ? std::clamp(sounds->getSaySoundLoudness(mPtr) * 2.f, 0.f, 1.f) : 0.f;
         const float rate = loudness > mMouthOpen ? 30.f : 12.f;
         mMouthOpen += (loudness - mMouthOpen) * std::min(1.f, duration * rate);
@@ -398,14 +425,22 @@ namespace MWRender
             mVisemeTime = 0.08f + 0.1f * random(mFaceRandom);
         }
         mVisemeBlend = std::min(1.f, mVisemeBlend + duration / 0.07f);
-        for (std::size_t i = 0; i < std::size(sVisemes); ++i)
+        if (lipFrame != nullptr)
         {
-            float weight = 0.f;
-            if (i == mViseme)
-                weight += mVisemeBlend;
-            if (i == mPreviousViseme && i != mViseme)
-                weight += 1.f - mVisemeBlend;
-            mFace->setWeight(sVisemes[i].mMorph, weight * mMouthOpen * sVisemes[i].mWeight);
+            for (std::size_t i = 0; i < sLipSyncPhonemes.size(); ++i)
+                mFace->setWeight(sLipSyncPhonemes[i], (*lipFrame)[i]);
+        }
+        else
+        {
+            for (std::size_t i = 0; i < std::size(sVisemes); ++i)
+            {
+                float weight = 0.f;
+                if (i == mViseme)
+                    weight += mVisemeBlend;
+                if (i == mPreviousViseme && i != mViseme)
+                    weight += 1.f - mVisemeBlend;
+                mFace->setWeight(sVisemes[i].mMorph, weight * mMouthOpen * sVisemes[i].mWeight);
+            }
         }
 
         // Blinks every two to six seconds, a sixth of a second each
@@ -427,8 +462,10 @@ namespace MWRender
                 blink = 0.f;
             }
         }
-        mFace->setWeight("BlinkLeft", std::max(blink, 0.f));
-        mFace->setWeight("BlinkRight", std::max(blink, 0.f));
+        for (std::size_t i = 2; i < sLipSyncModifiers.size(); ++i)
+            mFace->setWeight(sLipSyncModifiers[i], lipFrame ? (*lipFrame)[16 + i] : 0.f);
+        mFace->setWeight("BlinkLeft", std::max(blink, lipFrame ? (*lipFrame)[16] : 0.f));
+        mFace->setWeight("BlinkRight", std::max(blink, lipFrame ? (*lipFrame)[17] : 0.f));
 
         // Mood: shows while the line is spoken and fades a couple of seconds after
         mSilentTime = talking ? 0.f : mSilentTime + duration;
