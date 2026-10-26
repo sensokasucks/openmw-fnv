@@ -87,6 +87,8 @@
 #include <components/esm4/loadrcpe.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
+#include <components/esm4/loadaloc.hpp>
+#include <components/esm4/loadmset.hpp>
 #include <components/esm4/loadmusc.hpp>
 #include <components/esm4/loadnavm.hpp>
 #include <components/esm4/loadnote.hpp>
@@ -107,6 +109,7 @@
 #include <components/esm4/loadsoun.hpp>
 #include <components/esm4/loadspel.hpp>
 #include <components/esm4/loadstat.hpp>
+#include <components/esm4/loadtact.hpp>
 #include <components/esm4/loadterm.hpp>
 #include <components/esm4/loadtree.hpp>
 #include <components/esm4/loadtxst.hpp>

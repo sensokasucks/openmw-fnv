@@ -265,6 +265,7 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XRDO"): // FO3
             {
                 // FIXME: completely different meaning in FO4
+                mRadio.present = true;
                 reader.get(mRadio.rangeRadius);
                 reader.get(mRadio.broadcastRange);
                 reader.get(mRadio.staticPercentage);
@@ -311,7 +312,12 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("LNAM"): // lighting template formId
             case ESM::fourCC("XLIG"): // struct, FOV, fade, etc
             case ESM::fourCC("XEMI"): // LIGH formId
-            case ESM::fourCC("XRDS"): // Radius or Radiance
+            case ESM::fourCC("XRDS"): // Radius or Radiance; FONV audio markers: the controller's radius
+                if (subHdr.dataSize == 4)
+                    reader.get(mRadius);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XRGB"):
             case ESM::fourCC("XRGD"): // tangent data?
             case ESM::fourCC("XALP"): // alpha cutoff
@@ -366,10 +372,28 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XCLP"): // FO3
             case ESM::fourCC("SCDA"): // FO3
             case ESM::fourCC("RCLR"): // FO3
-            case ESM::fourCC("BNAM"): // FONV
-            case ESM::fourCC("MMRK"): // FONV
-            case ESM::fourCC("MNAM"): // FONV
-            case ESM::fourCC("NNAM"): // FONV
+            case ESM::fourCC("MMRK"): // FONV audio marker
+                mIsAudioMarker = true;
+                reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("BNAM"): // FONV audio marker flags
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioMarkerFlags);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("MNAM"): // FONV audio marker: where the middle layer starts, fraction of the radius
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioLayer2);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("NNAM"): // FONV audio marker: where the inner layer starts
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioLayer3);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XATO"): // FONV
             case ESM::fourCC("SCRV"): // FONV
             case ESM::fourCC("SCVR"): // FONV

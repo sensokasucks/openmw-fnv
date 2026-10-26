@@ -271,7 +271,10 @@ local functions = {}
 functions[72] = function(cond, obj) -- GetIsID
     if isPlayer(obj) then return formIndex(cond.param1) == 0x7 end
     local a = actorData(obj)
-    return a ~= nil and a.recordId == cond.param1Form
+    if a == nil then -- talking activators (radio stations) and other objects
+        return obj ~= nil and tostring(obj.recordId):lower() == tostring(cond.param1Form):lower()
+    end
+    return a.recordId == cond.param1Form
 end
 functions[136] = function(cond, obj) -- GetIsReference
     if isPlayer(obj) then return formIndex(cond.param1) == 0x14 end
@@ -2078,6 +2081,8 @@ local forwardedCommands = {
     showtagskillmenu = true, settagskills = true, showtraitmenu = true, showtraitselectmenu = true,
     showlovetestermenu = true, showlovetestermenuparams = true, showspecialbookmenu = true,
     showspecialbookmenuparams = true, showrecipemenu = true, showbartermenu = true,
+    -- scripts/omw/fnvradio/global.lua
+    setbroadcaststate = true, startradioconversation = true, settalkingactivatoractor = true, playmusic = true,
 }
 
 local function runForwardedCommand(data)
@@ -2267,6 +2272,22 @@ return {
         runResultScript = function(source, label, subject)
             initState()
             runScript(source, label, subject)
+        end,
+        --- The INFO a speaker would say for a topic (form id or editor id), as
+        -- dialogue picks it: quest running, conditions passing with `speaker` as
+        -- subject and the player as target, Random pools. speakerRecordId leaves
+        -- out INFOs meant for others (GetIsID); radio stations pass their TACT.
+        -- @return the INFO table (core.obscript.dialogue.getInfo shape) or nil
+        pickInfo = function(topic, speaker, speakerRecordId)
+            initState()
+            local t = getTopic(topic)
+            if t == nil then return nil end
+            return pickInfoFor(t, speaker, { recordId = speakerRecordId or '' }, world.players[1])
+        end,
+        --- Records that an INFO picked with pickInfo was said (Say Once, add topics).
+        markSaid = function(info)
+            initState()
+            markSaid(info)
         end,
         --- Marks a Say Once INFO (form id, e.g. FormId:0x210558f) as said, as if the
         -- conversation that says it had happened; for tests that jump ahead in a quest.

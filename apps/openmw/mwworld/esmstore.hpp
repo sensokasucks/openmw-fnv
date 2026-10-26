@@ -130,6 +130,9 @@ namespace ESM4
     struct VoiceType;
     struct Potion;
     struct Projectile;
+    struct TalkingActivator;
+    struct MediaLocationController;
+    struct MediaSet;
     struct Quest;
     struct Race;
     struct Reference;
@@ -188,7 +191,8 @@ namespace MWWorld
             Store<ESM4::Weapon>, Store<ESM4::World>, Store<ESM4::GameSetting>, Store<ESM4::FormIdList>,
             Store<ESM4::IdleAnimation>, Store<ESM4::Class>, Store<ESM4::DefaultObj>, Store<ESM4::LightingTemplate>,
             Store<ESM4::Music>, Store<ESM4::PlacedGrenade>, Store<ESM4::PlacedMissile>, Store<ESM4::VoiceType>,
-            Store<ESM4::Perk>, Store<ESM4::Reputation>, Store<ESM4::Projectile>>;
+            Store<ESM4::Perk>, Store<ESM4::Reputation>, Store<ESM4::Projectile>,
+            Store<ESM4::TalkingActivator>, Store<ESM4::MediaLocationController>, Store<ESM4::MediaSet>>;
 
     private:
         template <typename T>

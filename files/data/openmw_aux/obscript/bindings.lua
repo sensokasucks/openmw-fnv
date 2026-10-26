@@ -344,7 +344,8 @@ for _, name in ipairs({ 'SetStage', 'StartQuest', 'StopQuest', 'CompleteQuest', 
     'MoveTo', 'MoveToMarker', 'MoveToMarkerWithFade', 'AddTopic',
     'ShowRaceMenu', 'GetPlayerName', 'ShowNameMenu', 'ShowSPECIALMenu', 'ShowTagSkillMenu', 'SetTagSkills',
     'ShowTraitMenu', 'ShowTraitSelectMenu', 'ShowLoveTesterMenu', 'ShowLoveTesterMenuParams', 'ShowSPECIALBookMenu',
-    'ShowSPECIALBookMenuParams', 'ShowRecipeMenu', 'ShowBarterMenu' }) do
+    'ShowSPECIALBookMenuParams', 'ShowRecipeMenu', 'ShowBarterMenu',
+    'SetBroadcastState', 'StartRadioConversation', 'SetTalkingActivatorActor', 'PlayMusic' }) do
     obs.bind(name, function(...)
         local args = { ... }
         local n = select('#', ...)

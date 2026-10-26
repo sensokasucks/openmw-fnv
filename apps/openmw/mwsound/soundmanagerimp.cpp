@@ -362,6 +362,89 @@ namespace MWSound
         mActiveSaySounds.emplace(nullptr, SaySound{ nullptr, std::move(sound) });
     }
 
+    void SoundManager::sayFrom(const MWWorld::ConstPtr& ptr, VFS::Path::NormalizedView filename, float offset,
+        float volume, float minDistance, float maxDistance)
+    {
+        if (!mOutput->isInitialized())
+            return;
+
+        DecoderPtr decoder = loadVoice(filename);
+        if (!decoder)
+            return;
+
+        if (offset > 0.f)
+        {
+            // decode and drop what was broadcast before
+            int rate = 0;
+            ChannelConfig chans;
+            SampleType type;
+            decoder->getInfo(&rate, &chans, &type);
+            std::size_t skip = framesToBytes(static_cast<std::size_t>(offset * rate), chans, type);
+            std::vector<char> scratch(1 << 16);
+            while (skip > 0)
+            {
+                const std::size_t got = decoder->read(scratch.data(), std::min(skip, scratch.size()));
+                if (got == 0)
+                    return; // past the end
+                skip -= got;
+            }
+        }
+
+        stopSay(ptr);
+        const bool local = ptr.isEmpty() || ptr == MWMechanics::getPlayer();
+        StreamPtr sound = getStreamRef();
+        bool played;
+        if (local)
+        {
+            sound->init([&] {
+                SoundParams params;
+                params.mVolume = volume;
+                params.mBaseVolume = volumeFromType(Type::Voice);
+                params.mFlags = PlayMode::NoEnv | Type::Voice | Play_2D;
+                return params;
+            }());
+            played = mOutput->streamSound(std::move(decoder), sound.get(), true);
+        }
+        else
+        {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            static const float fAudioVoiceDefaultMinDistance
+                = world->getStore().get<ESM::GameSetting>().find("fAudioVoiceDefaultMinDistance")->mValue.getFloat();
+            static const float fAudioVoiceDefaultMaxDistance
+                = world->getStore().get<ESM::GameSetting>().find("fAudioVoiceDefaultMaxDistance")->mValue.getFloat();
+            const float minDist = std::max(minDistance > 0.f ? minDistance : fAudioVoiceDefaultMinDistance, 1.f);
+            const float maxDist = std::max(maxDistance > 0.f ? maxDistance : fAudioVoiceDefaultMaxDistance, minDist);
+            sound->init([&] {
+                SoundParams params;
+                params.mPos = world->getActorHeadTransform(ptr).getTrans();
+                params.mVolume = volume;
+                params.mBaseVolume = volumeFromType(Type::Voice);
+                params.mMinDistance = minDist;
+                params.mMaxDistance = maxDist;
+                params.mFlags = PlayMode::Normal | Type::Voice | Play_3D;
+                return params;
+            }());
+            played = mOutput->streamSound3D(std::move(decoder), sound.get(), true);
+        }
+        if (!played)
+            return;
+
+        if (ptr.isEmpty())
+            mActiveSaySounds.emplace(nullptr, SaySound{ nullptr, std::move(sound) });
+        else
+            mSaySoundsQueue.emplace(ptr.mRef, SaySound{ ptr.mCell, std::move(sound) });
+    }
+
+    void SoundManager::setSayVolume(const MWWorld::ConstPtr& ptr, float volume)
+    {
+        for (SaySoundMap* map : { &mSaySoundsQueue, &mActiveSaySounds })
+        {
+            const auto it = map->find(ptr.mRef);
+            if (it != map->end())
+                it->second.mStream->setVolume(volume);
+        }
+    }
+
     bool SoundManager::sayDone(const MWWorld::ConstPtr& ptr) const
     {
         SaySoundMap::const_iterator snditer = mActiveSaySounds.find(ptr.mRef);

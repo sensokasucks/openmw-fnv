@@ -646,7 +646,8 @@ namespace MWLua
 
         // Voice file of one response of an INFO said by this NPC or creature, nil when it has none:
         // sound\voice\<plugin>\<voice type>\<quest>_<topic>_<INFO id>_<response>.ogg, lower case, with the
-        // quest editor id cut to 10 characters, the topic's to 20 and the INFO id without its load-order byte
+        // quest and topic editor ids cut to 10 and 15 characters when together longer than 25, and the INFO id without
+        // its load-order byte
         // (as the files in Fallout - Voices1.bsa are named).
         api["getVoiceFile"] = [](std::string_view infoId, const Object& speaker,
                                   int response) -> sol::optional<std::string> {
@@ -670,8 +671,16 @@ namespace MWLua
                 return sol::nullopt;
             char id[16];
             std::snprintf(id, sizeof(id), "%08x", info->mId.mIndex & 0xFFFFFF);
+            // the quest and topic editor ids are cut to 10 and 15 characters when together longer than 25
+            std::string questName = quest->mEditorId;
+            std::string topicName = topic->mEditorId;
+            if (questName.size() + topicName.size() > 25)
+            {
+                questName = questName.substr(0, 10);
+                topicName = topicName.substr(0, 15);
+            }
             std::string path = "sound\\voice\\" + files[info->mId.mContentFile] + "\\" + voiceType->mEditorId + "\\"
-                + quest->mEditorId.substr(0, 10) + "_" + topic->mEditorId.substr(0, 20) + "_" + id + "_"
+                + questName + "_" + topicName + "_" + id + "_"
                 + std::to_string(response) + ".ogg";
             path = Misc::StringUtils::lowerCase(path);
             if (!MWBase::Environment::get().getResourceSystem()->getVFS()->exists(VFS::Path::Normalized(path)))

@@ -76,6 +76,7 @@
 #include "obscriptaibindings.hpp"
 #include "obscriptcombatbindings.hpp"
 #include "obscriptdialoguebindings.hpp"
+#include "obscriptradiobindings.hpp"
 #include "obscripteffectbindings.hpp"
 #include "obscriptstatsbindings.hpp"
 
@@ -805,6 +806,7 @@ namespace MWLua
         api["stats"] = initObScriptStatsBindings(context);
         api["combat"] = initObScriptCombatBindings(context);
         api["effects"] = initObScriptEffectBindings(context);
+        api["radio"] = initObScriptRadioBindings(context);
 
         return LuaUtil::makeReadOnly(api);
     }

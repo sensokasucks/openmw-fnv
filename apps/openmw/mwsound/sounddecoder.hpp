@@ -47,6 +47,8 @@ namespace MWSound
         virtual size_t read(char* buffer, size_t bytes) = 0;
         virtual void readAll(std::vector<char>& output);
         virtual size_t getSampleOffset() = 0;
+        /// Length of the opened file in seconds, negative when the container does not say.
+        virtual double getDuration() { return -1.0; }
 
         SoundDecoder(const VFS::Manager* resourceMgr)
             : mResourceMgr(resourceMgr)

@@ -195,6 +195,10 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvcrafting/player.lua
     scripts/omw/fnvpipboy/global.lua
     scripts/omw/fnvpipboy/player.lua
+    scripts/omw/fnvradio/global.lua
+    scripts/omw/fnvradio/player.lua
+    scripts/omw/fnvmusic/global.lua
+    scripts/omw/fnvmusic/player.lua
     scripts/omw/fnvstats.lua
     scripts/omw/fnvcharacter/rules.lua
     scripts/omw/fnvcharacter/global.lua

@@ -58,6 +58,7 @@ namespace MWLua
         constexpr std::string_view ESM4Static = "ESM4Static";
         constexpr std::string_view ESM4StaticCollection = "ESM4StaticCollection";
         constexpr std::string_view ESM4Note = "ESM4Note";
+        constexpr std::string_view ESM4TalkingActivator = "ESM4TalkingActivator";
         constexpr std::string_view ESM4Terminal = "ESM4Terminal";
         constexpr std::string_view ESM4Tree = "ESM4Tree";
         constexpr std::string_view ESM4Weapon = "ESM4Weapon";
@@ -111,6 +112,7 @@ namespace MWLua
             { ESM::REC_STAT4, ObjectTypeName::ESM4Static },
             { ESM::REC_SCOL4, ObjectTypeName::ESM4StaticCollection },
             { ESM::REC_NOTE4, ObjectTypeName::ESM4Note },
+            { ESM::REC_TACT4, ObjectTypeName::ESM4TalkingActivator },
             { ESM::REC_TERM4, ObjectTypeName::ESM4Terminal },
             { ESM::REC_TREE4, ObjectTypeName::ESM4Tree },
             { ESM::REC_WEAP4, ObjectTypeName::ESM4Weapon },
@@ -266,6 +268,7 @@ namespace MWLua
         addType(ObjectTypeName::ESM4StaticCollection, { ESM::REC_SCOL4 });
         addESM4NoteBindings(addType(ObjectTypeName::ESM4Note, { ESM::REC_NOTE4 }), context);
         addESM4TerminalBindings(addType(ObjectTypeName::ESM4Terminal, { ESM::REC_TERM4 }), context);
+        addType(ObjectTypeName::ESM4TalkingActivator, { ESM::REC_TACT4 });
         addType(ObjectTypeName::ESM4Tree, { ESM::REC_TREE4 });
         addType(ObjectTypeName::ESM4Weapon, { ESM::REC_WEAP4 });
 

@@ -19,7 +19,10 @@
 -- must not, so I.FNVPipBoy.setPauseWhileOpen(false) keeps it running (saved
 -- with the game).
 --
--- Not done yet: the radio, item condition, the limb
+-- DATA > Radio lists the stations picked up here (scripts/omw/fnvradio);
+-- click one to tune in, again to turn the radio off.
+--
+-- Not done yet: item condition, the limb
 -- condition figure on the Status page, the 3D Pip-Boy on the arm.
 --
 -- From the Lua console (`luap`):
@@ -83,11 +86,12 @@ local TABS = {
         { id = 'weapon', name = 'Weapons' }, { id = 'apparel', name = 'Apparel' }, { id = 'aid', name = 'Aid' },
         { id = 'misc', name = 'Misc' }, { id = 'ammo', name = 'Ammo' } } },
     { id = 'data', name = 'DATA', subs = { { id = 'local', name = 'Local Map' }, { id = 'map', name = 'World Map' }, { id = 'quests', name = 'Quests' },
-        { id = 'notes', name = 'Notes' } } },
+        { id = 'notes', name = 'Notes' }, { id = 'radio', name = 'Radio' } } },
 }
 
 local element = nil
 local open = false
+local radioPageTime = 0
 local closingByScript = false
 local pauseWhileOpen = true
 local tabIndex = 1
@@ -409,6 +413,17 @@ local function noteRows()
     return list
 end
 
+-- Stations the Pip-Boy picks up here (scripts/omw/fnvradio/player.lua); the tuned one is marked.
+local function radioRows()
+    local list = {}
+    local r = I.FNVRadio
+    for _, s in ipairs(r and r.getStations() or {}) do
+        list[#list + 1] = { label = s.name, station = s, active = s.tuned }
+    end
+    if #list == 0 then list[1] = { label = 'No signal.', dim = true } end
+    return list
+end
+
 -- ------------------------------------------------------------ actions
 
 local render
@@ -443,6 +458,8 @@ local function activate(row)
         playSound('ui_pipboy_select')
     elseif row.note and row.note.noteType == 'Sound' and row.note.sound then
         pcall(ambient.playSound, row.note.sound)
+    elseif row.station and I.FNVRadio then
+        I.FNVRadio.tune(row.station.id) -- the tuned one again turns the radio off
     end
     render()
 end
@@ -482,6 +499,7 @@ local function buildRows()
     if sub == 'general' then return generalRows() end
     if sub == 'quests' then return questRows() end
     if sub == 'notes' then return noteRows() end
+    if sub == 'radio' then return radioRows() end
     if sub == 'map' or sub == 'local' then return {} end
     return itemRows(sub)
 end
@@ -588,6 +606,28 @@ local function detailPanel(row, width, height)
             content[#content + 1] = text(row.active and 'Shown on the compass' or 'Click) Show on the compass', {
                 position = v2(0, height - 20), size = v2(width, 20), textSize = SMALL, textColor = dimColor })
         end
+    elseif row.station then
+        local s = row.station
+        content[#content + 1] = text(s.name, { position = v2(0, y), size = v2(width, 24), textSize = 20,
+            textAlignH = ui.ALIGNMENT.Center })
+        y = y + 40
+        -- signal strength, as five bars
+        local bars = math.max(1, math.ceil(s.strength * 5))
+        for i = 1, 5 do
+            local h = 8 + i * 8
+            content[#content + 1] = rect(v2(width / 2 - 70 + (i - 1) * 28, y + 48 - h), v2(20, h), color,
+                i <= bars and 0.9 or 0.15)
+        end
+        y = y + 64
+        local now = row.active and I.FNVRadio.getNowPlaying and I.FNVRadio.getNowPlaying()
+        if now and now ~= '' then
+            content[#content + 1] = text(now, { position = v2(0, y), size = v2(width, height - y - 30),
+                multiline = true, wordWrap = true, textSize = SMALL, textAlignH = ui.ALIGNMENT.Center,
+                textAlignV = ui.ALIGNMENT.Start })
+        end
+        content[#content + 1] = text(row.active and 'Click) Turn the radio off' or 'Click) Tune in', {
+            position = v2(0, height - 20), size = v2(width, 20), textSize = SMALL, textColor = dimColor,
+            textAlignH = ui.ALIGNMENT.Center })
     elseif row.note then
         local rec = row.note
         content[#content + 1] = text(row.label, { position = v2(0, y), size = v2(width, 24), textSize = 20 })
@@ -1199,6 +1239,11 @@ return {
                 if viewRestoreFrames == 0 then viewMode = nil end
             end
             if not open then return end
+            -- the radio page follows the signal and what plays
+            if currentSub() == 'radio' and core.getRealTime() - radioPageTime > 1 then
+                radioPageTime = core.getRealTime()
+                render()
+            end
             if message then
                 messageTime = messageTime - dt
                 if messageTime <= 0 then

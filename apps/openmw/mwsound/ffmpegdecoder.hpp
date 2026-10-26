@@ -113,6 +113,7 @@ namespace MWSound
         size_t read(char* buffer, size_t bytes) override;
         void readAll(std::vector<char>& output) override;
         size_t getSampleOffset() override;
+        double getDuration() override;
 
         FFmpegDecoder& operator=(const FFmpegDecoder& rhs);
         FFmpegDecoder(const FFmpegDecoder& rhs);

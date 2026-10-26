@@ -67,10 +67,11 @@ namespace ESM4
 
     struct RadioStationData
     {
-        float rangeRadius;
+        bool present = false;
+        float rangeRadius = 0.f;
         // 0 radius, 1 everywhere, 2 worldspace and linked int, 3 linked int, 4 current cell only
-        std::uint32_t broadcastRange;
-        float staticPercentage;
+        std::uint32_t broadcastRange = 0;
+        float staticPercentage = 0.f;
         ESM::FormId posReference; // only used if broadcastRange == 0
     };
 
@@ -101,7 +102,15 @@ namespace ESM4
 
         std::int32_t mCount = 1; // only if > 1
 
-        ESM::FormId mAudioLocation;
+        ESM::FormId mAudioLocation; // CNAM: FONV audio marker's media location controller (ALOC)
+
+        // FONV audio markers (MMRK): music of the controller plays within mRadius; the layers start at those
+        // fractions of the radius, counted from the edge
+        bool mIsAudioMarker = false;
+        std::uint32_t mAudioMarkerFlags = 0; // BNAM
+        float mAudioLayer2 = 0.f; // MNAM
+        float mAudioLayer3 = 0.f; // NNAM
+        float mRadius = 0.f; // XRDS
 
         RadioStationData mRadio;
 

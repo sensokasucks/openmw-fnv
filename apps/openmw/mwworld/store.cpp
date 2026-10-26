@@ -1308,3 +1308,6 @@ template class MWWorld::TypedDynamicStore<ESM4::VoiceType>;
 template class MWWorld::TypedDynamicStore<ESM4::Perk>;
 template class MWWorld::TypedDynamicStore<ESM4::Reputation>;
 template class MWWorld::TypedDynamicStore<ESM4::Projectile>;
+template class MWWorld::TypedDynamicStore<ESM4::TalkingActivator>;
+template class MWWorld::TypedDynamicStore<ESM4::MediaLocationController>;
+template class MWWorld::TypedDynamicStore<ESM4::MediaSet>;

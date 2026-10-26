@@ -501,6 +501,17 @@ namespace MWSound
         return static_cast<std::size_t>(mNextPts * mCodecCtx->sample_rate) - delay;
     }
 
+    double FFmpegDecoder::getDuration()
+    {
+        if (!mFormatCtx)
+            return -1.0;
+        if (mFormatCtx->duration != AV_NOPTS_VALUE && mFormatCtx->duration > 0)
+            return static_cast<double>(mFormatCtx->duration) / AV_TIME_BASE;
+        if (mStream != nullptr && *mStream != nullptr && (*mStream)->duration != AV_NOPTS_VALUE)
+            return (*mStream)->duration * av_q2d((*mStream)->time_base);
+        return -1.0;
+    }
+
     FFmpegDecoder::FFmpegDecoder(const VFS::Manager* vfs)
         : SoundDecoder(vfs)
         , mStream(nullptr)

@@ -35,7 +35,11 @@ local function activate(obj, actor, runOnActivateBlock)
     -- NPCs and creatures (which trigger volumes report as the action ref) are
     -- not, and use doors through their AI, so an Activate on their behalf is
     -- skipped.
-    if not types.Actor.objectIsInstance(actor) then return end
+    if not types.Actor.objectIsInstance(actor) then
+        -- `Activate mySelf` switches a radio on (VintageRadioStartOnSCRIPT)
+        if I.FNVRadio and I.FNVRadio.switchRadio and I.FNVRadio.switchRadio(obj) then return end
+        return
+    end
     if runOnActivateBlock then
         obj:activateBy(actor)
     else
