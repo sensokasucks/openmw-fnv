@@ -29,6 +29,12 @@ namespace MWClass
             MWPhysics::PhysicsSystem& physics);
         MWGui::ToolTipInfo getToolTipInfo(std::string_view name, int count);
 
+        // Gives an FO3/FNV NPC or creature the body other actors collide with (see PhysicsSystem::addActorBody).
+        // halfExtents is used when the actor's rendered model has no usable bounds, or always when fromBounds is
+        // false. The body is off for dead actors.
+        void insertActorBody(const MWWorld::Ptr& ptr, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics,
+            osg::Vec3f halfExtents, bool fromBounds);
+
         // Starts the object's ambient loop (ACTI/MSTT looping sound, LIGH sound) at its position. Sounds the game
         // plays at random times (SOUN flag Play At Random) are left out.
         void playLoopingSound(const MWWorld::Ptr& ptr, ESM::FormId sound);

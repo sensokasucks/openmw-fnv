@@ -636,6 +636,7 @@ namespace MWMechanics::ESM4Combat
     void kill(const MWWorld::Ptr& actor, bool instant)
     {
         ESM4Actors::get().stop(actor);
+        MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
             animation->playDeath(instant);
     }

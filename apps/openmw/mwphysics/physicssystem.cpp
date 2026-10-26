@@ -12,7 +12,9 @@
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 #include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
+#include <BulletCollision/CollisionShapes/btCompoundShape.h>
 #include <BulletCollision/CollisionShapes/btConeShape.h>
+#include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionShapes/btSphereShape.h>
 #include <BulletCollision/CollisionShapes/btStaticPlaneShape.h>
 
@@ -584,6 +586,38 @@ namespace MWPhysics
             ptr, shape, mTaskScheduler.get(), canWaterWalk, Settings::game().mActorCollisionShapeType);
 
         mActors.emplace(ptr.mRef, std::move(actor));
+    }
+
+    void PhysicsSystem::addActorBody(
+        const MWWorld::Ptr& ptr, const osg::Vec3f& halfExtents, osg::Quat rotation, bool enabled)
+    {
+        if (ptr.mRef->mData.mPhysicsPostponed || getObject(ptr))
+            return;
+
+        osg::ref_ptr<Resource::BulletShape> shape(new Resource::BulletShape);
+        auto compound = std::make_unique<btCompoundShape>();
+        btTransform transform = btTransform::getIdentity();
+        transform.setOrigin(btVector3(0, 0, halfExtents.z()));
+        compound->addChildShape(transform, new btBoxShape(Misc::Convert::toBullet(halfExtents)));
+        shape->mCollisionShape.reset(compound.release());
+        shape->mCollisionBox.mExtents = halfExtents;
+        shape->mCollisionBox.mCenter = osg::Vec3f(0, 0, halfExtents.z());
+
+        auto obj = std::make_shared<Object>(
+            ptr, Resource::makeInstance(shape), rotation, CollisionType_Actor, mTaskScheduler.get());
+        if (!enabled)
+            mTaskScheduler->setCollisionFilterMask(obj->getCollisionObject(), 0);
+        mObjects.emplace(ptr.mRef, std::move(obj));
+    }
+
+    bool PhysicsSystem::setActorBodyEnabled(const MWWorld::ConstPtr& ptr, bool enabled)
+    {
+        const auto found = mObjects.find(ptr.mRef);
+        if (found == mObjects.end() || !found->second->getShapeInstance()->mFileName.empty())
+            return false;
+        mTaskScheduler->setCollisionFilterMask(found->second->getCollisionObject(),
+            enabled ? CollisionType_Actor | CollisionType_HeightMap | CollisionType_Projectile : 0);
+        return true;
     }
 
     int PhysicsSystem::addProjectile(

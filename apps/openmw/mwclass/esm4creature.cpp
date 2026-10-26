@@ -119,7 +119,8 @@ namespace MWClass
     void ESM4Creature::insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model,
         const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics) const
     {
-        // No collision yet, as for ESM4 NPCs: the skeleton only carries ragdoll shapes.
+        // The skeleton only carries ragdoll shapes: the body is sized from the rendered model.
+        ESM4Impl::insertActorBody(ptr, rotation, physics, osg::Vec3f(24.f, 24.f, 32.f), true);
     }
 
     MWGui::ToolTipInfo ESM4Creature::getToolTipInfo(const MWWorld::ConstPtr& ptr, int count) const

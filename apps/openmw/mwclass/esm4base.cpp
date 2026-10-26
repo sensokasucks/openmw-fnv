@@ -1,5 +1,9 @@
 #include "esm4base.hpp"
 
+#include <algorithm>
+
+#include <osg/ComputeBoundsVisitor>
+
 #include <MyGUI_TextIterator.h>
 #include <MyGUI_UString.h>
 
@@ -20,6 +24,7 @@
 #include "../mwrender/renderinginterface.hpp"
 #include "../mwrender/vismask.hpp"
 
+#include "../mwmechanics/esm4combat.hpp"
 #include "../mwphysics/physicssystem.hpp"
 #include "../mwworld/ptr.hpp"
 
@@ -89,6 +94,25 @@ namespace MWClass
         const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics)
     {
         physics.addObject(ptr, VFS::Path::toNormalized(model), rotation, MWPhysics::CollisionType_World);
+    }
+
+    void ESM4Impl::insertActorBody(const MWWorld::Ptr& ptr, const osg::Quat& rotation,
+        MWPhysics::PhysicsSystem& physics, osg::Vec3f halfExtents, bool fromBounds)
+    {
+        if (osg::Group* baseNode = ptr.getRefData().getBaseNode(); fromBounds && baseNode != nullptr)
+        {
+            // Bounds of the model below the reference's own transform, so unscaled and unrotated
+            osg::ComputeBoundsVisitor visitor;
+            baseNode->traverse(visitor);
+            const osg::BoundingBox& box = visitor.getBoundingBox();
+            if (box.valid() && box.zMax() > 1.f)
+            {
+                const float radius = std::min(box.xMax() - box.xMin(), box.yMax() - box.yMin()) * 0.5f;
+                halfExtents = osg::Vec3f(std::clamp(radius, 8.f, 96.f), std::clamp(radius, 8.f, 96.f),
+                    std::clamp(box.zMax() * 0.5f, 8.f, 256.f));
+            }
+        }
+        physics.addActorBody(ptr, halfExtents, rotation, !MWMechanics::ESM4Combat::isDead(ptr));
     }
 
     MWGui::ToolTipInfo ESM4Impl::getToolTipInfo(std::string_view name, int count)

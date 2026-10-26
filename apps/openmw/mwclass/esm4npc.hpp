@@ -48,10 +48,7 @@ namespace MWClass
         }
 
         void insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
-            MWPhysics::PhysicsSystem& physics) const override
-        {
-            // ESM4Impl::insertObjectPhysics(ptr, getModel(ptr), rotation, physics);
-        }
+            MWPhysics::PhysicsSystem& physics) const override;
 
         bool hasToolTip(const MWWorld::ConstPtr& ptr) const override { return true; }
         MWGui::ToolTipInfo getToolTipInfo(const MWWorld::ConstPtr& ptr, int count) const override

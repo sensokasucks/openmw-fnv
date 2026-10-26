@@ -1488,6 +1488,8 @@ namespace MWWorld
         if (object.getShapeInstance()->mVisualCollisionType != Resource::VisualCollisionType::None)
             return;
         const MWWorld::Ptr ptr = object.getPtr();
+        if (ptr.getType() == ESM::REC_NPC_4 || ptr.getType() == ESM::REC_CREA4)
+            return; // moving actor bodies (PhysicsSystem::addActorBody) stay out of the navmesh
         const DetourNavigator::ObjectShapes shapes(object.getShapeInstance(),
             DetourNavigator::ObjectTransform{ ptr.getRefData().getPosition(), ptr.getCellRef().getScale() });
         mNavigator->updateObject(
@@ -1608,6 +1610,8 @@ namespace MWWorld
             physicActor->enableCollisionMode(internal);
             physicActor->enableCollisionBody(external);
         }
+        else if (physicActor == nullptr)
+            mPhysics->setActorBodyEnabled(ptr, external);
     }
 
     bool World::isActorCollisionEnabled(const MWWorld::Ptr& ptr)
@@ -2657,6 +2661,8 @@ namespace MWWorld
         MWPhysics::Actor* physicActor = mPhysics->getActor(actor);
         if (physicActor)
             physicActor->enableCollisionBody(enable);
+        else
+            mPhysics->setActorBodyEnabled(actor, enable);
     }
 
     static std::optional<ESM::Position> searchMarkerPosition(const CellStore& cellStore, std::string_view editorId)

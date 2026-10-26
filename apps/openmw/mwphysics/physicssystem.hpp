@@ -164,6 +164,11 @@ namespace MWPhysics
         void addObject(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh, osg::Quat rotation,
             int collisionType = CollisionType_World);
         void addActor(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh);
+        // FO3/FNV actors are moved by ESM4Actors, not simulated: they get an upright box that other
+        // actors collide with, centred on the reference and standing on its origin.
+        void addActorBody(const MWWorld::Ptr& ptr, const osg::Vec3f& halfExtents, osg::Quat rotation, bool enabled);
+        // Whether the body of addActorBody blocks other actors; false if ptr has no such body.
+        bool setActorBodyEnabled(const MWWorld::ConstPtr& ptr, bool enabled);
 
         int addProjectile(
             const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool computeRadius);

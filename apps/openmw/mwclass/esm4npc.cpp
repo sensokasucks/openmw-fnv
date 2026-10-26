@@ -200,6 +200,16 @@ namespace MWClass
         return getCustomData(ptr).mAIPackages;
     }
 
+    void ESM4Npc::insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
+        MWPhysics::PhysicsSystem& physics) const
+    {
+        // The skeleton only carries ragdoll shapes, and arms make the model's bounds too wide: a standing
+        // human, about 128 units tall and 40 wide, of the race's height.
+        const ESM4::Race* race = getRace(ptr);
+        const float height = race == nullptr ? 1.f : (isFemale(ptr) ? race->mHeightFemale : race->mHeightMale);
+        ESM4Impl::insertActorBody(ptr, rotation, physics, osg::Vec3f(20.f, 20.f, 64.f * height), false);
+    }
+
     const ESM4::Race* ESM4Npc::getRace(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mRace;
