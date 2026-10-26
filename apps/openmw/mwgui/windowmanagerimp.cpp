@@ -1,6 +1,8 @@
 #include "windowmanagerimp.hpp"
 
 #include <algorithm>
+#include <array>
+#include <format>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -218,6 +220,8 @@ namespace MWGui
         mGui->initialise({});
 
         createTextures();
+        if (sFalloutUi)
+            createFalloutTextures();
 
         MyGUI::LanguageManager::getInstance().eventRequestTag = MyGUI::newDelegate(this, &WindowManager::onRetrieveTag);
 
@@ -311,6 +315,8 @@ namespace MWGui
 
     void WindowManager::initUI()
     {
+        if (mFalloutContent)
+            mLoadingScreen->setTipsReady();
         // Get size info from the Gui object
         int w = MyGUI::RenderManager::getInstance().getViewSize().width;
         int h = MyGUI::RenderManager::getInstance().getViewSize().height;
@@ -2565,6 +2571,54 @@ namespace MWGui
             MyGUI::ITexture* tex = MyGUI::RenderManager::getInstance().createTexture("transparent");
             tex->createManual(8, 8, MyGUI::TextureUsage::Write, MyGUI::PixelFormat::R8G8B8A8);
             setMenuTransparency(Settings::gui().mMenuTransparency);
+        }
+    }
+
+    void WindowManager::createFalloutTextures()
+    {
+        // The frames of the Morrowind windows that FO3/FNV content still uses (settings, console, dialogs) as FNV
+        // draws its boxes: a thin line in the HUD colour, no carving. Each texture keeps the size of the one it
+        // replaces, which the skins' coordinates are made for, and its name, so the skins pick it up.
+        constexpr std::array<std::string_view, 4> families{ "menu_thin_border", "menu_thick_border",
+            "menu_button_frame", "menu_head_block" };
+        constexpr std::array<std::string_view, 9> parts{ "top", "bottom", "left", "right", "top_left_corner",
+            "top_right_corner", "bottom_left_corner", "bottom_right_corner", "middle" };
+        const unsigned char colour[4] = { 255, 182, 66, 255 };
+        for (std::string_view family : families)
+        {
+            for (std::string_view part : parts)
+            {
+                const std::string file = std::format("textures/{}_{}.dds", family, part);
+                if (!mResourceSystem->getVFS()->exists(VFS::Path::Normalized(file)))
+                    continue;
+                osg::ref_ptr<osg::Image> original
+                    = mResourceSystem->getImageManager()->getImage(VFS::Path::Normalized(file));
+                const int width = original ? original->s() : 0;
+                const int height = original ? original->t() : 0;
+                if (width <= 0 || height <= 0)
+                    continue;
+                const bool top = part.starts_with("top");
+                const bool bottom = part.starts_with("bottom");
+                const bool left = part == "left" || part.find("_left") != std::string_view::npos;
+                const bool right = part == "right" || part.find("_right") != std::string_view::npos;
+                const int line = std::min({ 2, width, height });
+
+                MyGUI::ITexture* tex
+                    = MyGUI::RenderManager::getInstance().createTexture(std::format("textures\\{}_{}.dds", family, part));
+                tex->createManual(width, height, MyGUI::TextureUsage::Write, MyGUI::PixelFormat::R8G8B8A8);
+                unsigned char* data = reinterpret_cast<unsigned char*>(tex->lock(MyGUI::TextureUsage::Write));
+                for (int y = 0; y < height; ++y)
+                {
+                    for (int x = 0; x < width; ++x)
+                    {
+                        const bool on = (top && y < line) || (bottom && y >= height - line) || (left && x < line)
+                            || (right && x >= width - line);
+                        for (int c = 0; c < 4; ++c)
+                            *(data++) = on ? colour[c] : 0;
+                    }
+                }
+                tex->unlock();
+            }
         }
     }
 

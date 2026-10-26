@@ -266,6 +266,7 @@ add_component_dir (esm4
     loadnavi
     loadnavm
     loadnote
+    loadlscr
     loadnpc
     loadotft
     loadpack

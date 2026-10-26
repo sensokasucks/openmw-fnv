@@ -473,14 +473,26 @@ namespace MWGui
 
     void HUD::setCrosshairOwned(bool owned)
     {
-        if (owned)
-        {
-            mCrosshair->changeWidgetSkin("HUD_Crosshair_Owned");
-        }
-        else
-        {
-            mCrosshair->changeWidgetSkin("HUD_Crosshair");
-        }
+        if (owned == mCrosshairOwned)
+            return;
+        mCrosshairOwned = owned;
+        applyCrosshairSkin();
+    }
+
+    void HUD::applyCrosshairSkin()
+    {
+        mCrosshair->changeWidgetSkin(mCrosshairOwned ? "HUD_Crosshair_Owned" : "HUD_Crosshair");
+        if (!mFalloutStyle)
+            return;
+        // FNV's reticle (hudtemplates.xml's template_reticle_center): glow_crosshair.dds, or glow_crosshair_filled.dds
+        // here for something owned, from the InterfaceShared.tai atlas (63 pixel squares of the 1024 pixel
+        // InterfaceShared0.dds at 0.812988 / 0.875488, 0.750488), in the HUD colour, red when owned
+        mCrosshair->setImageTexture("textures/interface/interfaceshared0.dds");
+        mCrosshair->setImageCoord(MyGUI::IntCoord(mCrosshairOwned ? 896 : 832, 768, 63, 63));
+        const int size = 48;
+        const MyGUI::IntSize parent = mCrosshair->getParentSize();
+        mCrosshair->setCoord((parent.width - size) / 2, (parent.height - size) / 2, size, size);
+        mCrosshair->setColour(mCrosshairOwned ? MyGUI::Colour(0.95f, 0.25f, 0.15f) : MyGUI::Colour(1.f, 0.714f, 0.259f));
     }
 
     void HUD::setMouseEmulationCursorVisible(bool visible)
@@ -542,6 +554,7 @@ namespace MWGui
     void HUD::setFalloutStyle(bool enabled)
     {
         mFalloutStyle = enabled;
+        applyCrosshairSkin();
     }
 
     void HUD::updatePositions()
