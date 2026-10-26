@@ -260,6 +260,49 @@ local function updateMarkers()
     player:sendEvent('FNVHudMarkers', { markers = markers, quest = questName(rec) })
 end
 
+-- Where a place is on its worldspace's map: { position, worldSpaceId } outside; inside, the outside end of
+-- the door out of its cell (inferred: one door deep); nil if neither is known.
+local function worldPlace(place)
+    if place.isExterior then return { position = place.position, worldSpaceId = place.worldSpaceId } end
+    local cell = cellOf(place)
+    if cell == nil then return nil end
+    local ok, doors = pcall(function() return cell:getAll(types.ESM4Door) end)
+    if not ok then return nil end
+    for _, door in ipairs(doors) do
+        if door.enabled and types.ESM4Door.isTeleport(door) then
+            local dest = types.ESM4Door.destCell(door)
+            if dest and dest.isExterior then
+                return { position = types.ESM4Door.destPosition(door), worldSpaceId = dest.worldSpaceId }
+            end
+        end
+    end
+    return nil
+end
+
+-- The active quest's open objective targets on the world map: { position, worldSpaceId, text }.
+local function worldMarkers()
+    local res = {}
+    local key = activeQuest
+    local data = key and quests:get(key)
+    local rec = key and questRecord(key)
+    if data == nil or rec == nil or not data.running or data.completed then return res end
+    for _, o in ipairs(rec.objectives) do
+        if data.objectives[o.index] == 'displayed' then
+            for _, target in ipairs(o.targets or {}) do
+                local place = findPlace(target.ref)
+                if place and targetPasses(target, place) then
+                    local wp = worldPlace(place)
+                    if wp then
+                        wp.text = o.text
+                        res[#res + 1] = wp
+                    end
+                end
+            end
+        end
+    end
+    return res
+end
+
 return {
     interfaceName = 'FNVHud',
     ---
@@ -277,6 +320,13 @@ return {
         getMarkers = function() return markers end,
         --- Show a notice in the HUD's corner.
         notify = notify,
+        --- The active quest's targets on the world map: { position, worldSpaceId, text }.
+        getWorldMarkers = worldMarkers,
+        --- Where a reference or place is on the world map (see worldPlace), by form id.
+        getWorldPlace = function(formId)
+            local place = findPlace(formId)
+            return place and worldPlace(place)
+        end,
     },
     engineHandlers = {
         onUpdate = function(dt)

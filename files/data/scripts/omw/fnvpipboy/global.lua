@@ -12,6 +12,13 @@
 --   * Aid items are used through the ItemUsage interface (FNV potions are
 --     applied by scripts/omw/fnveffects/global.lua).
 --   * Dropped items land at the player's feet.
+--   * The world map: map markers (REFR XMRK) of the player's worldspace are
+--     seen within iMapMarkerVisibleDistance and discovered within
+--     iMapMarkerRevealDistance (a notice and iXPRewardDiscoverMapMarker XP);
+--     both are saved. Fast travel goes to a discovered marker's linked
+--     XMarkerHeading and moves the clock on by the distance at a walking pace
+--     of 100 units a second (inferred; FalloutNV.esm's FNAM travel flags are
+--     all 0, so discovering is what allows it).
 --
 -- Weapons stay with scripts/omw/fnvcombat/player.lua, which the screen calls
 -- directly.
@@ -19,6 +26,7 @@
 -- From the Lua console (`luag`):
 --   I.FNVPipBoy.wear(world.players[1], 'ArmorLeather')   -- record id or editor id
 --   I.FNVPipBoy.getWorn(world.players[1])
+--   I.FNVPipBoy.discoverAll(world.players[1].cell.worldSpaceId)
 
 local core = require('openmw.core')
 local storage = require('openmw.storage')
@@ -169,7 +177,147 @@ local function effectList(player)
     return res
 end
 
-local function sendData(player)
+-- ------------------------------------------------------------ the world map
+
+-- Map markers the player has seen (shown as undiscovered) and discovered (named, fast travel); saved.
+local seen = {}
+local discovered = {}
+local markerCache = {} -- worldspace id -> list from core.obscript.getMapMarkers
+local discoverTimer = 0
+
+local function gmst(name, default)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    if value == nil then return default end
+    return value
+end
+
+local function markersOf(worldSpaceId)
+    if worldSpaceId == nil or worldSpaceId == '' then return {} end
+    local list = markerCache[worldSpaceId]
+    if list == nil then
+        local ok, res = pcall(obscript.getMapMarkers, worldSpaceId)
+        list = ok and res or {}
+        markerCache[worldSpaceId] = list
+    end
+    return list
+end
+
+-- The worldspace whose map shows `worldSpaceId`: itself, or the parent it borrows the map from.
+local function mapWorld(worldSpaceId)
+    for _ = 1, 4 do
+        local ok, map = pcall(obscript.getWorldMap, worldSpaceId)
+        if not ok or map == nil then return nil end
+        if map.texture ~= '' or map.parent == '' then return worldSpaceId, map end
+        worldSpaceId = map.parent
+    end
+    return nil
+end
+
+-- Where the player is on the world map: outside, where they stand; inside, the outside end of a door out.
+local function playerPlace(player)
+    local cell = player.cell
+    if cell == nil then return nil end
+    if cell.isExterior then
+        return { position = player.position, worldSpaceId = cell.worldSpaceId, yaw = player.rotation:getYaw() }
+    end
+    local ok, doors = pcall(function() return cell:getAll(types.ESM4Door) end)
+    if not ok then return nil end
+    for _, door in ipairs(doors) do
+        if door.enabled and types.ESM4Door.isTeleport(door) then
+            local dest = types.ESM4Door.destCell(door)
+            if dest and dest.isExterior then
+                return { position = types.ESM4Door.destPosition(door), worldSpaceId = dest.worldSpaceId, inside = true }
+            end
+        end
+    end
+    return nil
+end
+
+local function discover(player)
+    local cell = player.cell
+    if cell == nil or not cell.isExterior then return end
+    local visible = gmst('iMapMarkerVisibleDistance', 12000)
+    local reveal = gmst('iMapMarkerRevealDistance', 1600)
+    local origin = player.position
+    for _, m in ipairs(markersOf(cell.worldSpaceId)) do
+        if not discovered[m.id] then
+            local d = (m.position - origin):length()
+            if d <= reveal then
+                discovered[m.id] = true
+                seen[m.id] = true
+                if m.name ~= '' then
+                    player:sendEvent('FNVHudNotify', { text = m.name .. ' discovered', kind = 'message' })
+                end
+                if I.FNVCharacter and I.FNVCharacter.rewardXP then
+                    pcall(I.FNVCharacter.rewardXP, gmst('iXPRewardDiscoverMapMarker', 0))
+                end
+            elseif d <= visible then
+                seen[m.id] = true
+            end
+        end
+    end
+end
+
+local function mapData(player)
+    local here = playerPlace(player)
+    if here == nil then return nil end
+    local ws, map = mapWorld(here.worldSpaceId)
+    if ws == nil then return nil end
+    local markers = {}
+    for _, m in ipairs(markersOf(ws)) do
+        if discovered[m.id] or seen[m.id] or m.visible then
+            markers[#markers + 1] = { id = m.id, name = m.name, type = m.type, position = m.position,
+                discovered = discovered[m.id] and true or false }
+        end
+    end
+    local quest = {}
+    if I.FNVHud and I.FNVHud.getWorldMarkers then
+        for _, q in ipairs(I.FNVHud.getWorldMarkers()) do
+            local qws = mapWorld(q.worldSpaceId)
+            if qws == ws then quest[#quest + 1] = q end
+        end
+    end
+    return { worldSpaceId = ws, map = map, markers = markers, player = here, quest = quest }
+end
+
+local function fastTravel(player, markerId)
+    local marker = nil
+    for _, list in pairs(markerCache) do
+        for _, m in ipairs(list) do
+            if m.id == markerId then marker = m end
+        end
+    end
+    -- FalloutNV.esm leaves the FNAM flags at 0; discovering a marker makes it visible and a travel target
+    if marker == nil or not discovered[markerId] then
+        player:sendEvent('FNVPipBoyMessage', { text = gmst('sNoFastTravelUndiscovered', 'You cannot fast travel there.') })
+        return
+    end
+    local ok, obj = pcall(world.getObjectByFormId, markerId)
+    if not ok or obj == nil or obj.cell == nil then
+        player:sendEvent('FNVPipBoyMessage', { text = 'That place is not loaded.' })
+        return
+    end
+    local from = playerPlace(player)
+    -- the marker's linked reference (XLKR, an XMarkerHeading) is where travellers arrive
+    local position, yaw = marker.position, marker.rotation
+    local linked = obscript.getLinkedRef(obj)
+    local okLinked, dest = pcall(world.getObjectByFormId, linked or '')
+    if linked and okLinked and dest and dest.cell and dest.cell.isExterior then
+        position, yaw = dest.position, dest.rotation:getYaw()
+    end
+    local cell = world.getExteriorCell(math.floor(position.x / 4096), math.floor(position.y / 4096), obj.cell)
+    player:teleport(cell, position, { rotation = util.transform.rotateZ(yaw), onGround = true })
+    -- travel time: the distance at a walking pace of 100 units a second, in game time (inferred)
+    if from then
+        local seconds = (position - from.position):length() / 100
+        local timeScale = 30
+        local okDate, date = pcall(obscript.getGameDate)
+        if okDate and date and date.timeScale then timeScale = date.timeScale end
+        pcall(obscript.advanceTime, seconds * timeScale / 3600)
+    end
+end
+
+local function sendData(player, withMap)
     local activeQuest = I.FNVHud and I.FNVHud.getActiveQuest and I.FNVHud.getActiveQuest() or nil
     local wornList = {}
     for key in pairs(worn) do wornList[#wornList + 1] = key end
@@ -178,6 +326,7 @@ local function sendData(player)
         activeQuest = activeQuest,
         effects = effectList(player),
         worn = wornList,
+        map = withMap and mapData(player) or nil,
     })
 end
 
@@ -209,10 +358,21 @@ return {
             return res
         end,
         isWorn = function(recordId) return recordId ~= nil and worn[recordId:lower()] ~= nil end,
+        --- Mark every map marker of a worldspace as discovered (for testing, like the tmm console command).
+        discoverAll = function(worldSpaceId)
+            for _, m in ipairs(markersOf(worldSpaceId)) do
+                seen[m.id] = true
+                discovered[m.id] = true
+            end
+        end,
     },
     eventHandlers = {
         FNVPipBoyRefresh = function(e)
-            if e.player then sendData(e.player) end
+            if e.player then sendData(e.player, e.map) end
+        end,
+        -- { player, marker = form id }
+        FNVPipBoyFastTravel = function(e)
+            if e.player then fastTravel(e.player, e.marker) end
         end,
         -- { player, item, action = 'wear'|'remove'|'use'|'drop', count }
         FNVPipBoyItem = function(e)
@@ -246,14 +406,19 @@ return {
             if checkTimer > 0 then return end
             checkTimer = 1
             local player = world.players[1]
-            if player then checkWorn(player) end
+            if player then
+                checkWorn(player)
+                discover(player)
+            end
         end,
         onSave = function()
-            return { worn = worn }
+            return { worn = worn, seen = seen, discovered = discovered }
         end,
         -- the DT and DR worn apparel added are saved with the actor values
         onLoad = function(data)
             worn = data and data.worn or {}
+            seen = data and data.seen or {}
+            discovered = data and data.discovered or {}
             publishApparel()
         end,
     },

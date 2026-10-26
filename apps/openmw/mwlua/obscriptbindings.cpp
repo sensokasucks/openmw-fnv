@@ -44,6 +44,7 @@
 #include <components/esm4/loadsoun.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadweap.hpp>
+#include <components/esm4/loadwrld.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
 #include <components/misc/strings/lower.hpp>
@@ -410,6 +411,65 @@ namespace MWLua
             return res;
         };
 
+        // The world map of a worldspace (WRLD form id): { name, texture (ICON, under textures\), width, height
+        // (usable pixels, MNAM), nwCellX, nwCellY, seCellX, seCellY, offsetScale, offsetCellX, offsetCellY (FONV ONAM,
+        // nil without) }; nil for an unknown worldspace.
+        api["getWorldMap"] = [](std::string_view worldSpaceId, sol::this_state s) -> sol::object {
+            const ESM::RefId refId = ESM::RefId::deserializeText(worldSpaceId);
+            const ESM4::World* world
+                = MWBase::Environment::get().getESMStore()->get<ESM4::World>().search(refId);
+            if (world == nullptr)
+                return sol::nil;
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            res["name"] = world->mFullName;
+            res["texture"] = world->mMapFile;
+            res["width"] = world->mMap.width;
+            res["height"] = world->mMap.height;
+            res["nwCellX"] = world->mMap.NWcellX;
+            res["nwCellY"] = world->mMap.NWcellY;
+            res["seCellX"] = world->mMap.SEcellX;
+            res["seCellY"] = world->mMap.SEcellY;
+            res["parent"] = world->mParent.isZeroOrUnset() ? std::string() : ESM::RefId(world->mParent).serializeText();
+            if (world->mMapOffset.present)
+            {
+                res["offsetScale"] = world->mMapOffset.scale;
+                res["offsetCellX"] = world->mMapOffset.cellX;
+                res["offsetCellY"] = world->mMapOffset.cellY;
+            }
+            return res;
+        };
+
+        // Map markers (REFR with XMRK) of a worldspace: a list of { id, name, type (TNAM), visible, canTravel,
+        // position, rotation (z, radians) }.
+        api["getMapMarkers"] = [](std::string_view worldSpaceId, sol::this_state s) {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const ESM::RefId world = ESM::RefId::deserializeText(worldSpaceId);
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const MWWorld::Store<ESM4::Reference>& refs = store.get<ESM4::Reference>();
+            for (size_t i = 0; i < refs.getSize(); ++i)
+            {
+                const ESM4::Reference& ref = *refs.at(i);
+                if (!ref.mIsMapMarker)
+                    continue;
+                const ESM4::Cell* cell = store.get<ESM4::Cell>().search(ref.mParent);
+                if (cell == nullptr || !cell->isExterior() || cell->mParent != world)
+                    continue;
+                sol::table t(lua, sol::create);
+                t["id"] = ESM::RefId(ref.mId).serializeText();
+                t["editorId"] = ref.mEditorId;
+                t["name"] = ref.mFullName;
+                t["type"] = ref.mMapMarker & 0xff;
+                t["visible"] = (ref.mMapMarkerFlags & 0x01) != 0;
+                t["canTravel"] = (ref.mMapMarkerFlags & 0x02) != 0;
+                t["position"] = ref.mPos.asVec3();
+                t["rotation"] = ref.mPos.rot[2];
+                res.add(t);
+            }
+            return res;
+        };
+
         // Form id of the reference's linked reference (XLKR), nil when it has none.
         api["getLinkedRef"] = [](const Object& object) -> sol::optional<std::string> {
             const ESM::FormId linked = object.ptr().getCellRef().getLinkedRef();
@@ -604,6 +664,13 @@ namespace MWLua
                         world->setGlobalInt(name, static_cast<int>(value));
                 },
                 "obscriptSetGameDateAction");
+        };
+
+        // Moves the game clock forward by `hours` with day and month rollover (fast travel, waiting).
+        api["advanceTime"] = [context](double hours) {
+            context.mLuaManager->addAction(
+                [hours] { MWBase::Environment::get().getWorld()->advanceTime(hours, false); },
+                "obscriptAdvanceTimeAction");
         };
 
         // Opt-in runtime tracing (OPENMW_OBSCRIPT_TRACE=1); the Lua sandbox has no os.getenv.

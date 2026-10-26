@@ -7,7 +7,9 @@
 --           Skills, Perks (and traits), General (level, karma, reputations)
 --   ITEMS   Weapons, Apparel, Aid, Misc, Ammo: hover for details, click (or
 --           Enter) to equip, wear, take off or use, R to drop one (shift: all)
---   DATA    Quests (click one to make it the compass's quest), Notes
+--   DATA    World Map (wheel to zoom, drag to move, click a discovered place
+--           twice to fast travel), Quests (click one to make it the compass's
+--           quest), Notes
 --
 -- F1 / F2 / F3 pick STATS / ITEMS / DATA, Left / Right the sub-tab, Up / Down
 -- and the mouse wheel move through the list.
@@ -16,7 +18,7 @@
 -- must not, so I.FNVPipBoy.setPauseWhileOpen(false) keeps it running (saved
 -- with the game).
 --
--- Not done yet: the local and world maps, the radio, item condition, the limb
+-- Not done yet: the local map, the radio, item condition, the limb
 -- condition figure on the Status page, the 3D Pip-Boy on the arm.
 --
 -- From the Lua console (`luap`):
@@ -33,6 +35,7 @@ local storage = require('openmw.storage')
 local types = require('openmw.types')
 local ui = require('openmw.ui')
 local util = require('openmw.util')
+local vfs = require('openmw.vfs')
 local I = require('openmw.interfaces')
 
 local rules = require('scripts.omw.fnvcharacter.rules')
@@ -78,7 +81,8 @@ local TABS = {
     { id = 'items', name = 'ITEMS', subs = {
         { id = 'weapon', name = 'Weapons' }, { id = 'apparel', name = 'Apparel' }, { id = 'aid', name = 'Aid' },
         { id = 'misc', name = 'Misc' }, { id = 'ammo', name = 'Ammo' } } },
-    { id = 'data', name = 'DATA', subs = { { id = 'quests', name = 'Quests' }, { id = 'notes', name = 'Notes' } } },
+    { id = 'data', name = 'DATA', subs = { { id = 'map', name = 'World Map' }, { id = 'quests', name = 'Quests' },
+        { id = 'notes', name = 'Notes' } } },
 }
 
 local element = nil
@@ -477,6 +481,7 @@ local function buildRows()
     if sub == 'general' then return generalRows() end
     if sub == 'quests' then return questRows() end
     if sub == 'notes' then return noteRows() end
+    if sub == 'map' then return {} end
     return itemRows(sub)
 end
 
@@ -644,6 +649,206 @@ local function tabStrip(labels, current, y, onClick, size)
     return content
 end
 
+-- ------------------------------------------------------------ the world map
+
+local MARKER_ICONS = { 'city', 'settlement', 'encampment', 'natural_landmark', 'cave', 'factory', 'monument',
+    'military', 'office', 'ruins_town', 'ruins_urban', 'ruins_sewer', 'metro', 'vault' }
+local MARKER_SIZE = 24
+
+local mapZoom = 0.35 -- part of the map's width on screen
+local mapCenter = nil -- normalized map position in the middle of the view; nil: the player
+local mapDrag = nil -- { start mouse position, start center }
+local hoveredMarker = nil
+local pendingTravel = nil
+
+-- Width and height of a DDS texture, from its header.
+local textureSizes = {}
+local function textureSize(path)
+    if textureSizes[path] == nil then
+        textureSizes[path] = false
+        local ok, file = pcall(vfs.open, path)
+        if ok and file then
+            local header = file:read(20)
+            file:close()
+            if header and #header >= 20 and header:sub(1, 4) == 'DDS ' then
+                local function u32(at)
+                    local a, b, c, d = header:byte(at, at + 3)
+                    return a + b * 256 + c * 65536 + d * 16777216
+                end
+                textureSizes[path] = { x = u32(17), y = u32(13) }
+            end
+        end
+    end
+    return textureSizes[path] or nil
+end
+
+local function mapTexturePath(map)
+    local path = map.texture:gsub('\\', '/'):lower()
+    if not path:find('^textures/') then path = 'textures/' .. path end
+    return path
+end
+
+-- Normalized map position (0..1 across the usable part of the texture) of a world position, from the MNAM
+-- cell bounds; FONV's ONAM scale and cell offsets are applied to the cell coordinates (inferred).
+local function mapPoint(map, position)
+    local cx, cy = position.x / 4096, position.y / 4096
+    if map.offsetScale then
+        cx = cx * map.offsetScale + map.offsetCellX
+        cy = cy * map.offsetScale + map.offsetCellY
+    end
+    local u = (cx - map.nwCellX) / math.max(1, map.seCellX - map.nwCellX)
+    local v = (map.nwCellY - cy) / math.max(1, map.nwCellY - map.seCellY)
+    return u, v
+end
+
+local cropTextures = {}
+local cropCount = 0
+local function cropTexture(path, offset, size)
+    local key = ('%s|%d|%d|%d|%d'):format(path, offset.x, offset.y, size.x, size.y)
+    if cropTextures[key] == nil then
+        if cropCount > 64 then
+            cropTextures = {}
+            cropCount = 0
+        end
+        cropTextures[key] = ui.texture { path = path, offset = offset, size = size }
+        cropCount = cropCount + 1
+    end
+    return cropTextures[key]
+end
+
+local function markerWidget(marker, p)
+    local icon = marker.discovered and MARKER_ICONS[marker.type] or 'undiscovered'
+    local tex = texture('interface/icons/world map/icon_map_' .. (icon or 'undiscovered') .. '.dds')
+    local half = MARKER_SIZE / 2
+    local inner = {}
+    if hoveredMarker == marker.id then inner[#inner + 1] = rect(v2(0, 0), v2(MARKER_SIZE, MARKER_SIZE), color, 0.35) end
+    if tex then
+        inner[#inner + 1] = { type = ui.TYPE.Image, props = { resource = tex, size = v2(MARKER_SIZE, MARKER_SIZE),
+            color = color, alpha = marker.discovered and 1 or 0.6 } }
+    else
+        inner[#inner + 1] = rect(v2(8, 8), v2(8, 8), color)
+    end
+    return {
+        type = ui.TYPE.Widget,
+        props = { position = p - v2(half, half), size = v2(MARKER_SIZE, MARKER_SIZE) },
+        content = ui.content(inner),
+        events = {
+            focusGain = async:callback(function()
+                if hoveredMarker ~= marker.id then
+                    hoveredMarker = marker.id
+                    playSound('ui_pipboy_highlight')
+                    render()
+                end
+            end),
+            mouseClick = async:callback(function()
+                if not marker.discovered then
+                    showMessage(gmst('sNoFastTravelUndiscovered', 'You cannot fast travel to an undiscovered location.'))
+                    render()
+                elseif pendingTravel == marker.id then
+                    pendingTravel = nil
+                    playSound('ui_pipboy_select')
+                    core.sendGlobalEvent('FNVPipBoyFastTravel', { player = self.object, marker = marker.id })
+                    I.FNVPipBoy.close()
+                else
+                    pendingTravel = marker.id
+                    showMessage(('Click again to fast travel to %s.'):format(marker.name))
+                    render()
+                end
+            end),
+        },
+    }
+end
+
+local function mapView(width, height)
+    local content = {}
+    local m = data.map
+    if m == nil or m.map == nil or m.map.texture == '' then
+        content[1] = text('No map here.', { position = v2(0, 0), size = v2(width, 24), textAlignH = ui.ALIGNMENT.Center })
+        return content
+    end
+    local map = m.map
+    local path = mapTexturePath(map)
+    local texSize = textureSize(path)
+    -- MNAM's usable size is in pixels of the 2048 map; FONV ships the 1024 one, so the usable part is
+    -- capped at the texture's size
+    local tw, th = texSize and texSize.x or 1024, texSize and texSize.y or 1024
+    local usable = v2(map.width > 0 and math.min(map.width, tw) or tw, map.height > 0 and math.min(map.height, th) or th)
+    -- the visible part of the usable area, in texture pixels
+    local viewW = math.min(usable.x, usable.x * mapZoom)
+    local viewH = math.min(usable.y, viewW * height / width)
+    viewW = viewH * width / height
+    local center = mapCenter
+    if center == nil then
+        local u, v = mapPoint(map, m.player.position)
+        center = { u = u, v = v }
+    end
+    local cx = math.max(viewW / 2, math.min(usable.x - viewW / 2, center.u * usable.x))
+    local cy = math.max(viewH / 2, math.min(usable.y - viewH / 2, center.v * usable.y))
+    local origin = v2(math.floor(cx - viewW / 2), math.floor(cy - viewH / 2))
+    local tex = cropTexture(path, origin, v2(math.floor(viewW), math.floor(viewH)))
+    local scale = width / viewW
+    local function toScreen(position)
+        local u, v = mapPoint(map, position)
+        return v2((u * usable.x - origin.x) * scale, (v * usable.y - origin.y) * scale)
+    end
+    local function inside(p)
+        return p.x >= 0 and p.y >= 0 and p.x <= width and p.y <= height
+    end
+
+    content[#content + 1] = {
+        type = ui.TYPE.Image,
+        props = { resource = tex, size = v2(width, height), color = color },
+        events = {
+            mousePress = async:callback(function(e)
+                mapDrag = { start = e.position, u = cx / usable.x, v = cy / usable.y }
+            end),
+            mouseRelease = async:callback(function() mapDrag = nil end),
+            mouseMove = async:callback(function(e)
+                if mapDrag == nil then return end
+                local d = e.position - mapDrag.start
+                mapCenter = { u = mapDrag.u - d.x / scale / usable.x, v = mapDrag.v - d.y / scale / usable.y }
+                render()
+            end),
+        },
+    }
+    content[#content + 1] = rect(v2(0, 0), v2(width, 1), color, 0.6)
+    content[#content + 1] = rect(v2(0, height - 1), v2(width, 1), color, 0.6)
+
+    for _, marker in ipairs(m.markers) do
+        local p = toScreen(marker.position)
+        if inside(p) then content[#content + 1] = markerWidget(marker, p) end
+    end
+    -- quest targets: a filled square on a stem, as on the compass
+    for _, q in ipairs(m.quest or {}) do
+        local p = toScreen(q.position)
+        if inside(p) then
+            content[#content + 1] = rect(p - v2(7, 18), v2(14, 14), color)
+            content[#content + 1] = rect(p - v2(1, 4), v2(2, 6), color)
+        end
+    end
+    -- the player: a square with a dark core, and "You"
+    local pp = toScreen(m.player.position)
+    if inside(pp) then
+        content[#content + 1] = rect(pp - v2(7, 7), v2(14, 14), color)
+        content[#content + 1] = rect(pp - v2(3, 3), v2(6, 6), darkColor)
+        content[#content + 1] = text('You', { position = pp + v2(10, -10), textSize = SMALL })
+    end
+
+    local caption = map.name or ''
+    for _, marker in ipairs(m.markers) do
+        if marker.id == hoveredMarker then
+            caption = marker.discovered and marker.name or '???'
+            if marker.discovered then caption = caption .. '    Click) Fast travel' end
+        end
+    end
+    content[#content + 1] = rect(v2(0, height - 26), v2(width, 26), backColor, 0.8)
+    content[#content + 1] = text(caption, { position = v2(8, height - 24), size = v2(width - 16, 22),
+        textAlignH = ui.ALIGNMENT.Center })
+    content[#content + 1] = text('Wheel) Zoom   Drag) Move', { position = v2(width - 220, 4), size = v2(212, 20),
+        textSize = SMALL, textColor = dimColor, textAlignH = ui.ALIGNMENT.End })
+    return content
+end
+
 local function visibleRows(listHeight)
     return math.floor(listHeight / ROW)
 end
@@ -675,6 +880,14 @@ render = function()
         rect(v2(PAD, 58), v2(WIDTH - 2 * PAD, 2), color, 0.6),
     }
 
+    if sub == 'map' then
+        content[#content + 1] = {
+            type = ui.TYPE.Widget,
+            props = { position = v2(PAD, listTop), size = v2(WIDTH - 2 * PAD, listHeight) },
+            content = ui.content(mapView(WIDTH - 2 * PAD, listHeight)),
+        }
+    end
+
     local list = {}
     for i = first, math.min(#rows, first + shown - 1) do
         list[#list + 1] = rowWidget(i, rows[i], (i - first) * ROW, i == sel)
@@ -693,14 +906,15 @@ render = function()
 
     local detailX = PAD + LIST_WIDTH + 40
     local detailWidth = WIDTH - detailX - PAD
-    content[#content + 1] = {
+    if sub ~= 'map' then content[#content + 1] = {
         type = ui.TYPE.Widget,
         props = { position = v2(detailX, listTop), size = v2(detailWidth, listHeight) },
         content = ui.content(detailPanel(rows[sel], detailWidth, listHeight)),
-    }
+    } end
 
     if message then
-        content[#content + 1] = text(message, { position = v2(PAD, HEIGHT - 128), size = v2(WIDTH - 2 * PAD, 20),
+        local messageY = sub == 'map' and 76 or HEIGHT - 128
+        content[#content + 1] = text(message, { position = v2(PAD, messageY), size = v2(WIDTH - 2 * PAD, 20),
             textSize = SMALL, textAlignH = ui.ALIGNMENT.Center })
     end
 
@@ -751,7 +965,7 @@ local function destroy()
 end
 
 local function refresh()
-    core.sendGlobalEvent('FNVPipBoyRefresh', { player = self.object })
+    core.sendGlobalEvent('FNVPipBoyRefresh', { player = self.object, map = true })
 end
 
 local function show(tab)
@@ -814,6 +1028,10 @@ return {
         --- Whether the world pauses while the Pip-Boy is open (on by default; off for co-op).
         setPauseWhileOpen = function(v) pauseWhileOpen = v and true or false end,
         getPauseWhileOpen = function() return pauseWhileOpen end,
+        --- Zoom the world map: the part of the map's width on screen (0.08 .. 1).
+        setMapZoom = function(z) mapZoom = math.max(0.08, math.min(1, z)); render() end,
+        --- For tests: what the global script last sent (quests, effects, worn, map).
+        getData = function() return data end,
         --- For tests: the rows of the current page, { label, value, ... }.
         getRows = function() return rows end,
         --- For tests: pick a tab and sub-tab by id, select row `index` and activate it.
@@ -863,6 +1081,11 @@ return {
         end,
         onMouseWheel = function(vertical)
             if not open or vertical == 0 then return end
+            if currentSub() == 'map' then
+                mapZoom = math.max(0.08, math.min(1, mapZoom * (vertical > 0 and 0.8 or 1.25)))
+                render()
+                return
+            end
             moveSelection(vertical > 0 and -1 or 1)
         end,
         onFrame = function(dt)

@@ -246,9 +246,11 @@ void ESM4::Reference::load(ESM4::Reader& reader)
                 break; // all have mBaseObj 0x00000010 "MapMarker"
             case ESM::fourCC("FNAM"):
             {
-                // std::cout << "REFR " << ESM::printName(subHdr.typeId) << " skipping..."
-                // << subHdr.dataSize << std::endl;
-                reader.skipSubRecordData();
+                // FO3/FONV map marker flags: 0x01 visible, 0x02 can travel to, 0x04 "show all" hidden
+                if (mIsMapMarker && subHdr.dataSize == 1)
+                    reader.get(mMapMarkerFlags);
+                else
+                    reader.skipSubRecordData();
                 break;
             }
             case ESM::fourCC("XTRG"): // formId

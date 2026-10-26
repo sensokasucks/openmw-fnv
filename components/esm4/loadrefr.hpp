@@ -94,7 +94,8 @@ namespace ESM4
         std::int32_t mFactionRank = -1;
 
         bool mIsMapMarker = false;
-        std::uint16_t mMapMarker;
+        std::uint16_t mMapMarker = 0; // type; FO3/FONV keep it in the low byte
+        std::uint8_t mMapMarkerFlags = 0;
 
         EnableParent mEsp;
 
