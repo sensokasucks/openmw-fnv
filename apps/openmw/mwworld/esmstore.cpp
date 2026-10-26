@@ -377,6 +377,7 @@ namespace MWWorld
             case ESM::REC_MISC4:
             case ESM::REC_MSTT4:
             case ESM::REC_NOTE4:
+            case ESM::REC_LSCR4:
             case ESM::REC_NPC_4:
             case ESM::REC_PROJ4:
             case ESM::REC_SCOL4:

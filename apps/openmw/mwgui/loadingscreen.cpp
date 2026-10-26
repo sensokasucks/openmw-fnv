@@ -24,6 +24,15 @@
 #include "../mwbase/inputmanager.hpp"
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
+#include "../mwbase/world.hpp"
+#include "../mwworld/cellstore.hpp"
+#include "../mwworld/esmstore.hpp"
+#include "../mwworld/ptr.hpp"
+
+#include <MyGUI_EditBox.h>
+#include <MyGUI_ImageBox.h>
+
+#include <components/esm4/loadlscr.hpp>
 
 #include "backgroundimage.hpp"
 
@@ -86,6 +95,55 @@ namespace MWGui
         if (mResourceSystem->getVFS()->exists(VFS::Path::Normalized(backdrop)))
             mSplashScreens = { std::string(backdrop) };
         mLoadingBox->setVisible(false);
+
+        // loading_menu.xml's tip: a line of text over loading_text_bar.dds near the bottom
+        mTipBar = mMainWidget->createWidgetReal<MyGUI::ImageBox>(
+            "ImageBox", 0.f, 0.8f, 1.f, 0.12f, MyGUI::Align::Stretch, "LoadingTipBar");
+        mTipBar->setImageTexture("textures/interface/loading/loading_text_bar.dds");
+        mTipText = mTipBar->createWidgetReal<MyGUI::EditBox>(
+            "LuaText", 0.15f, 0.1f, 0.7f, 0.8f, MyGUI::Align::Stretch, "LoadingTip");
+        mTipText->setEditStatic(true);
+        mTipText->setEditMultiLine(true);
+        mTipText->setEditWordWrap(true);
+        mTipText->setTextAlign(MyGUI::Align::Center);
+        mTipText->setFontName("FalloutFont2");
+        mTipText->setFontHeight(24);
+        mTipText->setTextColour(MyGUI::Colour(1.f, 0.714f, 0.259f));
+        mTipBar->setVisible(false);
+    }
+
+    void LoadingScreen::showTip()
+    {
+        if (mTipBar == nullptr)
+            return;
+        // a random tip of those for anywhere, or for the cell or worldspace the player is in (LNAM); the
+        // conditions of FO3's records and the 3D scenes of FNV's (WMI1) are not used yet
+        std::vector<const ESM4::LoadScreen*> tips;
+        const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+        ESM::RefId here;
+        ESM::RefId world;
+        if (!player.isEmpty() && player.isInCell())
+        {
+            here = player.getCell()->getCell()->getId();
+            world = player.getCell()->getCell()->getWorldSpace();
+        }
+        for (const ESM4::LoadScreen& tip : MWBase::Environment::get().getESMStore()->get<ESM4::LoadScreen>())
+        {
+            if (tip.mText.empty())
+                continue;
+            const ESM::RefId location = ESM::RefId(tip.mLocation);
+            if (tip.mLocation.isZeroOrUnset() || location == here || location == world)
+                tips.push_back(&tip);
+        }
+        if (tips.empty())
+        {
+            mTipBar->setVisible(false);
+            return;
+        }
+        const ESM4::LoadScreen* tip = tips[Misc::Rng::rollDice(static_cast<int>(tips.size()))];
+        Log(Debug::Verbose) << "Loading screen tip " << tip->mEditorId << " of " << tips.size();
+        mTipText->setCaption(MyGUI::UString(tip->mText));
+        mTipBar->setVisible(true);
     }
 
     void LoadingScreen::setLabel(const std::string& label, bool important)
@@ -182,6 +240,8 @@ namespace MWGui
         {
             changeWallpaper();
         }
+        if (mFalloutStyle && mTipsReady)
+            showTip();
 
         MWBase::Environment::get().getWindowManager()->pushGuiMode(mShowWallpaper ? GM_LoadingWallpaper : GM_Loading);
     }

@@ -58,6 +58,9 @@
 
 #include "mwgui/windowmanagerimp.hpp"
 
+#include <components/fallback/fallback.hpp>
+#include <components/fontloader/fontloader.hpp>
+
 #include "mwlua/luamanagerimp.hpp"
 #include "mwlua/worker.hpp"
 
@@ -827,13 +830,33 @@ void OMW::Engine::prepareEngine()
     mStereoManager->disableStereoForNode(guiRoot);
     rootNode->addChild(guiRoot);
 
+    // FO3/FNV content: the Morrowind windows it still uses take FNV's look (Monofonto, line frames, the HUD
+    // colour for text)
+    const bool fallout = std::any_of(mContentFiles.begin(), mContentFiles.end(), [](const std::string& file) {
+        return Misc::StringUtils::ciEqual(file, "FalloutNV.esm") || Misc::StringUtils::ciEqual(file, "Fallout3.esm");
+    });
+    if (fallout)
+    {
+        Gui::FontLoader::setFalloutDefaultFont(true);
+        MWGui::WindowManager::setFalloutUi(true);
+        // sHUDColor's 255, 182, 66, brighter under the mouse, dimmer when disabled
+        for (const char* name : { "normal", "big_normal", "header", "big_header", "notify", "big_notify", "count",
+                 "positive", "link", "big_link", "journal_link", "journal_topic", "answer", "big_answer" })
+            Fallback::Map::setString(std::string("FontColor_color_") + name, "255,182,66");
+        for (const char* name : { "normal_over", "big_normal_over", "link_over", "big_link_over", "journal_link_over",
+                 "journal_topic_over", "answer_over", "big_answer_over", "active", "active_over", "disabled_over" })
+            Fallback::Map::setString(std::string("FontColor_color_") + name, "255,224,160");
+        for (const char* name : { "normal_pressed", "big_normal_pressed", "link_pressed", "big_link_pressed",
+                 "journal_link_pressed", "journal_topic_pressed", "answer_pressed", "big_answer_pressed",
+                 "active_pressed", "disabled_pressed" })
+            Fallback::Map::setString(std::string("FontColor_color_") + name, "255,240,210");
+        Fallback::Map::setString("FontColor_color_disabled", "128,91,33");
+    }
+
     mWindowManager = std::make_unique<MWGui::WindowManager>(mWindow, mViewer, guiRoot, mResourceSystem.get(),
         mWorkQueue.get(), mCfgMgr.getLogPath(), mScriptConsoleMode, mTranslationDataStorage, mEncoding, mExportFonts,
         Version::getOpenmwVersionDescription(), mCfgMgr);
     mEnvironment.setWindowManager(*mWindowManager);
-    const bool fallout = std::any_of(mContentFiles.begin(), mContentFiles.end(), [](const std::string& file) {
-        return Misc::StringUtils::ciEqual(file, "FalloutNV.esm") || Misc::StringUtils::ciEqual(file, "Fallout3.esm");
-    });
     mWindowManager->setFalloutContent(fallout);
 
     mInputManager = std::make_unique<MWInput::InputManager>(mWindow, mViewer, mScreenCaptureHandler, keybinderUser,

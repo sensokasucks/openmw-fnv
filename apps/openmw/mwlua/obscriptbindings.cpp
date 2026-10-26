@@ -678,6 +678,8 @@ namespace MWLua
                     break;
                 case ESM::REC_BOOK4:
                     describe(*ptr.get<ESM4::Book>()->mBase, ptr.get<ESM4::Book>()->mBase->mIcon);
+                    // the actor value a skill book teaches, -1 for none
+                    res["bookSkill"] = static_cast<int>(ptr.get<ESM4::Book>()->mBase->mData.bookSkill);
                     break;
                 default:
                     break;

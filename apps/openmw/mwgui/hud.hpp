@@ -112,6 +112,9 @@ namespace MWGui
         bool mWorldMouseOver = false;
         bool mIsDrowning = false;
         bool mFalloutStyle = false;
+        bool mCrosshairOwned = false;
+
+        void applyCrosshairSkin();
         bool mSneakHidden = false;
 
         void onWorldClicked(MyGUI::Widget* sender);
