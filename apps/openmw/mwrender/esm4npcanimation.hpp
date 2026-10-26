@@ -164,6 +164,8 @@ namespace MWRender
         std::optional<osg::Vec3f> mLookTarget;
         float mLookYaw = 0.f;
         float mLookPitch = 0.f;
+        // Head pitch, roll and yaw of the lip sync frame being spoken (radians), on top of the look
+        osg::Vec3f mLipTurn;
         osg::ref_ptr<osg::MatrixTransform> mLookBone;
         osg::ref_ptr<osg::Callback> mLookCallback;
 

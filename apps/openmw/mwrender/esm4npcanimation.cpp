@@ -439,6 +439,9 @@ namespace MWRender
                 interpolated[i] = mLipSync->mFrames[first][i] * (1.f - blend) + mLipSync->mFrames[second][i] * blend;
             lipFrame = &interpolated;
         }
+        // The frame's head turn (pitch, roll, yaw); eases back to straight once the line is over
+        const osg::Vec3f lipTurn = lipFrame ? osg::Vec3f((*lipFrame)[30], (*lipFrame)[31], (*lipFrame)[32]) : osg::Vec3f();
+        mLipTurn += (lipTurn - mLipTurn) * std::min(1.f, duration * (lipFrame ? 20.f : 4.f));
 
         // Without lip sync the mouth opens with the loudness of the voice line, quickly, and closes a little slower.
         const float loudness = talking ? std::clamp(sounds->getSaySoundLoudness(mPtr) * 2.f, 0.f, 1.f) : 0.f;
@@ -1372,7 +1375,11 @@ namespace MWRender
         const float factor = std::min(1.f, duration * 4.f);
         mLookYaw += (yaw - mLookYaw) * factor;
         mLookPitch += (pitch - mLookPitch) * factor;
-        if (std::abs(mLookYaw) < 1e-4f && std::abs(mLookPitch) < 1e-4f)
+        // The lip sync's own head movement (nods and tilts while speaking) rides on the look
+        const float totalPitch = mLookPitch + mLipTurn.x();
+        const float totalYaw = mLookYaw + mLipTurn.z();
+        const float roll = mLipTurn.y();
+        if (std::abs(totalYaw) < 1e-4f && std::abs(totalPitch) < 1e-4f && std::abs(roll) < 1e-4f)
             return;
 
         // The sequence's own rotation of the head, turned in the actor's space (as MWRender::RotateController
@@ -1384,7 +1391,8 @@ namespace MWRender
         if (paths.empty())
             return;
         const osg::Quat parent = osg::computeLocalToWorld(paths[0]).getRotate();
-        const osg::Quat turn = osg::Quat(mLookPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(mLookYaw, osg::Vec3f(0, 0, 1));
+        const osg::Quat turn = osg::Quat(totalPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(roll, osg::Vec3f(0, 1, 0))
+            * osg::Quat(totalYaw, osg::Vec3f(0, 0, 1));
         const osg::Quat rotation = getNifRotation(*nifHead) * parent * turn * parent.inverse();
         osg::Matrix matrix = head.getMatrix();
         matrix.setRotate(rotation);
