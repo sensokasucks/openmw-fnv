@@ -76,9 +76,14 @@ namespace MWSound
         }
 
         // Gets the combined volume settings for the given sound type
+        // SoundManager::setDucking's current factor, for all but voices
+        float sDuck = 1.f;
+
         float volumeFromType(Type type)
         {
             float volume = Settings::sound().mMasterVolume;
+            if (type == Type::Sfx || type == Type::Foot || type == Type::Music)
+                volume *= sDuck;
 
             switch (type)
             {
@@ -1183,6 +1188,7 @@ namespace MWSound
         }
 
         updateSounds(duration);
+        updateDucking(duration);
         if (state != MWBase::StateManager::State_NoGame)
         {
             updateRegionSound(duration);
@@ -1190,7 +1196,36 @@ namespace MWSound
         }
     }
 
+    void SoundManager::setDucking(float factor, float seconds)
+    {
+        mDuckTarget = std::clamp(factor, 0.f, 1.f);
+        const float change = std::abs(mDuckTarget - sDuck);
+        mDuckRate = seconds > 0.f ? change / seconds : 0.f;
+        if (mDuckRate <= 0.f && change > 0.f)
+        {
+            sDuck = mDuckTarget;
+            applyBaseVolumes();
+        }
+    }
+
+    void SoundManager::updateDucking(float duration)
+    {
+        if (sDuck == mDuckTarget || mDuckRate <= 0.f)
+            return;
+        const float step = mDuckRate * duration;
+        if (std::abs(mDuckTarget - sDuck) <= step)
+            sDuck = mDuckTarget;
+        else
+            sDuck += sDuck < mDuckTarget ? step : -step;
+        applyBaseVolumes();
+    }
+
     void SoundManager::processChangedSettings(const Settings::CategorySettingVector& settings)
+    {
+        applyBaseVolumes();
+    }
+
+    void SoundManager::applyBaseVolumes()
     {
         if (!mOutput->isInitialized())
             return;

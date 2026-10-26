@@ -439,6 +439,9 @@ namespace MWRender
                 interpolated[i] = mLipSync->mFrames[first][i] * (1.f - blend) + mLipSync->mFrames[second][i] * blend;
             lipFrame = &interpolated;
         }
+        // The frame's head turn (pitch, roll, yaw); eases back to straight once the line is over
+        const osg::Vec3f lipTurn = lipFrame ? osg::Vec3f((*lipFrame)[30], (*lipFrame)[31], (*lipFrame)[32]) : osg::Vec3f();
+        mLipTurn += (lipTurn - mLipTurn) * std::min(1.f, duration * (lipFrame ? 20.f : 4.f));
 
         // Without lip sync the mouth opens with the loudness of the voice line, quickly, and closes a little slower.
         const float loudness = talking ? std::clamp(sounds->getSaySoundLoudness(mPtr) * 2.f, 0.f, 1.f) : 0.f;
@@ -641,9 +644,9 @@ namespace MWRender
             applyFaceGen(*node, headParts[i].mesh, traits);
             addFaceMorphs(*node, headParts[i].mesh);
             // The race picks the skin (old races have their own head texture); the NPC's EYES record picks the
-            // eye colour.
-            if (eyes && (i == 6 || i == 7))
-                overrideDiffuse(*node, eyes->mIcon);
+            // eye colour, and without one the game uses EyeDefault.dds (BSFaceGenManager, FUN_006558b0).
+            if (i == 6 || i == 7)
+                overrideDiffuse(*node, eyes ? std::string_view(eyes->mIcon) : "textures/characters/eyes/eyedefault.dds");
             else if (osg::ref_ptr<osg::Image> skin = getTexture(headParts[i].texture))
             {
                 // The NPC's complexion is morphed onto the race's face texture.
@@ -737,13 +740,16 @@ namespace MWRender
         public:
             // from: the bone's pose when the sequence was replaced. rest: its pose in the skeleton, which a bone
             // the new sequence has no track (or no translation or rotation keys) for goes back to.
+            // started: set once any bone of the blend has been posed, i.e. the switch has been drawn
             BlendFromPose(const osg::Vec3f& fromTranslation, const osg::Quat& fromRotation,
-                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration)
+                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration,
+                std::shared_ptr<bool> started)
                 : mFromTranslation(fromTranslation)
                 , mFromRotation(fromRotation)
                 , mRestTranslation(restTranslation)
                 , mRestRotation(restRotation)
                 , mDuration(duration)
+                , mStarted(std::move(started))
             {
             }
 
@@ -752,6 +758,7 @@ namespace MWRender
                 const double now = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
                 if (!mStart)
                     mStart = now;
+                *mStarted = true;
                 // What the sequence posed the bone in this frame; where it didn't write over the blend of the
                 // frame before, the bone is headed for its rest pose
                 osg::Vec3f translation = node->getMatrix().getTrans();
@@ -782,6 +789,7 @@ namespace MWRender
             osg::Vec3f mRestTranslation;
             osg::Quat mRestRotation;
             float mDuration;
+            std::shared_ptr<bool> mStarted;
             std::optional<double> mStart;
             bool mWritten = false;
             bool mDone = false;
@@ -856,6 +864,9 @@ namespace MWRender
                     mStart = now;
                 const float elapsed
                     = mSkipToEnd ? mDuration : std::min(mDuration, static_cast<float>(now - *mStart));
+                // just short of the end, which a loop-type sequence's own wrap maps back onto its first key
+                if (elapsed >= mDuration && mDuration > 0.01f)
+                    return mReverse ? 0.001f : mDuration - 0.001f;
                 return mReverse ? mDuration - elapsed : elapsed;
             }
 
@@ -872,6 +883,9 @@ namespace MWRender
     {
         // Sequence time counted from the frame the sequence started on, so one-shot sequences (furniture entries,
         // special idles) begin at their first key; looping ones cycle on from there.
+        // A one-shot sequence (mEnd > 0) holds its last frame from there: the AI that played it moves on by its own
+        // clock, a frame or so later, and a sequence whose cycle type is loop would otherwise show its first pose
+        // again for that frame before the next sequence takes over.
         class RelativeTimeSource : public SceneUtil::ControllerSource
         {
         public:
@@ -880,8 +894,11 @@ namespace MWRender
                 const double now = nv->getFrameStamp()->getSimulationTime();
                 if (!mStart)
                     mStart = now;
-                return static_cast<float>(now - *mStart);
+                const float time = static_cast<float>(now - *mStart);
+                return mEnd > 0.f ? std::min(time, mEnd) : time;
             }
+
+            float mEnd = 0.f;
 
         private:
             std::optional<double> mStart;
@@ -908,7 +925,7 @@ namespace MWRender
             playLocomotion();
     }
 
-    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion)
+    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion, bool once)
     {
         if (mDead)
             return 0.f;
@@ -920,8 +937,13 @@ namespace MWRender
         }
         // Replaces any attack in progress; the caller resumes the locomotion when it is done
         mInAction = false;
-        return playKeyframesFONV(
-            path, std::make_shared<RelativeTimeSource>(), !keepRootMotion, sDefaultBlendTime, keepRootMotion);
+        const auto source = std::make_shared<RelativeTimeSource>();
+        const float length
+            = playKeyframesFONV(path, source, !keepRootMotion, sDefaultBlendTime, keepRootMotion);
+        // (just short of the end: a loop's own wrap maps the end itself back onto the first key)
+        if (once && length > 0.01f)
+            source->mEnd = length - 0.001f;
+        return length;
     }
 
     void ESM4NpcAnimation::resumeLocomotion()
@@ -959,20 +981,37 @@ namespace MWRender
         return source->mDuration;
     }
 
+    void ESM4NpcAnimation::setLocomotionDirection(Direction direction)
+    {
+        if (direction == mDirection)
+            return;
+        mDirection = direction;
+        if (mLocomotion != Locomotion::Idle && !mInAction && !mDead)
+            playLocomotion();
+    }
+
     void ESM4NpcAnimation::playLocomotion()
     {
-        switch (mLocomotion)
+        if (mLocomotion == Locomotion::Idle)
         {
-            case Locomotion::Idle:
-                playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
-                break;
-            case Locomotion::Walk:
-                playLoopFONV("mtforward.kf", true);
-                break;
-            case Locomotion::Run:
-                playLoopFONV("mtfastforward.kf", true);
-                break;
+            playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
+            return;
         }
+        static constexpr std::string_view directions[] = { "forward", "backward", "left", "right" };
+        const std::string suffix = std::string(mLocomotion == Locomotion::Run ? "fast" : "")
+            + std::string(directions[static_cast<int>(mDirection)]) + ".kf";
+        // With a weapon drawn the game plays the weapon's own loop where there is one (2hrforward.kf...); the
+        // rest fall back to the plain mt loops.
+        if (mIdleSequence.size() > 6 && Misc::StringUtils::ciEndsWith(mIdleSequence, "aim.kf"))
+        {
+            const std::string weaponLoop = mIdleSequence.substr(0, mIdleSequence.size() - 6) + suffix;
+            if (!findLoopFONV(weaponLoop).empty())
+            {
+                playLoopFONV(weaponLoop, true);
+                return;
+            }
+        }
+        playLoopFONV("mt" + suffix, true);
     }
 
     void ESM4NpcAnimation::setIdleSequence(std::string_view file)
@@ -1018,6 +1057,9 @@ namespace MWRender
         // the whole model hangs off the bone as it is.
         mWeapon = sceneManager->getInstance(templateNode);
         bone->addChild(mWeapon);
+        Log(Debug::Verbose) << "Weapon " << model << " on bone '" << bone->getName() << "' (" << bone->className()
+                            << ") mask " << std::hex << mWeapon->getNodeMask() << std::dec << " parents "
+                            << bone->getNumParents() << " for " << mPtr.toString();
     }
 
     void ESM4NpcAnimation::playDeath(bool instant)
@@ -1075,27 +1117,42 @@ namespace MWRender
         return mLocomotionSpeed;
     }
 
-    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    VFS::Path::Normalized ESM4NpcAnimation::findLoopFONV(std::string_view file) const
     {
-        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
-        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
         const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
         const std::string_view skeleton = skeletonPath.value();
         const size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
-            return;
-        // Walks and runs are per sex (locomotion/male, locomotion/female), the idle is shared
+            return {};
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        // Walks and runs are per sex (locomotion/male, locomotion/female), children have their own
+        // (locomotion/child), the idle is shared
         const std::string dir = std::string(skeleton.substr(0, slash)) + "/locomotion/";
-        VFS::Path::Normalized path(
-            dir + (isFemale() ? "female/" : "male/") + std::string(file));
-        if (!mResourceSystem->getVFS()->exists(path))
+        const ESM4::Race* race = mPtr.getType() == ESM::REC_NPC_4 ? MWClass::ESM4Npc::getRace(mPtr) : nullptr;
+        const bool child = race != nullptr && race->mHeightMale < 0.95f; // the child races are the 0.8 ones
+        VFS::Path::Normalized path;
+        if (child)
+            path = VFS::Path::Normalized(dir + "child/" + std::string(file));
+        if (path.empty() || !vfs.exists(path))
+            path = VFS::Path::Normalized(dir + (isFemale() ? "female/" : "male/") + std::string(file));
+        if (!vfs.exists(path))
             path = VFS::Path::Normalized(dir + std::string(file));
         // Creatures keep their idle next to the skeleton (creatures/nvgecko/mtidle.kf)
-        if (!mResourceSystem->getVFS()->exists(path))
+        if (!vfs.exists(path))
             path = VFS::Path::Normalized(std::string(skeleton.substr(0, slash + 1)) + std::string(file));
-        if (!mResourceSystem->getVFS()->exists(path))
+        if (!vfs.exists(path))
+            return {};
+        return path;
+    }
+
+    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    {
+        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
+        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
+        const VFS::Path::Normalized path = findLoopFONV(file);
+        if (path.empty())
         {
-            Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
+            Log(Debug::Verbose) << "No " << file << " for " << mPtr.getCellRef().getRefId();
             return;
         }
 
@@ -1119,6 +1176,7 @@ namespace MWRender
         // carries the actor with them (a furniture entry or exit): the actor is moved onto the seat as the next
         // sequence starts, and the roots must jump with it.
         std::map<NifOsg::MatrixTransform*, RestPose> blendFrom;
+        std::size_t reusedPoses = 0;
         if (blendTime > 0.f)
         {
             for (auto& [node, callback] : mLoopCallbacks)
@@ -1129,6 +1187,17 @@ namespace MWRender
                 const std::string& name = transform->getName();
                 if ((keepsRootMotion || mKeepsRootMotion) && (name == "Bip01" || name == "Bip01 NonAccum"))
                     continue;
+                // A sequence replaced before it was ever shown (two switches in one frame: an idle, then a walk)
+                // left its bones at rest, not in the pose on screen; blend from what the screen still shows.
+                if (mBlendStarted != nullptr && !*mBlendStarted)
+                {
+                    if (auto shown = mBlendFrom.find(transform); shown != mBlendFrom.end())
+                    {
+                        blendFrom[transform] = shown->second;
+                        ++reusedPoses;
+                        continue;
+                    }
+                }
                 blendFrom[transform] = { transform->getMatrix().getTrans(), getNifRotation(*transform) };
             }
         }
@@ -1223,21 +1292,27 @@ namespace MWRender
         mKeepsRootMotion = keepsRootMotion;
 
         // Last on each bone, after the new tracks (and the root's motion stripping) have posed it
+        auto started = std::make_shared<bool>(false);
         for (const auto& [transform, from] : blendFrom)
         {
             const auto rest = mRestPoses.find(transform);
             if (rest == mRestPoses.end())
                 continue;
-            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(
-                from.mTranslation, from.mRotation, rest->second.mTranslation, rest->second.mRotation, blendTime);
+            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(from.mTranslation, from.mRotation,
+                rest->second.mTranslation, rest->second.mRotation, blendTime, started);
             transform->addUpdateCallback(blend);
             mLoopCallbacks.emplace_back(transform, blend);
         }
+        mBlendStarted = blendFrom.empty() ? nullptr : started;
+        mBlendFrom.clear();
+        for (const auto& [transform, from] : blendFrom)
+            mBlendFrom[transform] = from;
         attachLookCallback();
 
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
                             << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
-                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed;
+                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed
+                            << (reusedPoses > 0 ? ", replacing one not yet shown" : "");
         return duration;
     }
 
@@ -1300,7 +1375,11 @@ namespace MWRender
         const float factor = std::min(1.f, duration * 4.f);
         mLookYaw += (yaw - mLookYaw) * factor;
         mLookPitch += (pitch - mLookPitch) * factor;
-        if (std::abs(mLookYaw) < 1e-4f && std::abs(mLookPitch) < 1e-4f)
+        // The lip sync's own head movement (nods and tilts while speaking) rides on the look
+        const float totalPitch = mLookPitch + mLipTurn.x();
+        const float totalYaw = mLookYaw + mLipTurn.z();
+        const float roll = mLipTurn.y();
+        if (std::abs(totalYaw) < 1e-4f && std::abs(totalPitch) < 1e-4f && std::abs(roll) < 1e-4f)
             return;
 
         // The sequence's own rotation of the head, turned in the actor's space (as MWRender::RotateController
@@ -1312,7 +1391,8 @@ namespace MWRender
         if (paths.empty())
             return;
         const osg::Quat parent = osg::computeLocalToWorld(paths[0]).getRotate();
-        const osg::Quat turn = osg::Quat(mLookPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(mLookYaw, osg::Vec3f(0, 0, 1));
+        const osg::Quat turn = osg::Quat(totalPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(roll, osg::Vec3f(0, 1, 0))
+            * osg::Quat(totalYaw, osg::Vec3f(0, 0, 1));
         const osg::Quat rotation = getNifRotation(*nifHead) * parent * turn * parent.inverse();
         osg::Matrix matrix = head.getMatrix();
         matrix.setRotate(rotation);

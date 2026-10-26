@@ -52,13 +52,26 @@ namespace MWRender
         // FO3/FONV: loops the standing idle or a forward locomotion sequence. With force, the sequence is started
         // again even if it is the current locomotion (after an idle or furniture sequence replaced it).
         void setLocomotion(Locomotion locomotion, bool force = false);
+
+        // Which way the walk and run loops go (mtforward, mtbackward, mtleft, mtright and their fast variants);
+        // the AI only walks forward, the player's body strafes and backs up.
+        enum class Direction
+        {
+            Forward,
+            Backward,
+            Left,
+            Right,
+        };
+        void setLocomotionDirection(Direction direction);
         // FO3/FONV: plays the KF file of an IDLE record (path under meshes/, e.g.
         // characters/_male/idleanims/chair_forwardenter.kf) in place of the locomotion sequence. Looping or
         // one-shot as the sequence's cycle type says. With keepRootMotion the accumulation root ("Bip01") moves
         // with the sequence, as furniture enter/exit sequences carry the actor from the marker to the seat;
         // otherwise it is held in place like a locomotion cycle. Returns the length of the sequence in seconds,
         // 0 if the file is missing.
-        float playIdleFONV(std::string_view model, bool keepRootMotion);
+        // With once, the sequence plays to its end and holds its last frame there (whatever its cycle type) until
+        // the next one replaces it.
+        float playIdleFONV(std::string_view model, bool keepRootMotion, bool once = false);
         // Horizontal distance the accumulation root covers over the sequence last started with keepRootMotion,
         // in skeleton space (x right, y forward).
         osg::Vec3f getRootMotion() const { return mRootMotion; }
@@ -109,6 +122,7 @@ namespace MWRender
         osg::Matrixf mHeadBinding;
 
         Locomotion mLocomotion = Locomotion::Idle;
+        Direction mDirection = Direction::Forward;
         bool mDead = false;
         bool mInAction = false;
         std::string mIdleSequence;
@@ -143,10 +157,15 @@ namespace MWRender
         std::map<const osg::Node*, RestPose> mRestPoses;
         // The current sequence moves the actor with its accumulation root (a furniture entry or exit)
         bool mKeepsRootMotion = false;
+        // The poses the last switch blends from, and whether it has been shown yet
+        std::map<const osg::Node*, RestPose> mBlendFrom;
+        std::shared_ptr<bool> mBlendStarted;
 
         std::optional<osg::Vec3f> mLookTarget;
         float mLookYaw = 0.f;
         float mLookPitch = 0.f;
+        // Head pitch, roll and yaw of the lip sync frame being spoken (radians), on top of the look
+        osg::Vec3f mLipTurn;
         osg::ref_ptr<osg::MatrixTransform> mLookBone;
         osg::ref_ptr<osg::Callback> mLookCallback;
 
@@ -173,6 +192,9 @@ namespace MWRender
         void playLocomotion();
         // stripRootMotion: keep the accumulation root in place, the AI moves the actor
         void playLoopFONV(std::string_view file, bool stripRootMotion);
+        // Where a locomotion loop lives for this actor (locomotion/child, locomotion/male or female, locomotion,
+        // next to the skeleton), or an empty path if it is nowhere
+        VFS::Path::Normalized findLoopFONV(std::string_view file) const;
         // Binds the sequence's tracks to the skeleton, replacing the one played before, which it blends out of over
         // blendTime seconds (the original's fAnimationDefaultBlend) instead of snapping. Returns its length.
         float playKeyframesFONV(const VFS::Path::Normalized& path, std::shared_ptr<SceneUtil::ControllerSource> source,

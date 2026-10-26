@@ -11,6 +11,7 @@
 #include <components/esm4/loadidle.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadpack.hpp>
+#include <components/esm4/loadweap.hpp>
 #include <components/lua/luastate.hpp>
 #include <components/lua/util.hpp>
 
@@ -443,6 +444,33 @@ namespace MWLua
                 },
                 "obscriptAISetPlayerBodyIdleAction");
         };
+        // setPlayerBodyWeapon(weaponRecordId or nil, drawn): the weapon the player's body holds
+        api["setPlayerBodyWeapon"] = [context](sol::optional<std::string> recordId, bool drawn) {
+            std::string model;
+            std::string aimIdle;
+            if (recordId && drawn)
+            {
+                const ESM::RefId refId = ESM::RefId::deserializeText(*recordId);
+                const ESM4::Weapon* weapon = nullptr;
+                if (const ESM::FormId* formId = refId.getIf<ESM::FormId>())
+                    weapon = MWBase::Environment::get().getESMStore()->get<ESM4::Weapon>().search(*formId);
+                if (weapon != nullptr)
+                {
+                    model = weapon->mModel.getOriginal();
+                    // Animation prefixes by DNAM animation type, as MWMechanics::ESM4Combat uses them
+                    static constexpr std::string_view prefixes[] = { "h2h", "1hm", "2hm", "1hp", "1hp", "2hr",
+                        "2ha", "2hr", "2hh", "2hl", "1gt", "1lm", "1md", "1gt" };
+                    const std::uint32_t type = weapon->mHasFO3Data ? weapon->mFO3Data.animType : 3;
+                    aimIdle = std::string(type < std::size(prefixes) ? prefixes[type] : "1hp") + "aim.kf";
+                }
+            }
+            context.mLuaManager->addAction(
+                [model = std::move(model), aimIdle = std::move(aimIdle)] {
+                    MWBase::Environment::get().getWorld()->getRenderingManager()->setPlayerBodyWeapon(model, aimIdle);
+                },
+                "obscriptAISetPlayerBodyWeaponAction");
+        };
+
         api["setPlayerBodyApparel"] = [context](const sol::table& recordIds) {
             std::vector<ESM::FormId> apparel;
             for (const auto& [_, value] : recordIds)

@@ -189,7 +189,7 @@ namespace MWMechanics
         MWRender::ESM4NpcAnimation* animation = getAnimation(moved);
         float length = 0.f;
         if (animation != nullptr && !use.mEnter.empty())
-            length = animation->playIdleFONV(use.mEnter, true);
+            length = animation->playIdleFONV(use.mEnter, true, true);
         Log(Debug::Verbose) << "ESM4 AI: " << moved.getCellRef().getRefNum().toString() << " uses furniture at "
                             << use.mMarker << " (" << use.mEnter << ", " << length << "s)";
         if (length > 0.f)
@@ -235,7 +235,7 @@ namespace MWMechanics
         float length = 0.f;
         MWRender::ESM4NpcAnimation* animation = getAnimation(moved);
         if (animation != nullptr && !use.mExit.empty())
-            length = animation->playIdleFONV(use.mExit, true);
+            length = animation->playIdleFONV(use.mExit, true, true);
         if (length > 0.f)
         {
             state.mUsePhase = UsePhase::Leaving;
@@ -280,7 +280,7 @@ namespace MWMechanics
         if (animation == nullptr)
             return;
         // Seated idles leave the root alone; standing ones may shuffle around, which the actor doesn't follow
-        const float length = animation->playIdleFONV(model, false);
+        const float length = animation->playIdleFONV(model, false, true);
         if (length <= 0.f)
             return;
         state.mIdleTimer = length;

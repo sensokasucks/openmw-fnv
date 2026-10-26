@@ -1,6 +1,7 @@
 -- Dialogue window for FO3/FNV conversations (see scripts/omw/fnvdialogue/global.lua).
 -- Shows the speaker's response and the topics or choices to answer with.
 
+local ambient = require('openmw.ambient')
 local async = require('openmw.async')
 local core = require('openmw.core')
 local ui = require('openmw.ui')
@@ -41,10 +42,27 @@ end
 -- The world goes on while talking, as in the original: the speaker keeps moving,
 -- blinking and talking instead of standing frozen behind the window
 -- (the HUD is hidden meanwhile, as the original hides it behind the dialogue menu).
+-- Other sounds fade down fDialogueFadeDecibels over fDialogueFadeSecondsIn and come back
+-- over fDialogueFadeSecondsOut (Fallout_default.ini [Audio]: 6 dB, 2 s, 1 s); the radio
+-- goes to fRadioDialogMute (0.5) of its volume.
+local FADE_DECIBELS = 6.0
+local FADE_IN = 2.0
+local FADE_OUT = 1.0
+local RADIO_MUTE = 0.5
+
+local function duck(on)
+    local seconds = on and FADE_IN or FADE_OUT
+    if ambient.setDucking then
+        ambient.setDucking(on and 10 ^ (-FADE_DECIBELS / 20) or 1, seconds)
+    end
+    if I.FNVRadio and I.FNVRadio.setMute then I.FNVRadio.setMute(on and RADIO_MUTE or 1, seconds) end
+end
+
 local function setOpen(value)
     open = value
     I.UI.setPauseOnMode('Interface', not value)
     if I.FNVHud then I.FNVHud.setVisible(not value) end
+    duck(value)
     if not value then dialogueCamera.stop() end
 end
 
@@ -65,7 +83,7 @@ local function paragraph(text, color)
         props = {
             text = text,
             font = FONT,
-            textSize = 18,
+            textSize = 20,
             textColor = color or normalColor,
             autoSize = true,
             readOnly = true,
@@ -86,7 +104,7 @@ local function optionLine(text, onClick)
         props = {
             text = text,
             font = FONT,
-            textSize = 18,
+            textSize = 20,
             textColor = normalColor,
             autoSize = true,
         },
@@ -156,7 +174,7 @@ local function show(data)
         props = {
             text = data.speaker or '',
             font = FONT,
-            textSize = 22,
+            textSize = 24,
             textColor = hoverColor,
             autoSize = true,
         },
