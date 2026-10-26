@@ -15,8 +15,10 @@
 #include <components/lua/util.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwmechanics/esm4actors.hpp"
+#include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -370,6 +372,19 @@ namespace MWLua
 
         api["isIdlePlaying"] = [](const Object& object) -> bool {
             return MWMechanics::ESM4Actors::get().isIdlePlaying(object.ptr());
+        };
+
+        // setEmotion(npc, type, value): the mood the NPC's face shows while it speaks the current line (an INFO
+        // response's emotion type, 0-7, and value, 0-100).
+        api["setEmotion"] = [context](const Object& object, int type, float value) {
+            context.mLuaManager->addAction(
+                [object = Object(object), type, value] {
+                    auto* animation = dynamic_cast<MWRender::ESM4NpcAnimation*>(
+                        MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+                    if (animation != nullptr)
+                        animation->setEmotion(type, value);
+                },
+                "obscriptAISetEmotionAction");
         };
 
         return LuaUtil::makeReadOnly(api);

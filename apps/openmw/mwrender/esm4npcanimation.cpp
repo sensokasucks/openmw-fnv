@@ -1,6 +1,7 @@
 #include "esm4npcanimation.hpp"
 
 #include <algorithm>
+#include <cstdint>
 
 #include <components/esm4/loadarma.hpp>
 #include <components/esm4/loadarmo.hpp>
@@ -30,12 +31,14 @@
 #include <components/sceneutil/attach.hpp>
 #include <components/sceneutil/controller.hpp>
 #include <components/sceneutil/keyframe.hpp>
+#include <components/sceneutil/nodecallback.hpp>
 #include <components/sceneutil/riggeometry.hpp>
 #include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
 #include <components/vfs/manager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/soundmanager.hpp"
 #include "esm4facegen.hpp"
 #include "../mwclass/esm4creature.hpp"
 #include "../mwmechanics/esm4combat.hpp"
@@ -44,6 +47,31 @@
 
 namespace MWRender
 {
+    namespace
+    {
+        class FaceCallback : public SceneUtil::NodeCallback<FaceCallback>
+        {
+        public:
+            explicit FaceCallback(ESM4NpcAnimation* animation)
+                : mAnimation(animation)
+            {
+            }
+
+            void operator()(osg::Node* node, osg::NodeVisitor* nv)
+            {
+                const double time = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                const float duration = mLastTime < 0.0 ? 0.f : static_cast<float>(time - mLastTime);
+                mLastTime = time;
+                mAnimation->updateFace(std::clamp(duration, 0.f, 0.1f));
+                traverse(node, nv);
+            }
+
+        private:
+            ESM4NpcAnimation* mAnimation;
+            double mLastTime = -1.0;
+        };
+    }
+
     ESM4NpcAnimation::ESM4NpcAnimation(
         const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem)
         : Animation(ptr, std::move(parentNode), resourceSystem)
@@ -52,6 +80,18 @@ namespace MWRender
         updateParts();
         if (MWMechanics::ESM4Combat::isDead(mPtr))
             playDeath(true);
+        if (mFace != nullptr && !mFace->empty() && mObjectRoot != nullptr)
+        {
+            mFaceRandom.seed(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(this)));
+            mFaceCallback = new FaceCallback(this);
+            mObjectRoot->addUpdateCallback(mFaceCallback);
+        }
+    }
+
+    ESM4NpcAnimation::~ESM4NpcAnimation()
+    {
+        if (mFaceCallback != nullptr && mObjectRoot != nullptr)
+            mObjectRoot->removeUpdateCallback(mFaceCallback);
     }
 
     void ESM4NpcAnimation::updateParts()
@@ -283,6 +323,123 @@ namespace MWRender
             *mResourceSystem->getVFS());
     }
 
+    void ESM4NpcAnimation::addFaceMorphs(osg::Node& node, std::string_view model)
+    {
+        if (mFace == nullptr)
+            mFace = std::make_unique<FaceMorphs>();
+        if (mFace->add(node, model, *mResourceSystem->getVFS()))
+            Log(Debug::Verbose) << "Face morphs from " << model << " on " << mPtr.toString();
+    }
+
+    namespace
+    {
+        // Speech morphs of the head .tri files, picked in turn while the actor talks, and how far each opens
+        struct Viseme
+        {
+            std::string_view mMorph;
+            float mWeight;
+        };
+        constexpr Viseme sVisemes[] = { { "Aah", 1.f }, { "BigAah", 0.7f }, { "Eh", 1.f }, { "Oh", 1.f },
+            { "OohQ", 0.9f }, { "Ee", 0.9f }, { "I", 1.f }, { "K", 0.8f }, { "N", 0.8f }, { "DST", 0.8f },
+            { "Th", 0.7f }, { "R", 0.8f }, { "W", 0.8f }, { "ChJSh", 0.8f }, { "FV", 0.7f }, { "BMP", 0.6f } };
+
+        // Morph of each INFO emotion type, 1 to 7 (0 is neutral)
+        constexpr std::string_view sEmotionMorphs[]
+            = { "", "Anger", "Disgust", "Fear", "Sad", "Happy", "Surprise", "Pained" };
+    }
+
+    void ESM4NpcAnimation::setEmotion(int type, float value)
+    {
+        if (type <= 0 || type >= static_cast<int>(std::size(sEmotionMorphs)))
+        {
+            mEmotionValue = 0.f;
+            return;
+        }
+        if (type != mEmotion && mFace != nullptr)
+        {
+            mFace->setWeight(sEmotionMorphs[mEmotion], 0.f);
+            mEmotionLevel = 0.f;
+        }
+        mEmotion = type;
+        mEmotionValue = std::clamp(value / 100.f, 0.f, 1.f);
+        mSilentTime = 0.f;
+    }
+
+    void ESM4NpcAnimation::updateFace(float duration)
+    {
+        if (mFace == nullptr || mFace->empty())
+            return;
+        if (mDead)
+        {
+            for (const Viseme& viseme : sVisemes)
+                mFace->setWeight(viseme.mMorph, 0.f);
+            mFace->setWeight("BlinkLeft", 1.f);
+            mFace->setWeight("BlinkRight", 1.f);
+            mFace->apply();
+            return;
+        }
+        std::uniform_real_distribution<float> random(0.f, 1.f);
+
+        // Mouth: opens with the loudness of the voice line, quickly, and closes a little slower.
+        const MWBase::SoundManager* sounds = MWBase::Environment::get().getSoundManager();
+        const bool talking = sounds->sayActive(mPtr);
+        const float loudness = talking ? std::clamp(sounds->getSaySoundLoudness(mPtr) * 2.f, 0.f, 1.f) : 0.f;
+        const float rate = loudness > mMouthOpen ? 30.f : 12.f;
+        mMouthOpen += (loudness - mMouthOpen) * std::min(1.f, duration * rate);
+
+        // A new mouth shape every tenth of a second or so, blended in over 70 ms
+        mVisemeTime -= duration;
+        if (talking && mVisemeTime <= 0.f)
+        {
+            mPreviousViseme = mViseme;
+            mViseme = (mViseme + 1 + static_cast<std::size_t>(random(mFaceRandom) * (std::size(sVisemes) - 1)))
+                % std::size(sVisemes);
+            mVisemeBlend = 0.f;
+            mVisemeTime = 0.08f + 0.1f * random(mFaceRandom);
+        }
+        mVisemeBlend = std::min(1.f, mVisemeBlend + duration / 0.07f);
+        for (std::size_t i = 0; i < std::size(sVisemes); ++i)
+        {
+            float weight = 0.f;
+            if (i == mViseme)
+                weight += mVisemeBlend;
+            if (i == mPreviousViseme && i != mViseme)
+                weight += 1.f - mVisemeBlend;
+            mFace->setWeight(sVisemes[i].mMorph, weight * mMouthOpen * sVisemes[i].mWeight);
+        }
+
+        // Blinks every two to six seconds, a sixth of a second each
+        mBlinkWait -= duration;
+        if (mBlinkWait <= 0.f)
+        {
+            mBlinkWait = 2.f + 4.f * random(mFaceRandom);
+            mBlinkTime = 0.f;
+        }
+        float blink = 0.f;
+        if (mBlinkTime >= 0.f)
+        {
+            mBlinkTime += duration;
+            constexpr float blinkLength = 0.16f;
+            blink = 1.f - std::abs(mBlinkTime / blinkLength * 2.f - 1.f);
+            if (mBlinkTime >= blinkLength)
+            {
+                mBlinkTime = -1.f;
+                blink = 0.f;
+            }
+        }
+        mFace->setWeight("BlinkLeft", std::max(blink, 0.f));
+        mFace->setWeight("BlinkRight", std::max(blink, 0.f));
+
+        // Mood: shows while the line is spoken and fades a couple of seconds after
+        mSilentTime = talking ? 0.f : mSilentTime + duration;
+        const float mood = mSilentTime > 2.f ? 0.f : mEmotionValue;
+        mEmotionLevel += (mood - mEmotionLevel) * std::min(1.f, duration * 3.f);
+        if (mEmotion > 0)
+            mFace->setWeight(sEmotionMorphs[mEmotion], mEmotionLevel);
+
+        mFace->apply();
+    }
+
     namespace
     {
         // Finds the skin-shaded shapes of an outfit, tagged by the NIF loader.
@@ -414,6 +571,7 @@ namespace MWRender
             if (!node)
                 continue;
             applyFaceGen(*node, headParts[i].mesh, traits);
+            addFaceMorphs(*node, headParts[i].mesh);
             // The race picks the skin (old races have their own head texture); the NPC's EYES record picks the
             // eye colour.
             if (eyes && (i == 6 || i == 7))
@@ -441,6 +599,7 @@ namespace MWRender
             if (!node)
                 continue;
             applyFaceGen(*node, part->mModel.getOriginal(), traits);
+            addFaceMorphs(*node, part->mModel.getOriginal());
             // Eyebrows and beards live next to the hair meshes and take the hair colour too.
             if (part->mModel.getNormalized().value().starts_with("characters/hair/"))
                 tintHair(*node, traits.mHairColour);

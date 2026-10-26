@@ -14,6 +14,8 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/strings/algorithm.hpp>
+#include <components/sceneutil/morphgeometry.hpp>
 #include <components/sceneutil/riggeometry.hpp>
 #include <components/vfs/manager.hpp>
 #include <components/vfs/pathutil.hpp>
@@ -125,6 +127,93 @@ namespace MWRender
                 return nullptr;
             }
             return egt;
+        }
+
+        // FaceGen "FRTRI003": the part's mesh again, then its morphs. Differential morphs move every vertex by int16
+        // offsets times a scale; statistical ones (blinks, eye looks) put a few vertices at new positions, stored
+        // after the mesh's own vertices.
+        struct Tri
+        {
+            std::uint32_t mNumVertices = 0;
+            std::vector<std::pair<std::string, osg::ref_ptr<osg::Vec3Array>>> mMorphs; // offsets per vertex
+        };
+
+        std::shared_ptr<const Tri> readTri(std::istream& stream, std::string_view name)
+        {
+            std::array<char, 8> magic;
+            stream.read(magic.data(), magic.size());
+            if (!stream || std::memcmp(magic.data(), "FRTRI003", magic.size()) != 0)
+            {
+                Log(Debug::Warning) << "Not a FaceGen TRI file: " << name;
+                return nullptr;
+            }
+            // vertices, triangles, quads, labelled vertices, labelled surface points, texture coordinates,
+            // extension flags, differential morphs, statistical morphs, statistical morph vertices
+            std::int32_t header[10];
+            stream.read(reinterpret_cast<char*>(header), sizeof(header));
+            stream.ignore(16);
+            const std::int32_t numVertices = header[0];
+            const std::int32_t numTriangles = header[1];
+            const std::int32_t numQuads = header[2];
+            if (!stream || numVertices <= 0 || header[3] != 0 || header[4] != 0 || header[9] < 0)
+            {
+                Log(Debug::Warning) << "Unsupported FaceGen TRI file: " << name;
+                return nullptr;
+            }
+
+            std::vector<osg::Vec3f> vertices(numVertices + header[9]);
+            stream.read(reinterpret_cast<char*>(vertices.data()), vertices.size() * sizeof(osg::Vec3f));
+            stream.ignore(std::streamsize(numTriangles) * 12 + std::streamsize(numQuads) * 16);
+            if (header[6] & 1) // texture coordinates and their faces
+                stream.ignore(std::streamsize(header[5]) * 8 + std::streamsize(numTriangles) * 12
+                    + std::streamsize(numQuads) * 16);
+
+            auto readName = [&] {
+                std::int32_t length = 0;
+                stream.read(reinterpret_cast<char*>(&length), sizeof(length));
+                std::string result(std::max(length, 0), '\0');
+                stream.read(result.data(), result.size());
+                result.resize(std::strlen(result.c_str()));
+                return result;
+            };
+
+            auto tri = std::make_shared<Tri>();
+            tri->mNumVertices = numVertices;
+            std::vector<std::int16_t> deltas(numVertices * 3);
+            for (std::int32_t m = 0; m < header[7] && stream; ++m)
+            {
+                std::string morphName = readName();
+                float scale = 0.f;
+                stream.read(reinterpret_cast<char*>(&scale), sizeof(scale));
+                stream.read(reinterpret_cast<char*>(deltas.data()), deltas.size() * sizeof(std::int16_t));
+                osg::ref_ptr<osg::Vec3Array> offsets = new osg::Vec3Array(numVertices);
+                for (std::int32_t v = 0; v < numVertices; ++v)
+                    (*offsets)[v] = osg::Vec3f(deltas[v * 3], deltas[v * 3 + 1], deltas[v * 3 + 2]) * scale;
+                tri->mMorphs.emplace_back(std::move(morphName), offsets);
+            }
+            std::size_t moved = numVertices;
+            for (std::int32_t m = 0; m < header[8] && stream; ++m)
+            {
+                std::string morphName = readName();
+                std::int32_t count = 0;
+                stream.read(reinterpret_cast<char*>(&count), sizeof(count));
+                std::vector<std::int32_t> indices(std::max(count, 0));
+                stream.read(reinterpret_cast<char*>(indices.data()), indices.size() * sizeof(std::int32_t));
+                osg::ref_ptr<osg::Vec3Array> offsets = new osg::Vec3Array(numVertices);
+                for (std::int32_t index : indices)
+                {
+                    if (index >= 0 && index < numVertices && moved < vertices.size())
+                        (*offsets)[index] = vertices[moved] - vertices[index];
+                    ++moved;
+                }
+                tri->mMorphs.emplace_back(std::move(morphName), offsets);
+            }
+            if (!stream)
+            {
+                Log(Debug::Warning) << "Truncated FaceGen TRI file: " << name;
+                return nullptr;
+            }
+            return tri;
         }
 
         template <class T, class Read>
@@ -288,5 +377,115 @@ namespace MWRender
             }
         }
         return result;
+    }
+
+    struct FaceMorphs::Target
+    {
+        std::shared_ptr<const Tri> mTri;
+        // Skinned parts: the vertices the rig skins from, rewritten from mBase on each change
+        osg::ref_ptr<osg::Vec3Array> mVertices;
+        osg::ref_ptr<const osg::Vec3Array> mBase;
+        // Rigid parts: morph target 0 holds the vertices, the .tri's morphs follow in order
+        osg::ref_ptr<SceneUtil::MorphGeometry> mMorph;
+    };
+
+    FaceMorphs::FaceMorphs() = default;
+
+    FaceMorphs::~FaceMorphs() = default;
+
+    bool FaceMorphs::add(osg::Node& part, std::string_view model, const VFS::Manager& vfs)
+    {
+        std::shared_ptr<const Tri> tri = getCached<Tri>(withExtension(model, ".tri"), vfs, readTri);
+        if (tri == nullptr || tri->mMorphs.empty())
+            return false;
+
+        bool added = false;
+        CollectDrawablesVisitor collect;
+        part.accept(collect);
+        for (auto [drawable, parent] : collect.mDrawables)
+        {
+            auto target = std::make_unique<Target>();
+            target->mTri = tri;
+            if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(drawable))
+            {
+                // The source geometry may still be the cached mesh shared by every NPC: give this one its own.
+                osg::ref_ptr<osg::Geometry> source = rig->getSourceGeometry();
+                const auto* vertices
+                    = source ? dynamic_cast<const osg::Vec3Array*>(source->getVertexArray()) : nullptr;
+                if (vertices == nullptr || vertices->size() != tri->mNumVertices)
+                    continue;
+                osg::ref_ptr<osg::Geometry> copy = new osg::Geometry(*source, osg::CopyOp::SHALLOW_COPY);
+                target->mBase = new osg::Vec3Array(*vertices);
+                target->mVertices = new osg::Vec3Array(*vertices);
+                target->mVertices->setVertexBufferObject(new osg::VertexBufferObject);
+                copy->setVertexArray(target->mVertices);
+                rig->setSourceGeometry(copy);
+            }
+            else if (auto* geometry = dynamic_cast<osg::Geometry*>(drawable); geometry && parent)
+            {
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry->getVertexArray());
+                if (vertices == nullptr || vertices->size() != tri->mNumVertices)
+                    continue;
+                target->mMorph = new SceneUtil::MorphGeometry;
+                target->mMorph->setSourceGeometry(geometry);
+                target->mMorph->addMorphTarget(new osg::Vec3Array(*vertices), 1.f);
+                for (const auto& morph : tri->mMorphs)
+                    target->mMorph->addMorphTarget(morph.second.get(), 0.f);
+                parent->replaceChild(geometry, target->mMorph);
+            }
+            else
+                continue;
+            mTargets.push_back(std::move(target));
+            added = true;
+        }
+        return added;
+    }
+
+    void FaceMorphs::setWeight(std::string_view name, float weight)
+    {
+        for (auto& [morph, value] : mWeights)
+        {
+            if (Misc::StringUtils::ciEqual(morph, name))
+            {
+                mDirty = mDirty || value != weight;
+                value = weight;
+                return;
+            }
+        }
+        mWeights.emplace_back(std::string(name), weight);
+        mDirty = mDirty || weight != 0.f;
+    }
+
+    void FaceMorphs::apply()
+    {
+        if (!mDirty)
+            return;
+        mDirty = false;
+        for (const std::unique_ptr<Target>& target : mTargets)
+        {
+            const auto& morphs = target->mTri->mMorphs;
+            if (target->mVertices)
+                std::copy(target->mBase->begin(), target->mBase->end(), target->mVertices->begin());
+            for (std::size_t i = 0; i < morphs.size(); ++i)
+            {
+                float weight = 0.f;
+                for (const auto& [morph, value] : mWeights)
+                    if (Misc::StringUtils::ciEqual(morph, morphs[i].first))
+                        weight = value;
+                if (target->mMorph)
+                    target->mMorph->getMorphTarget(static_cast<unsigned>(i + 1)).setWeight(weight);
+                else if (weight != 0.f)
+                {
+                    const osg::Vec3Array& offsets = *morphs[i].second;
+                    osg::Vec3Array& vertices = *target->mVertices;
+                    for (std::size_t v = 0; v < vertices.size(); ++v)
+                        vertices[v] += offsets[v] * weight;
+                }
+            }
+            if (target->mMorph)
+                target->mMorph->dirty();
+            else
+                target->mVertices->dirty();
+        }
     }
 }

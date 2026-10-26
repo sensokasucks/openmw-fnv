@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,13 +24,21 @@ namespace ESM4
     struct Npc;
 }
 
+namespace osg
+{
+    class Callback;
+}
+
 namespace MWRender
 {
+    class FaceMorphs;
+
     class ESM4NpcAnimation : public Animation
     {
     public:
         ESM4NpcAnimation(
             const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem);
+        ~ESM4NpcAnimation() override;
 
         enum class Locomotion
         {
@@ -71,6 +80,15 @@ namespace MWRender
         void setLocomotionRate(float rate);
         bool isWeaponShown() const { return mWeapon != nullptr; }
 
+        // FO3/FONV: the mood the face shows while speaking a dialogue line, from its INFO response (emotion type
+        // 0 neutral, 1 anger, 2 disgust, 3 fear, 4 sad, 5 happy, 6 surprise, 7 pained; value 0-100). It fades once
+        // the actor stops talking.
+        void setEmotion(int type, float value);
+
+        // Moves the face for the frame: the mouth follows the loudness of the voice line being said, the eyes
+        // blink now and then, and the mood shows. Called by the face's update callback.
+        void updateFace(float duration);
+
     private:
         // FO3/FONV: places rigid head parts in the skinned head's space under the head bone
         osg::Matrixf mHeadBinding;
@@ -83,6 +101,22 @@ namespace MWRender
         float mLocomotionSpeed = 0.f;
         std::shared_ptr<float> mLocomotionRate = std::make_shared<float>(1.f);
         osg::Vec3f mRootMotion;
+
+        // FO3/FONV facial animation (FaceGen .tri morphs of the head parts)
+        std::unique_ptr<FaceMorphs> mFace;
+        osg::ref_ptr<osg::Callback> mFaceCallback;
+        std::minstd_rand mFaceRandom;
+        float mMouthOpen = 0.f;
+        std::size_t mViseme = 0;
+        std::size_t mPreviousViseme = 0;
+        float mVisemeTime = 0.f;
+        float mVisemeBlend = 1.f;
+        float mBlinkWait = 3.f;
+        float mBlinkTime = -1.f;
+        int mEmotion = 0;
+        float mEmotionValue = 0.f;
+        float mEmotionLevel = 0.f;
+        float mSilentTime = 0.f;
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         struct RestPose
         {
@@ -98,6 +132,8 @@ namespace MWRender
         void overrideDiffuse(osg::Node& node, osg::ref_ptr<osg::Image> image);
         osg::ref_ptr<osg::Image> getTexture(std::string_view texture);
         void applyFaceGen(osg::Node& node, std::string_view model, const ESM4::Npc& traits);
+        // Lets the head part move with speech, blinks and moods if it has FaceGen morphs (.tri)
+        void addFaceMorphs(osg::Node& node, std::string_view model);
 
         // Works for FO3/FONV/TES5
         void insertHeadParts(const std::vector<ESM::FormId>& partIds, std::set<uint32_t>& usedHeadPartTypes);
