@@ -3,6 +3,8 @@
 
 #include "animation.hpp"
 
+#include <components/vfs/pathutil.hpp>
+
 #include <osg/MatrixTransform>
 #include <osg/Matrixf>
 
@@ -38,8 +40,11 @@ namespace MWRender
     class ESM4NpcAnimation : public Animation
     {
     public:
-        ESM4NpcAnimation(
-            const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem);
+        // skeleton: a model in place of the actor's own (the player's first-person arms use
+        // characters/_1stperson/skeleton.nif); firstPerson leaves the head, hair and face out.
+        ESM4NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
+            Resource::ResourceSystem* resourceSystem, VFS::Path::NormalizedView skeleton = {},
+            bool firstPerson = false);
         ~ESM4NpcAnimation() override;
 
         enum class Locomotion
@@ -121,6 +126,8 @@ namespace MWRender
         // FO3/FONV: places rigid head parts in the skinned head's space under the head bone
         osg::Matrixf mHeadBinding;
 
+        bool mFirstPerson = false;
+        VFS::Path::Normalized mSkeletonPath; // the skeleton the sequences are looked up next to
         Locomotion mLocomotion = Locomotion::Idle;
         Direction mDirection = Direction::Forward;
         bool mDead = false;
