@@ -44,6 +44,7 @@ end
 
 -- Seat position and yaw in model space for a marker. A marker is where the actor stands facing the
 -- furniture before the sit animation; without that animation we place the actor on the seat directly.
+-- The marker's height is the floor's; the player script lowers the camera to a seated eye height.
 local function seatFromMarker(marker)
     local offset = marker.offset
     local facing = headingVector(marker.heading)
@@ -109,8 +110,94 @@ local function ESM4FurnitureActivation(furniture, actor)
     Furniture4._setActorCollision(actor, false)
     actor:teleport(furniture.cell, furniture.position + furniture.rotation:apply(seat * furniture.scale),
         { rotation = yawRotation, onGround = false })
-    actor:sendEvent('FurnitureSit', { furniture = furniture })
+    actor:sendEvent('FurnitureSit', { furniture = furniture, pose = 'sitting' })
     return false
+end
+
+-- The bed next to the opening's start marker (VCG01PlayerStartMarkerREF beside Doc Mitchell's bed)
+local function bedNear(marker)
+    local best, bestDistance
+    for _, furniture in ipairs(marker.cell:getAll(types.ESM4Furniture)) do
+        local distance = (furniture.position - marker.position):length()
+        if distance < 200 and (not best or distance < bestDistance) then
+            for _, m in ipairs(types.ESM4Furniture.markers(furniture)) do
+                if bedMarkerTypes[m.type] then
+                    best, bestDistance = furniture, distance
+                    break
+                end
+            end
+        end
+    end
+    return best
+end
+
+-- Where the player gets up next to the bed: the marker touches the bed (and the chair beside it), and a
+-- player placed there ends up standing on top of them. So the spot is a stride from the marker, in the
+-- direction with the most room between the bed's bounds and the other furniture around.
+local function standingSpot(marker, bed, box)
+    local function clearance(point)
+        local room = math.huge
+        if box then
+            local dx = math.max(math.abs(point.x - box.center.x) - box.halfSize.x, 0)
+            local dy = math.max(math.abs(point.y - box.center.y) - box.halfSize.y, 0)
+            room = math.sqrt(dx * dx + dy * dy)
+        end
+        for _, obj in ipairs(marker.cell:getAll(types.ESM4Furniture)) do
+            if obj ~= bed then
+                local d = obj.position - point
+                room = math.min(room, util.vector2(d.x, d.y):length())
+            end
+        end
+        return room
+    end
+    local best, bestRoom = marker.position, -1
+    for i = 0, 7 do
+        local angle = i * math.pi / 4
+        local point = marker.position + util.vector3(math.cos(angle), math.sin(angle), 0) * 60
+        local room = clearance(point)
+        if room > bestRoom then
+            best, bestRoom = point, room
+        end
+    end
+    return best
+end
+
+-- The opening of a new game: the player wakes lying in the bed, sits up on its edge, then gets up at the
+-- start marker. The original plays the player's wake-up, sit-up and stand-up idles (VCG01's
+-- VCG01PlayerSection packages); without a player body the camera takes those heights instead.
+-- data: { pose = 'lying' | 'sitting' | 'standing', marker = start marker }
+local function setPlayerPose(data)
+    local player = world.players[1]
+    local marker = data.marker
+    if player == nil or marker == nil or not marker:isValid() or marker.cell == nil then
+        return
+    end
+    if data.pose == 'standing' then
+        standUp(player)
+        return
+    end
+    local bed = bedNear(marker)
+    if bed == nil then
+        return
+    end
+    local ok, box = pcall(bed.getBoundingBox, bed)
+    local center = ok and box and box.center or bed.position
+    local floor = marker.position.z
+    local spot = center
+    if data.pose == 'sitting' then
+        -- on the edge of the bed, on the marker's side
+        spot = center + (marker.position - center) * 0.55
+    end
+    if not seatedActors[player.id] then
+        seatedActors[player.id] = { cell = marker.cell, position = standingSpot(marker, bed, ok and box or nil),
+            rotation = marker.rotation, furniture = bed }
+    end
+    types.ESM4Furniture._setActorCollision(player, false)
+    player:teleport(marker.cell, util.vector3(spot.x, spot.y, floor), { rotation = marker.rotation, onGround = false })
+    -- eyes just above the pillow, or those of someone sitting on the edge (the bounds take in the headboard,
+    -- so the heights are the usual ones for a bed's mattress, about 40 units up)
+    local eyeHeight = data.pose == 'lying' and 52 or 88
+    player:sendEvent('FurnitureSit', { furniture = bed, pose = data.pose, eyeHeight = eyeHeight })
 end
 
 local function ESM4BookActivation(book, actor)
@@ -233,5 +320,8 @@ return {
         runDefaultActivation = runDefaultActivation,
     },
     engineHandlers = { onActivate = onActivate },
-    eventHandlers = { FurnitureStandRequest = function(data) standUp(data.actor) end },
+    eventHandlers = {
+        FurnitureStandRequest = function(data) standUp(data.actor) end,
+        FNVPlayerPose = setPlayerPose,
+    },
 }

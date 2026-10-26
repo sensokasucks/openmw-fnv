@@ -1211,6 +1211,12 @@ initState = function()
         if vcg01 and player and ok and doc and doc:isValid() and doc.cell and player.cell
             and doc.cell.id == player.cell.id then
             log("new game in Doc Mitchell's house: SetStage VCG01 0 (stands in for the intro cinematic)")
+            -- VCG00 ends with `player.moveto VCG01PlayerStartMarkerREF`, next to Doc's bed
+            local markerId = core.obscript.resolveRefEditorId('VCG01PlayerStartMarkerREF')
+            local found, marker = pcall(world.getObjectByFormId, markerId or '')
+            if found and marker and marker.cell then
+                player:teleport(marker.cell, marker.position, { rotation = marker.rotation, onGround = true })
+            end
             setStage(vcg01, 0)
         end
     end
@@ -1664,9 +1670,23 @@ obs.bind('KillActor', function(...)
     return 0
 end)
 
+-- The player's packages in the opening: lying in Doc Mitchell's bed (wake up, sit up), sitting on its
+-- edge, standing up. activationhandlers.lua puts the player there (FNVPlayerPose).
+local PLAYER_POSES = {
+    vcg01playersection0 = 'lying',
+    vcg01playersection1 = 'sitting',
+    vcg01playersection2 = 'standing',
+}
+
 -- `Ref.AddScriptPackage Package` / `Ref.RemoveScriptPackage`
 obs.bind('AddScriptPackage', function(...)
     local npc, package = refAndArgs(...)
+    local pose = isPlayer(npc) and type(package) == 'string' and PLAYER_POSES[package:lower()]
+    if pose then
+        core.sendGlobalEvent('FNVPlayerPose',
+            { pose = pose, marker = resolveObject('VCG01PlayerStartMarkerREF') })
+        return 0
+    end
     local packageId = type(package) == 'string' and core.obscript.resolvePackageEditorId(package)
     if npc and packageId and types.ESM4NPC.objectIsInstance(npc) and I.FNVAI and I.FNVAI.setScriptPackage then
         I.FNVAI.setScriptPackage(npc, packageId)
