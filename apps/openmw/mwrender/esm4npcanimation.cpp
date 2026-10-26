@@ -74,11 +74,15 @@ namespace MWRender
         };
     }
 
-    ESM4NpcAnimation::ESM4NpcAnimation(
-        const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem)
+    ESM4NpcAnimation::ESM4NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
+        Resource::ResourceSystem* resourceSystem, VFS::Path::NormalizedView skeleton, bool firstPerson)
         : Animation(ptr, std::move(parentNode), resourceSystem)
+        , mFirstPerson(firstPerson)
     {
-        setObjectRoot(mPtr.getClass().getCorrectedModel(mPtr), true, true, false);
+        const std::string model = skeleton.value().empty() ? std::string(mPtr.getClass().getCorrectedModel(mPtr).value())
+                                                           : std::string(skeleton.value());
+        mSkeletonPath = VFS::Path::Normalized(model);
+        setObjectRoot(model, true, true, false);
         updateParts();
         if (MWMechanics::ESM4Combat::isDead(mPtr))
             playDeath(true);
@@ -630,7 +634,8 @@ namespace MWRender
                 overrideDiffuse(*node, bodySkins[i]);
         }
 
-        if (usedSlots & ESM4::Armor::FO3_Head)
+        // First-person arms have no head to draw (it would sit on the camera)
+        if ((usedSlots & ESM4::Armor::FO3_Head) || mFirstPerson)
             return;
 
         // Race head: head, ears, mouth, lower teeth, upper teeth, tongue, left eye, right eye
@@ -959,7 +964,7 @@ namespace MWRender
         if (mDead)
             return 0.f;
         // Attacks sit next to the skeleton, idles in idleanims/
-        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
         const std::string_view skeleton = skeletonPath.value();
         const std::size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
@@ -1070,7 +1075,7 @@ namespace MWRender
         showWeapon({});
         // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
         // lays it down; humans have death poses.
-        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
         const std::string_view skeleton = skeletonPath.value();
         const std::size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
@@ -1119,7 +1124,7 @@ namespace MWRender
 
     VFS::Path::Normalized ESM4NpcAnimation::findLoopFONV(std::string_view file) const
     {
-        const VFS::Path::Normalized skeletonPath = mPtr.getClass().getCorrectedModel(mPtr);
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
         const std::string_view skeleton = skeletonPath.value();
         const size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
