@@ -65,7 +65,7 @@ local function paragraph(text, color)
         props = {
             text = text,
             font = FONT,
-            textSize = 18,
+            textSize = 20,
             textColor = color or normalColor,
             autoSize = true,
             readOnly = true,
@@ -86,7 +86,7 @@ local function optionLine(text, onClick)
         props = {
             text = text,
             font = FONT,
-            textSize = 18,
+            textSize = 20,
             textColor = normalColor,
             autoSize = true,
         },
@@ -156,7 +156,7 @@ local function show(data)
         props = {
             text = data.speaker or '',
             font = FONT,
-            textSize = 22,
+            textSize = 24,
             textColor = hoverColor,
             autoSize = true,
         },
