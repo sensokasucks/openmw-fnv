@@ -24,6 +24,7 @@
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/store.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "context.hpp"
 #include "luamanagerimp.hpp"
@@ -386,6 +387,35 @@ namespace MWLua
                         animation->setEmotion(type, value);
                 },
                 "obscriptAISetEmotionAction");
+        };
+
+        // lookAt(npc, target): the NPC's head follows target (the player: their eyes) until lookAt(npc, nil).
+        api["lookAt"] = [context](const Object& object, const sol::object& target) {
+            std::optional<ObjectId> targetId;
+            if (target.is<Object>())
+                targetId = target.as<const Object&>().id();
+            context.mLuaManager->addAction(
+                [object = Object(object), targetId] {
+                    MWWorld::Ptr targetPtr;
+                    if (targetId)
+                        targetPtr = MWBase::Environment::get().getWorldModel()->getPtr(*targetId);
+                    MWMechanics::ESM4Actors::get().lookAt(object.ptr(), targetPtr);
+                },
+                "obscriptAILookAtAction");
+        };
+
+        // World position of the actor's "Bip01 Head" bone, nil without one (not in the scene, no skeleton).
+        api["getHeadPosition"] = [](const Object& object) -> sol::optional<osg::Vec3f> {
+            const MWWorld::Ptr ptr = object.ptrOrEmpty();
+            if (ptr.isEmpty() || ptr.getRefData().getBaseNode() == nullptr)
+                return sol::nullopt;
+            auto* animation
+                = dynamic_cast<MWRender::ESM4NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(ptr));
+            if (animation == nullptr)
+                return sol::nullopt;
+            if (const std::optional<osg::Vec3f> position = animation->getHeadPosition())
+                return *position;
+            return sol::nullopt;
         };
 
         // startLipSync(npc, voiceFile): the NPC's face follows the voice file's lip sync (.lip) while it says it.

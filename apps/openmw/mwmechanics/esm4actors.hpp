@@ -98,6 +98,9 @@ namespace MWMechanics
         // Plays an idle sequence once (standing or seated), then returns to the idle or seated loop.
         void playIdle(const MWWorld::Ptr& ptr, const std::string& model);
         bool isIdlePlaying(const MWWorld::Ptr& ptr) const;
+        // Head tracking: the actor's head follows target (the player's eyes, another actor's head) until
+        // called with an empty target.
+        void lookAt(const MWWorld::Ptr& ptr, const MWWorld::Ptr& target);
 
         void update(float duration, bool paused);
         void clear();
@@ -130,6 +133,14 @@ namespace MWMechanics
 
         ESM4Navigation mNavigation;
         std::map<ESM::RefNum, State> mStates;
+        // Actor -> what its head follows (the player has no RefNum of its own, hence the flag)
+        struct LookTarget
+        {
+            ESM::RefNum mTarget;
+            bool mPlayer = false;
+        };
+        std::map<ESM::RefNum, LookTarget> mLookTargets;
+        void updateLookTargets();
         std::mt19937 mRandom{ std::random_device{}() };
     };
 }

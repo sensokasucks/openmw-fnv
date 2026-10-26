@@ -112,6 +112,8 @@ namespace ESM4
         ESM::FormId mTopic; // parent DIAL, from the enclosing topic children group
         ESM::FormId mPrevInfo; // FO3/FONV PNAM: previous INFO in the topic
         ESM::FormId mSpeaker; // FO3/FONV ANAM
+        ESM::FormId mSpeakerIdle; // FONV SNAM: IDLE the speaker plays with the line
+        ESM::FormId mListenerIdle; // FONV LNAM: IDLE the one spoken to plays
         std::string mPrompt; // FONV RNAM: text shown for this INFO's topic in the choice list
         std::vector<DialogCondition> mConditions; // all CTDA, in order
         std::vector<DialogResponse> mResponses; // all responses, in order

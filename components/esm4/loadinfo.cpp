@@ -250,6 +250,18 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
                 else
                     reader.skipSubRecordData();
                 break;
+            case ESM::fourCC("SNAM"): // FONV speaker animation (TES5: idle too)
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mSpeakerIdle);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("LNAM"): // FONV listener animation
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mListenerIdle);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("RNAM"): // FONV/TES5 prompt
                 reader.getLocalizedString(mPrompt);
                 break;
@@ -258,7 +270,6 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             case ESM::fourCC("TPIC"): // TES4 DLC
             case ESM::fourCC("DNAM"): // FO3 speech challenge
             case ESM::fourCC("KNAM"): // FO3 formid
-            case ESM::fourCC("LNAM"): // FONV
             case ESM::fourCC("TIFC"): // TES5
             case ESM::fourCC("TWAT"): // TES5
             case ESM::fourCC("CIS1"): // TES5
@@ -268,7 +279,6 @@ void ESM4::DialogInfo::load(ESM4::Reader& reader)
             case ESM::fourCC("EDID"): // TES5
             case ESM::fourCC("VMAD"): // TES5
             case ESM::fourCC("BNAM"): // TES5
-            case ESM::fourCC("SNAM"): // TES5
             case ESM::fourCC("ONAM"): // TES5
             case ESM::fourCC("QNAM"): // TES5 for mScript
             case ESM::fourCC("ALFA"): // FO4

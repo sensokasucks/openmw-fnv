@@ -16,6 +16,7 @@
 #include "../mwclass/esm4stats.hpp"
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/raycasting.hpp"
+#include "../mwrender/camera.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
@@ -283,7 +284,7 @@ namespace MWMechanics
         if (length <= 0.f)
             return;
         state.mIdleTimer = length;
-        state.mTurnTo.reset();
+        // a turn under way (toward someone to talk to) goes on during the idle
     }
 
     bool ESM4Actors::isIdlePlaying(const MWWorld::Ptr& ptr) const
@@ -423,6 +424,8 @@ namespace MWMechanics
             state.mIdleTimer -= duration;
             if (state.mIdleTimer <= 0.f)
                 resumeLoop(ptr, state);
+            if (state.mUsePhase == UsePhase::None && state.mTurnTo && turnTowards(ptr, *state.mTurnTo, duration))
+                state.mTurnTo.reset();
             return true;
         }
         if (state.mUsePhase == UsePhase::Using)
@@ -530,8 +533,57 @@ namespace MWMechanics
         return true;
     }
 
+    void ESM4Actors::lookAt(const MWWorld::Ptr& ptr, const MWWorld::Ptr& target)
+    {
+        const ESM::RefNum actor = ptr.getCellRef().getRefNum();
+        if (target.isEmpty())
+        {
+            mLookTargets.erase(actor);
+            if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr))
+                animation->setLookTarget(std::nullopt);
+            return;
+        }
+        const bool player = target == MWBase::Environment::get().getWorld()->getPlayerPtr();
+        mLookTargets[actor] = { player ? ESM::RefNum() : target.getCellRef().getRefNum(), player };
+    }
+
+    void ESM4Actors::updateLookTargets()
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
+        for (auto it = mLookTargets.begin(); it != mLookTargets.end();)
+        {
+            const MWWorld::Ptr ptr = worldModel.getPtr(it->first);
+            MWRender::ESM4NpcAnimation* animation = ptr.isEmpty() ? nullptr : getAnimation(ptr);
+            if (animation == nullptr)
+            {
+                it = mLookTargets.erase(it);
+                continue;
+            }
+            std::optional<osg::Vec3f> position;
+            if (it->second.mPlayer)
+                // the player's eyes, whichever view the camera is in
+                position = osg::Vec3f(world.getCamera()->getPosition());
+            else
+            {
+                const MWWorld::Ptr target = worldModel.getPtr(it->second.mTarget);
+                if (!target.isEmpty() && target.getRefData().getBaseNode() != nullptr)
+                {
+                    if (auto* targetAnimation = getAnimation(target))
+                        position = targetAnimation->getHeadPosition();
+                    if (!position)
+                        position = target.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, 100);
+                }
+            }
+            animation->setLookTarget(position);
+            ++it;
+        }
+    }
+
     void ESM4Actors::update(float duration, bool paused)
     {
+        if (!paused && !mLookTargets.empty())
+            updateLookTargets();
         if (paused || duration <= 0.f || mStates.empty())
             return;
         MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
@@ -553,5 +605,6 @@ namespace MWMechanics
     void ESM4Actors::clear()
     {
         mStates.clear();
+        mLookTargets.clear();
     }
 }

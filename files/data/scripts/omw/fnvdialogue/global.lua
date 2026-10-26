@@ -977,10 +977,27 @@ local function stopSpeech(line)
     end
 end
 
+-- The gesture an INFO asks the speaker to make with the line (SNAM, an IDLE or a
+-- branch of the idle tree, e.g. Doc Mitchell's shrug), played once over the stance.
+local idleTree = nil
+local function playSpeakerIdle(speaker, info)
+    local ai = core.obscript.ai
+    if not info.speakerIdle or info.speakerIdle == '' or not (ai and ai.playIdle) then return end
+    if not types.ESM4NPC.objectIsInstance(speaker) and not types.ESM4Creature.objectIsInstance(speaker) then return end
+    idleTree = idleTree or require('scripts.omw.fnvai.idles')
+    local idle = idleTree.get(info.speakerIdle)
+    if idle and not idleTree.isLeaf(idle) then idle = idleTree.pick(idle, speaker) end
+    if idle and idleTree.isLeaf(idle) then
+        tlog(('%s gestures %s with INFO %s'):format(tostring(speaker.recordId), idle.editorId, info.id))
+        ai.playIdle(speaker, idleTree.modelPath(idle))
+    end
+end
+
 local function startSpeech(speaker, info, subtitles, onDone)
     for _, line in ipairs(speaking) do
         if line.speaker == speaker then line.interrupted = true end
     end
+    if speaker:isValid() then playSpeakerIdle(speaker, info) end
     local responses = {}
     for _, r in ipairs(info.responses) do responses[#responses + 1] = r end
     table.sort(responses, function(a, b) return (a.number or 0) < (b.number or 0) end)
@@ -2054,11 +2071,32 @@ moveOn = function()
     return false
 end
 
+-- The one spoken to stops what it was doing, turns to the player (unless seated)
+-- and keeps its eyes on them until the conversation is over.
+local function engage(speaker, player)
+    local ai = core.obscript.ai
+    if not (ai and ai.lookAt) or not speaker:isValid() then return end
+    if types.ESM4NPC.objectIsInstance(speaker) or types.ESM4Creature.objectIsInstance(speaker) then
+        if ai.useStatus(speaker) == 'none' then
+            if ai.status(speaker) == 'moving' then ai.stop(speaker) end
+            local d = player.position - speaker.position
+            ai.face(speaker, math.atan2(d.x, d.y))
+        end
+        ai.lookAt(speaker, player)
+    end
+end
+
+local function disengage(speaker)
+    local ai = core.obscript.ai
+    if ai and ai.lookAt and speaker and speaker:isValid() then ai.lookAt(speaker, nil) end
+end
+
 local function endDialogue()
     if session == nil then return end
     finishLine()
     if session == nil then return end
     session.player:sendEvent('FNVDialogueClose')
+    disengage(session.speaker)
     session = nil
 end
 
@@ -2066,8 +2104,12 @@ startDialogue = function(speaker, player, topicIdOrEditorId)
     local actor = dlg.getActor(speaker)
     if actor == nil then return false end
     initState()
-    if session then finishLine() end
+    if session then
+        finishLine()
+        if session and session.speaker ~= speaker then disengage(session.speaker) end
+    end
     session = { speaker = speaker, actor = actor, player = player, options = {}, notices = {} }
+    engage(speaker, player)
     tlog('start dialogue with ' .. actor.editorId .. ' (' .. actor.recordId .. ')')
     local topic = getTopic(topicIdOrEditorId or 'GREETING')
     local info = topic and pickInfo(topic)
@@ -2361,6 +2403,7 @@ return {
         FNVDialogueContinue = continueLine,
         FNVDialogueClose = function()
             if session then finishLine() end
+            if session then disengage(session.speaker) end
             session = nil
         end,
         ObScriptQuestCommand = runForwardedCommand,

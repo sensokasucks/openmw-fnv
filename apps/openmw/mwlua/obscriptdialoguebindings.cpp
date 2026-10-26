@@ -298,6 +298,8 @@ namespace MWLua
             res["topic"] = formIdText(info.mTopic);
             res["quest"] = formIdText(info.mQuest);
             res["speaker"] = formIdText(info.mSpeaker);
+            res["speakerIdle"] = formIdText(info.mSpeakerIdle);
+            res["listenerIdle"] = formIdText(info.mListenerIdle);
             res["flags"] = info.mInfoFlags;
             res["dialType"] = info.mDialType;
             res["prompt"] = info.mPrompt;

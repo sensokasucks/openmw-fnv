@@ -3,6 +3,7 @@
 
 #include "animation.hpp"
 
+#include <osg/MatrixTransform>
 #include <osg/Matrixf>
 
 #include <map>
@@ -94,6 +95,15 @@ namespace MWRender
         // blink now and then, and the mood shows. Called by the face's update callback.
         void updateFace(float duration);
 
+        // FO3/FONV head tracking: the head turns toward a point in world space (a speaker's listener, or the
+        // player's eyes), within what a neck allows, and back to the animation's own pose without one.
+        void setLookTarget(const std::optional<osg::Vec3f>& target) { mLookTarget = target; }
+        // World position of "Bip01 Head", if the skeleton has one.
+        std::optional<osg::Vec3f> getHeadPosition() const;
+        // Turns the head bone for the frame, after the sequence and any blend have posed it. Called by the head's
+        // update callback.
+        void updateLook(osg::MatrixTransform& head, float duration);
+
     private:
         // FO3/FONV: places rigid head parts in the skinned head's space under the head bone
         osg::Matrixf mHeadBinding;
@@ -131,6 +141,14 @@ namespace MWRender
             osg::Quat mRotation;
         };
         std::map<const osg::Node*, RestPose> mRestPoses;
+        // The current sequence moves the actor with its accumulation root (a furniture entry or exit)
+        bool mKeepsRootMotion = false;
+
+        std::optional<osg::Vec3f> mLookTarget;
+        float mLookYaw = 0.f;
+        float mLookPitch = 0.f;
+        osg::ref_ptr<osg::MatrixTransform> mLookBone;
+        osg::ref_ptr<osg::Callback> mLookCallback;
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
@@ -155,9 +173,15 @@ namespace MWRender
         void playLocomotion();
         // stripRootMotion: keep the accumulation root in place, the AI moves the actor
         void playLoopFONV(std::string_view file, bool stripRootMotion);
-        // Binds the sequence's tracks to the skeleton, replacing the one played before. Returns its length.
+        // Binds the sequence's tracks to the skeleton, replacing the one played before, which it blends out of over
+        // blendTime seconds (the original's fAnimationDefaultBlend) instead of snapping. Returns its length.
         float playKeyframesFONV(const VFS::Path::Normalized& path, std::shared_ptr<SceneUtil::ControllerSource> source,
-            bool stripRootMotion);
+            bool stripRootMotion, float blendTime = sDefaultBlendTime, bool keepsRootMotion = false);
+        // Puts the head-tracking callback last on the head bone, after the sequence's controllers
+        void attachLookCallback();
+
+        // fAnimationDefaultBlend:General (FalloutNV.exe default; Fallout.ini doesn't set it)
+        static constexpr float sDefaultBlendTime = 0.2f;
     };
 }
 
