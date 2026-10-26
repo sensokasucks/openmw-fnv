@@ -740,6 +740,9 @@ namespace MWLua
                 },
                 "obscriptShowMessageBoxAction");
         };
+        // The FNV message box (scripts/omw/fnvmenus) answers here instead of the Morrowind one: 0 for the first
+        // button.
+        api["setButtonPressed"] = [](int button) { sPressedButton = button; };
         api["getButtonPressed"] = [context]() -> int {
             context.mLuaManager->addAction(
                 [] {

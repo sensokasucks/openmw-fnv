@@ -5,6 +5,7 @@
 --              (through scripts/omw/fnvmenus/menu.lua), Settings opens OpenMW's settings window
 --   Rest key   the wait menu (menus\sleep_wait_menu.xml): 1 to 24 hours on the wait meter, the hours pass
 --              one by one (scripts/omw/fnvmenus/global.lua)
+--   death      the pause menu without Resume and Save, once the death animation is over
 --   containers the container menu (menus\container_menu.xml) in place of Morrowind's container window:
 --              the player's items on the left, the container's on the right; click a line to move the
 --              stack (shift: one), R or Take All takes everything, E or Exit leaves
@@ -48,6 +49,8 @@ local selectedSave = nil
 local confirmLoad = nil
 
 local wait = { hours = 1, running = false, left = 0, timer = 0 }
+
+local messages = {} -- message boxes with buttons waiting to be shown: { text, buttons }
 
 local container = { target = nil, data = nil, scroll = { player = 0, container = 0 }, hoverItem = nil,
     hoverColumn = nil, refreshAt = nil, openedAt = 0 }
@@ -271,6 +274,42 @@ local function saveMenu()
     }
 end
 
+-- ------------------------------------------------------------ message box
+
+-- message_menu.xml: the text over a column of buttons; the answer goes to GetButtonPressed
+local function messageMenu()
+    local m = messages[1]
+    if m == nil then return {} end
+    local width = 700
+    local lines = 1
+    for _ in tostring(m.text):gmatch('\n') do lines = lines + 1 end
+    local textHeight = math.max(60, (lines + math.floor(#m.text / 55)) * 26)
+    local height = 80 + textHeight + #m.buttons * 52 + 30
+    local size = v2(width, height)
+    local content = {
+        style.text(m.text, { position = v2(40, 50), size = v2(width - 80, textHeight), autoSize = false,
+            multiline = true, wordWrap = true, textAlignH = ui.ALIGNMENT.Center }),
+    }
+    for i, label in ipairs(m.buttons) do
+        content[#content + 1] = style.button({ id = 'button' .. i, label = label,
+            position = v2((width - 400) / 2, 70 + textHeight + (i - 1) * 52), size = v2(400, 46),
+            onClick = function()
+                core.obscript.setButtonPressed(i - 1)
+                table.remove(messages, 1)
+                if messages[1] then
+                    state.hover = nil
+                    render()
+                else
+                    close()
+                end
+            end }, state, render)
+    end
+    return {
+        { type = ui.TYPE.Widget, props = { relativePosition = v2(0.5, 0.5), anchor = v2(0.5, 0.5), size = size },
+            content = ui.content { style.panel(size, content, 0.85) } },
+    }
+end
+
 -- ------------------------------------------------------------ wait
 
 local function clock()
@@ -458,6 +497,7 @@ render = function()
     elseif current == 'save' or current == 'load' then show(saveMenu())
     elseif current == 'wait' then show(waitMenu())
     elseif current == 'container' then show(containerMenu())
+    elseif current == 'message' then show(messageMenu())
     end
 end
 
@@ -475,6 +515,22 @@ return {
         close = function() if current then close() end end,
         --- The open menu, or nil.
         current = function() return current end,
+        --- A message box with buttons (ShowMessage); the button clicked goes to core.obscript.setButtonPressed.
+        messageBox = function(text, buttons)
+            messages[#messages + 1] = { text = tostring(text), buttons = buttons }
+            if current == nil then
+                open('message')
+            elseif current == 'message' then
+                render()
+            end
+        end,
+        --- For tests: click button `index` (1 = the first) of the message box shown.
+        answer = function(index)
+            if current ~= 'message' or messages[1] == nil then return end
+            core.obscript.setButtonPressed(index - 1)
+            table.remove(messages, 1)
+            if messages[1] then render() else close() end
+        end,
         --- For tests: the container menu's lists.
         getContainerData = function() return container.data end,
         --- For tests: in the wait menu, wait `hours`.
@@ -580,6 +636,7 @@ return {
                     render()
                 end
             end
+            if current == nil and messages[1] and I.UI.getMode() == nil then open('message') end
             if container.refreshAt and core.getRealTime() >= container.refreshAt then
                 container.refreshAt = nil
                 if current == 'container' then
@@ -595,11 +652,23 @@ return {
                 local was = current
                 closeAll()
                 lastClosed = core.getRealTime()
-                -- Escape on a page of the pause menu goes back to it
+                -- Escape on a page of the pause menu goes back to it; a message box waits for its answer
                 if e.newMode == nil and (was == 'save' or was == 'load' or was == 'quit') then
                     open('pause')
+                elseif e.newMode == nil and was == 'message' and messages[1] then
+                    open('message')
                 end
             end
+        end,
+        -- the death animation is over (MWState::StateManager::askLoadRecent): the pause menu, without Resume
+        FNVPlayerDied = function()
+            if current ~= nil then closeAll() end
+            if I.UI.getMode() ~= nil then
+                closingByScript = true
+                I.UI.setMode()
+                closingByScript = false
+            end
+            open('pause')
         end,
         FNVContainerShow = function(d)
             if current ~= 'container' or d.container ~= container.target then return end

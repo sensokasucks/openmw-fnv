@@ -46,6 +46,9 @@ namespace MWGui
 
         void setVisible(bool visible) override;
 
+        /// FO3/FNV content: FNV's loading backdrop on every loading screen, without Morrowind's progress box
+        void setFalloutStyle(bool enabled);
+
         double getTargetFrameRate() const;
 
     private:
@@ -71,6 +74,7 @@ namespace MWGui
         size_t mProgress;
 
         bool mShowWallpaper;
+        bool mFalloutStyle = false;
         double mOldIcoMin = 0.0;
         unsigned int mOldIcoMax = 0;
 

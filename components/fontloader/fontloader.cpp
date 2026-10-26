@@ -530,9 +530,27 @@ namespace Gui
 
         root->addAttribute("name", fontId.mValue);
 
+        // FO3/FNV glyphs reach above and below the font size (Monofonto Large: 4 .. 39 of 31 pixels), and MyGUI
+        // cuts what is outside the line: the line takes in all of them
+        float top = 0.f;
+        float lineHeight = fontSize;
+        if (fallout)
+        {
+            float bottom = fontSize;
+            top = fontSize;
+            for (const GlyphInfo& glyph : data)
+            {
+                if (glyph.height <= 0.f)
+                    continue;
+                top = std::min(top, fontSize - glyph.ascent);
+                bottom = std::max(bottom, fontSize - glyph.ascent + glyph.height);
+            }
+            lineHeight = bottom - top;
+        }
+
         MyGUI::xml::ElementPtr defaultHeight = root->createChild("Property");
         defaultHeight->addAttribute("key", "DefaultHeight");
-        defaultHeight->addAttribute("value", fontSize);
+        defaultHeight->addAttribute("value", lineHeight);
         MyGUI::xml::ElementPtr source = root->createChild("Property");
         source->addAttribute("key", "Source");
         source->addAttribute("value", bitmapPath);
@@ -689,7 +707,7 @@ namespace Gui
             if (advance == 0.f && data[i].width != 0.f)
                 advance = std::numeric_limits<float>::min();
             const std::string bearing = MyGUI::utility::toString(data[i].kerningLeft) + ' '
-                + MyGUI::utility::toString((fontSize - data[i].ascent));
+                + MyGUI::utility::toString((fontSize - data[i].ascent - top));
             const MyGUI::IntSize size(static_cast<int>(data[i].width), static_cast<int>(data[i].height));
 
             MyGUI::xml::ElementPtr code = codes->createChild("Code");

@@ -4,7 +4,8 @@
 -- have a line along the top and the bottom with short lines fading from their ends (top_bracket.xml,
 -- bottom_bracket.xml) over a dark fill.
 
-local ambient = require('openmw.ambient')
+-- also used by the title menu's menu script, where openmw.ambient may be missing
+local hasAmbient, ambient = pcall(require, 'openmw.ambient')
 local async = require('openmw.async')
 local core = require('openmw.core')
 local ui = require('openmw.ui')
@@ -31,8 +32,8 @@ M.LINE = 2 -- globals.xml _line_thickness
 M.DIM = 0.5 -- _line_alpha of a button without the mouse over it (128 of 255)
 
 function M.gmst(name, default)
-    local value = core.getFNVGMST and core.getFNVGMST(name)
-    if value == nil or value == '' then return default end
+    local ok, value = pcall(function() return core.getFNVGMST and core.getFNVGMST(name) end)
+    if not ok or value == nil or value == '' then return default end
     return value
 end
 
@@ -43,7 +44,7 @@ local SOUNDS = {
     prevnext = 'sound/fx/ui/menu/ui_menu_prevnext.wav',
 }
 function M.sound(name)
-    pcall(ambient.playSoundFile, SOUNDS[name] or name)
+    if hasAmbient then pcall(ambient.playSoundFile, SOUNDS[name] or name) end
 end
 
 function M.text(str, props)

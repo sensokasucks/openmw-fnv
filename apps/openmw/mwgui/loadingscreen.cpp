@@ -75,6 +75,19 @@ namespace MWGui
             Log(Debug::Warning) << "Warning: no splash screens found!";
     }
 
+    void LoadingScreen::setFalloutStyle(bool enabled)
+    {
+        mFalloutStyle = enabled;
+        if (!enabled)
+            return;
+        // loading_menu.xml draws a 3D scene from the location's LSCR record over this backdrop; that scene is
+        // not done yet
+        constexpr std::string_view backdrop = "textures/interface/loading/loading_background.dds";
+        if (mResourceSystem->getVFS()->exists(VFS::Path::Normalized(backdrop)))
+            mSplashScreens = { std::string(backdrop) };
+        mLoadingBox->setVisible(false);
+    }
+
     void LoadingScreen::setLabel(const std::string& label, bool important)
     {
         mImportantLabel = important;
@@ -162,7 +175,8 @@ namespace MWGui
 
         setVisible(true);
 
-        mShowWallpaper = MWBase::Environment::get().getStateManager()->getState() == MWBase::StateManager::State_NoGame;
+        mShowWallpaper = mFalloutStyle
+            || MWBase::Environment::get().getStateManager()->getState() == MWBase::StateManager::State_NoGame;
 
         if (mShowWallpaper)
         {
@@ -215,7 +229,9 @@ namespace MWGui
             // we can't do this by default, because the Morrowind splash screens are 1024x1024, but should be displayed
             // as 4:3
             mSplashImage->setVisible(true);
-            mSplashImage->setBackgroundImage(randomSplash, true, Settings::gui().mStretchMenuBackground);
+            // FNV's backdrop fills the screen
+            mSplashImage->setBackgroundImage(
+                randomSplash, !mFalloutStyle, mFalloutStyle || Settings::gui().mStretchMenuBackground);
         }
         mSceneImage->setBackgroundImage({});
         mSceneImage->setVisible(false);

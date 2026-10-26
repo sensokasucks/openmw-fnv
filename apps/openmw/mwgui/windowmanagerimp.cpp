@@ -1837,6 +1837,12 @@ namespace MWGui
         updateVisible();
     }
 
+    void WindowManager::setFalloutContent(bool enabled)
+    {
+        mFalloutContent = enabled;
+        mLoadingScreen->setFalloutStyle(enabled);
+    }
+
     bool WindowManager::isFalloutHud() const
     {
         return mHud != nullptr && mHud->isFalloutStyle();

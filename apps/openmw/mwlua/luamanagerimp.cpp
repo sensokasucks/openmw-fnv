@@ -509,14 +509,14 @@ namespace MWLua
         mLuaEvents.addLocalEvent({ getId(actor), "Died", {} });
     }
 
-    void LuaManager::falloutMessage(std::string_view text)
+    void LuaManager::falloutMessage(std::string_view text, const std::string& event)
     {
         if (mPlayer.isEmpty())
             return;
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table data = view.newTable();
             data["text"] = std::string(text);
-            sendLocalEvent(mPlayer, "FNVMessageBox", data);
+            sendLocalEvent(mPlayer, event, data);
         });
     }
 

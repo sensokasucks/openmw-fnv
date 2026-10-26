@@ -137,6 +137,13 @@ namespace MWGui
 
         showBackground(isMainMenu);
 
+        // FO3/FNV content: the title menu's buttons are scripts/omw/fnvmenus/menu.lua's, over FNV's background
+        if (MWBase::Environment::get().getWindowManager()->isFalloutContent())
+        {
+            Layout::setVisible(false);
+            return;
+        }
+
         if (visible)
         {
             if (isMainMenu)
@@ -256,6 +263,19 @@ namespace MWGui
             return;
 
         const bool stretch = Settings::gui().mStretchMenuBackground;
+
+        if (MWBase::Environment::get().getWindowManager()->isFalloutContent())
+        {
+            // start_menu.xml shows PauseScreen01.NIF, a scene around this picture
+            if (!mBackground)
+            {
+                mBackground = MyGUI::Gui::getInstance().createWidgetReal<BackgroundImage>(
+                    "ImageBox", 0, 0, 1, 1, MyGUI::Align::Stretch, "MainMenuBackground");
+                mBackground->setBackgroundImage("textures/interface/main/main_background.dds", false, true);
+            }
+            mBackground->setVisible(true);
+            return;
+        }
 
         if (mHasAnimatedMenu)
         {

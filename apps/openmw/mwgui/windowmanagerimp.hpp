@@ -257,6 +257,8 @@ namespace MWGui
         bool isHudVisible() const override { return mHudEnabled; }
         void setFalloutHud(bool enabled) override;
         bool isFalloutHud() const override;
+        void setFalloutContent(bool enabled) override;
+        bool isFalloutContent() const override { return mFalloutContent; }
         bool isSneakHidden() const override;
 
         void disallowMouse() override;
@@ -430,6 +432,8 @@ namespace MWGui
         osgViewer::Viewer* mViewer;
 
         std::unique_ptr<Gui::FontLoader> mFontLoader;
+
+        bool mFalloutContent = false;
         std::unique_ptr<StatsWatcher> mStatsWatcher;
 
         bool mConsoleOnlyScripts;
