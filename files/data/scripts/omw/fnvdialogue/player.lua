@@ -7,6 +7,8 @@ local ui = require('openmw.ui')
 local util = require('openmw.util')
 local I = require('openmw.interfaces')
 
+local dialogueCamera = require('scripts.omw.fnvdialogue.camera')
+
 local frame = require('scripts.omw.fnvhud.frame')
 
 local v2 = util.vector2
@@ -16,7 +18,10 @@ local normalColor = util.color.rgb(0.79, 0.65, 0.38)
 local hoverColor = util.color.rgb(1.0, 0.88, 0.6)
 local noticeColor = util.color.rgb(0.55, 0.55, 0.55)
 
-local window = nil
+-- As the original's dialogue menu lays it out, the speaker's line is at the top and
+-- the answers at the bottom, leaving the speaker's face in the middle of the view.
+local window = nil -- the line
+local choices = nil -- the answers
 local open = false
 local closingByScript = false
 
@@ -25,12 +30,26 @@ local function destroyWindow()
         window:destroy()
         window = nil
     end
+    if choices then
+        choices:destroy()
+        choices = nil
+    end
+end
+
+-- The world goes on while talking, as in the original: the speaker keeps moving,
+-- blinking and talking instead of standing frozen behind the window
+-- (the HUD is hidden meanwhile, as the original hides it behind the dialogue menu).
+local function setOpen(value)
+    open = value
+    I.UI.setPauseOnMode('Interface', not value)
+    if I.FNVHud then I.FNVHud.setVisible(not value) end
+    if not value then dialogueCamera.stop() end
 end
 
 local function close()
     destroyWindow()
     if open then
-        open = false
+        setOpen(false)
         closingByScript = true
         I.UI.setMode()
         closingByScript = false
@@ -72,75 +91,23 @@ local function optionLine(text, onClick)
         mouseClick = async:callback(onClick),
         focusGain = async:callback(function()
             line.props.textColor = hoverColor
-            if window then window:update() end
+            if choices then choices:update() end
         end),
         focusLoss = async:callback(function()
             line.props.textColor = normalColor
-            if window then window:update() end
+            if choices then choices:update() end
         end),
     }
     return line
 end
 
-local optionCount = 0
-local closeAt = nil -- real time to close a Goodbye line with nothing to answer
-local closeSpeaker = nil
-local continueAt = nil -- real time to go on with a follow-up line
-
-local function show(data)
-    optionCount = #(data.options or {})
-    closeAt = data.autoClose and (core.getRealTime() + data.autoClose) or nil
-    continueAt = data.autoContinue and (core.getRealTime() + data.autoContinue) or nil
-    closeSpeaker = data.speakerObject
-    destroyWindow()
-    if not open then
-        open = true
-        I.UI.setMode('Interface', { windows = {} })
-    end
-
-    local content = ui.content {}
-    content:add {
-        type = ui.TYPE.Text,
-        props = {
-            text = data.speaker or '',
-            textSize = 22,
-            textColor = hoverColor,
-            autoSize = true,
-        },
-    }
-    content:add(gap(8))
-    if data.text and data.text ~= '' then
-        content:add(paragraph(data.text))
-        content:add(gap(12))
-    end
-    for _, note in ipairs(data.notices or {}) do
-        content:add(paragraph(note, noticeColor))
-    end
-    if data.notices and #data.notices > 0 then
-        content:add(gap(8))
-    end
-    for i, text in ipairs(data.options or {}) do
-        content:add(optionLine(i .. '. ' .. text, function()
-            core.sendGlobalEvent('FNVDialogueChoose', { index = i })
-        end))
-        content:add(gap(4))
-    end
-    if data.autoContinue then
-        content:add(optionLine('Continue', function()
-            continueAt = nil
-            core.sendGlobalEvent('FNVDialogueContinue')
-        end))
-        content:add(gap(4))
-    end
-    content:add(gap(4))
-    content:add(optionLine('Goodbye', close))
-
-    window = ui.create {
+local function panel(content, position, anchor)
+    return ui.create {
         layer = 'Windows',
         template = frame.boxSolidThick,
         props = {
-            relativePosition = v2(0.5, 0.5),
-            anchor = v2(0.5, 0.5),
+            relativePosition = position,
+            anchor = anchor,
         },
         content = ui.content {
             {
@@ -162,9 +129,65 @@ local function show(data)
     }
 end
 
+local optionCount = 0
+local closeAt = nil -- real time to close a Goodbye line with nothing to answer
+local closeSpeaker = nil
+local continueAt = nil -- real time to go on with a follow-up line
+
+local function show(data)
+    optionCount = #(data.options or {})
+    closeAt = data.autoClose and (core.getRealTime() + data.autoClose) or nil
+    continueAt = data.autoContinue and (core.getRealTime() + data.autoContinue) or nil
+    closeSpeaker = data.speakerObject
+    destroyWindow()
+    if not open then
+        setOpen(true)
+        I.UI.setMode('Interface', { windows = {} })
+        if data.speakerObject then dialogueCamera.start(data.speakerObject) end
+    end
+
+    local content = ui.content {}
+    content:add {
+        type = ui.TYPE.Text,
+        props = {
+            text = data.speaker or '',
+            textSize = 22,
+            textColor = hoverColor,
+            autoSize = true,
+        },
+    }
+    content:add(gap(8))
+    if data.text and data.text ~= '' then
+        content:add(paragraph(data.text))
+        content:add(gap(12))
+    end
+    for _, note in ipairs(data.notices or {}) do
+        content:add(paragraph(note, noticeColor))
+    end
+    local answers = ui.content {}
+    for i, text in ipairs(data.options or {}) do
+        answers:add(optionLine(i .. '. ' .. text, function()
+            core.sendGlobalEvent('FNVDialogueChoose', { index = i })
+        end))
+        answers:add(gap(4))
+    end
+    if data.autoContinue then
+        answers:add(optionLine('Continue', function()
+            continueAt = nil
+            core.sendGlobalEvent('FNVDialogueContinue')
+        end))
+        answers:add(gap(4))
+    end
+    answers:add(optionLine('Goodbye', close))
+
+    window = panel(content, v2(0.5, 0.04), v2(0.5, 0))
+    choices = panel(answers, v2(0.5, 0.96), v2(0.5, 1))
+end
+
 return {
     engineHandlers = {
-        onFrame = function()
+        onFrame = function(dt)
+            dialogueCamera.update(core.getRealFrameDuration())
             if open and continueAt ~= nil and core.getRealTime() >= continueAt then
                 local ok, talking = pcall(core.sound.isSayActive, closeSpeaker)
                 if not (ok and talking) then
@@ -196,7 +219,7 @@ return {
         UiModeChanged = function(data)
             -- Escape or another window closed the dialogue
             if open and not closingByScript and data.newMode ~= 'Interface' then
-                open = false
+                setOpen(false)
                 destroyWindow()
                 core.sendGlobalEvent('FNVDialogueClose')
             end

@@ -177,6 +177,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/obscript_player.lua
     scripts/omw/furniture_player.lua
     scripts/omw/esm4terminal.lua
+    scripts/omw/fnvdialogue/camera.lua
     scripts/omw/fnvdialogue/conditions.lua
     scripts/omw/fnvdialogue/global.lua
     scripts/omw/fnvdialogue/player.lua
@@ -209,6 +210,7 @@ set(BUILTIN_DATA_FILES
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
     shaders/debug.omwfx
+    shaders/fnvdialoguedof.omwfx
     shaders/internal_distortion.omwfx
 
     mygui/core.skin

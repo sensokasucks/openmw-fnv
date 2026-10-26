@@ -21,6 +21,7 @@
 #include <osg/Transform>
 
 #include <components/debug/debuglog.hpp>
+#include <components/misc/mathutil.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -32,6 +33,7 @@
 #include <components/sceneutil/controller.hpp>
 #include <components/sceneutil/keyframe.hpp>
 #include <components/sceneutil/nodecallback.hpp>
+#include <components/sceneutil/positionattitudetransform.hpp>
 #include <components/sceneutil/riggeometry.hpp>
 #include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
@@ -650,6 +652,98 @@ namespace MWRender
         private:
             osg::Vec3f mRest;
         };
+
+        // Rotation a NIF transform was given, without whatever the head tracking put on its matrix since
+        osg::Quat getNifRotation(const NifOsg::MatrixTransform& node)
+        {
+            osg::Matrixf rotation;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    rotation(i, j) = node.mRotationScale.mValues[j][i];
+            return rotation.getRotate();
+        }
+
+        // Eases a bone from the pose it had when a sequence was replaced into the pose the new sequence gives it
+        // (or the rest pose, for a bone the new sequence leaves alone), as the original engine blends sequences
+        // over fAnimationDefaultBlend instead of cutting from one to the next.
+        class BlendFromPose : public SceneUtil::NodeCallback<BlendFromPose, NifOsg::MatrixTransform*>
+        {
+        public:
+            // from: the bone's pose when the sequence was replaced. rest: its pose in the skeleton, which a bone
+            // the new sequence has no track (or no translation or rotation keys) for goes back to.
+            BlendFromPose(const osg::Vec3f& fromTranslation, const osg::Quat& fromRotation,
+                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration)
+                : mFromTranslation(fromTranslation)
+                , mFromRotation(fromRotation)
+                , mRestTranslation(restTranslation)
+                , mRestRotation(restRotation)
+                , mDuration(duration)
+            {
+            }
+
+            void operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                const double now = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                if (!mStart)
+                    mStart = now;
+                // What the sequence posed the bone in this frame; where it didn't write over the blend of the
+                // frame before, the bone is headed for its rest pose
+                osg::Vec3f translation = node->getMatrix().getTrans();
+                osg::Quat rotation = getNifRotation(*node);
+                if (mWritten && translation == mWrittenTranslation)
+                    translation = mRestTranslation;
+                if (mWritten && rotation == mWrittenRotation)
+                    rotation = mRestRotation;
+                if (!mDone)
+                {
+                    const float t = std::min(1.f, static_cast<float>(now - *mStart) / mDuration);
+                    const float weight = t * t * (3.f - 2.f * t);
+                    osg::Quat blended;
+                    blended.slerp(weight, mFromRotation, rotation);
+                    node->setRotation(blended);
+                    node->setTranslation(mFromTranslation * (1.f - weight) + translation * weight);
+                    mWrittenTranslation = node->getMatrix().getTrans();
+                    mWrittenRotation = getNifRotation(*node);
+                    mWritten = true;
+                    mDone = t >= 1.f;
+                }
+                traverse(node, nv);
+            }
+
+        private:
+            osg::Vec3f mFromTranslation;
+            osg::Quat mFromRotation;
+            osg::Vec3f mRestTranslation;
+            osg::Quat mRestRotation;
+            float mDuration;
+            std::optional<double> mStart;
+            bool mWritten = false;
+            bool mDone = false;
+            osg::Vec3f mWrittenTranslation;
+            osg::Quat mWrittenRotation;
+        };
+
+        class LookCallback : public SceneUtil::NodeCallback<LookCallback, osg::MatrixTransform*>
+        {
+        public:
+            explicit LookCallback(ESM4NpcAnimation* animation)
+                : mAnimation(animation)
+            {
+            }
+
+            void operator()(osg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                const double time = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                const float duration = mLastTime < 0.0 ? 0.f : static_cast<float>(time - mLastTime);
+                mLastTime = time;
+                mAnimation->updateLook(*node, std::clamp(duration, 0.f, 0.1f));
+                traverse(node, nv);
+            }
+
+        private:
+            ESM4NpcAnimation* mAnimation;
+            double mLastTime = -1.0;
+        };
     }
 
     namespace
@@ -760,7 +854,8 @@ namespace MWRender
         }
         // Replaces any attack in progress; the caller resumes the locomotion when it is done
         mInAction = false;
-        return playKeyframesFONV(path, std::make_shared<RelativeTimeSource>(), !keepRootMotion);
+        return playKeyframesFONV(
+            path, std::make_shared<RelativeTimeSource>(), !keepRootMotion, sDefaultBlendTime, keepRootMotion);
     }
 
     void ESM4NpcAnimation::resumeLocomotion()
@@ -895,7 +990,8 @@ namespace MWRender
             return;
         }
         const auto source = std::make_shared<OnceTimeSource>(getUp.has_value(), instant);
-        source->mDuration = playKeyframesFONV(getUp ? *getUp : *pose, source, false);
+        source->mDuration
+            = playKeyframesFONV(getUp ? *getUp : *pose, source, false, instant ? 0.f : sDefaultBlendTime);
     }
 
     bool ESM4NpcAnimation::isFemale() const
@@ -946,11 +1042,30 @@ namespace MWRender
     }
 
     float ESM4NpcAnimation::playKeyframesFONV(const VFS::Path::Normalized& path,
-        std::shared_ptr<SceneUtil::ControllerSource> source, bool stripRootMotion)
+        std::shared_ptr<SceneUtil::ControllerSource> source, bool stripRootMotion, float blendTime,
+        bool keepsRootMotion)
     {
         osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
         const NodeMap& nodeMap = getNodeMap();
         float duration = 0.f;
+
+        // The pose the previous sequence left each bone in, to blend from. Not for the roots when either sequence
+        // carries the actor with them (a furniture entry or exit): the actor is moved onto the seat as the next
+        // sequence starts, and the roots must jump with it.
+        std::map<NifOsg::MatrixTransform*, RestPose> blendFrom;
+        if (blendTime > 0.f)
+        {
+            for (auto& [node, callback] : mLoopCallbacks)
+            {
+                auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get());
+                if (transform == nullptr || blendFrom.contains(transform))
+                    continue;
+                const std::string& name = transform->getName();
+                if ((keepsRootMotion || mKeepsRootMotion) && (name == "Bip01" || name == "Bip01 NonAccum"))
+                    continue;
+                blendFrom[transform] = { transform->getMatrix().getTrans(), getNifRotation(*transform) };
+            }
+        }
 
         // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
         // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which
@@ -1039,10 +1154,106 @@ namespace MWRender
                 }
             }
         }
+        mKeepsRootMotion = keepsRootMotion;
+
+        // Last on each bone, after the new tracks (and the root's motion stripping) have posed it
+        for (const auto& [transform, from] : blendFrom)
+        {
+            const auto rest = mRestPoses.find(transform);
+            if (rest == mRestPoses.end())
+                continue;
+            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(
+                from.mTranslation, from.mRotation, rest->second.mTranslation, rest->second.mRotation, blendTime);
+            transform->addUpdateCallback(blend);
+            mLoopCallbacks.emplace_back(transform, blend);
+        }
+        attachLookCallback();
+
         Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
                             << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
                             << hasAccumRootTrack << ", speed " << mLocomotionSpeed;
         return duration;
+    }
+
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getHeadPosition() const
+    {
+        const osg::Node* head = getNode("Bip01 Head");
+        if (head == nullptr)
+            return std::nullopt;
+        const osg::NodePathList paths = head->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(osg::computeLocalToWorld(paths[0]).getTrans());
+    }
+
+    void ESM4NpcAnimation::attachLookCallback()
+    {
+        if (mLookBone == nullptr)
+        {
+            const NodeMap& nodeMap = getNodeMap();
+            auto found = nodeMap.find("Bip01 Head");
+            if (found == nodeMap.end())
+                return;
+            mLookBone = found->second;
+            mLookCallback = new LookCallback(this);
+        }
+        mLookBone->removeUpdateCallback(mLookCallback);
+        mLookBone->addUpdateCallback(mLookCallback);
+    }
+
+    void ESM4NpcAnimation::updateLook(osg::MatrixTransform& head, float duration)
+    {
+        // Where the target is from the actor, as yaw and pitch; the head turns no further than a neck would
+        // (the limits of OpenMW's own head tracking) and gives up on a target behind the actor.
+        float yaw = 0.f;
+        float pitch = 0.f;
+        if (mLookTarget && !mDead && mPtr.getRefData().getBaseNode() != nullptr)
+        {
+            if (const std::optional<osg::Vec3f> headPosition = getHeadPosition())
+            {
+                osg::Vec3f direction = *mLookTarget - *headPosition;
+                if (direction.normalize() > 0.f)
+                {
+                    const osg::Vec3f facing = mPtr.getRefData().getBaseNode()->getAttitude() * osg::Vec3f(0, 1, 0);
+                    yaw = static_cast<float>(Misc::normalizeAngle(
+                        std::atan2(facing.x(), facing.y()) - std::atan2(direction.x(), direction.y())));
+                    if (std::abs(yaw) > osg::DegreesToRadians(110.f))
+                        yaw = 0.f;
+                    else
+                    {
+                        yaw *= 1.f - direction.z() * direction.z();
+                        pitch = std::asin(direction.z());
+                    }
+                }
+            }
+        }
+        const float yawLimit = osg::DegreesToRadians(60.f);
+        const float pitchLimit = osg::DegreesToRadians(35.f);
+        yaw = std::clamp(yaw, -yawLimit, yawLimit);
+        pitch = std::clamp(pitch, -pitchLimit, pitchLimit);
+        const float factor = std::min(1.f, duration * 4.f);
+        mLookYaw += (yaw - mLookYaw) * factor;
+        mLookPitch += (pitch - mLookPitch) * factor;
+        if (std::abs(mLookYaw) < 1e-4f && std::abs(mLookPitch) < 1e-4f)
+            return;
+
+        // The sequence's own rotation of the head, turned in the actor's space (as MWRender::RotateController
+        // does, but from the NIF rotation so the turn doesn't pile up on bones no track drives)
+        auto* nifHead = dynamic_cast<NifOsg::MatrixTransform*>(&head);
+        if (nifHead == nullptr || head.getNumParents() == 0)
+            return;
+        const osg::NodePathList paths = head.getParent(0)->getParentalNodePaths(mObjectRoot.get());
+        if (paths.empty())
+            return;
+        const osg::Quat parent = osg::computeLocalToWorld(paths[0]).getRotate();
+        const osg::Quat turn = osg::Quat(mLookPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(mLookYaw, osg::Vec3f(0, 0, 1));
+        const osg::Quat rotation = getNifRotation(*nifHead) * parent * turn * parent.inverse();
+        osg::Matrix matrix = head.getMatrix();
+        matrix.setRotate(rotation);
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                matrix(i, j) *= nifHead->mScale;
+        head.setMatrix(matrix);
     }
 
     void ESM4NpcAnimation::insertHeadParts(

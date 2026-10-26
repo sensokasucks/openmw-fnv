@@ -1026,11 +1026,14 @@ return {
                         s = { nextEvaluation = simTime + math.random() * EVALUATE_EVERY }
                         states[id] = s
                     end
-                    if simTime >= s.nextEvaluation then
+                    -- in conversation with the player the package waits (the world keeps
+                    -- running while talking), and picks up where it was afterwards
+                    local talking = I.FNVDialogue and I.FNVDialogue.isTalkingTo and I.FNVDialogue.isTalkingTo(npc)
+                    if not talking and simTime >= s.nextEvaluation then
                         s.nextEvaluation = simTime + EVALUATE_EVERY
                         evaluate(npc, s)
                     end
-                    tick(npc, s)
+                    if not talking then tick(npc, s) end
                     publish(id, npc, s)
                 end
             end

@@ -1,0 +1,86 @@
+// Depth of field while talking (FO3/FNV): the speaker is in focus and the rest blurs the
+// further it is from them, up to fully at fDialogFocalDepthRange away, as strong as
+// fDialogFocalDepthStrength times how far the dialogue zoom has come. Turned on and fed
+// by scripts/omw/fnvdialogue/camera.lua.
+
+uniform_float uFocus {
+    default = 100.0;
+    min = 0.0;
+    max = 1000000.0;
+    step = 1.0;
+    static = false;
+}
+
+uniform_float uRange {
+    default = 300.0;
+    min = 1.0;
+    max = 1000000.0;
+    step = 1.0;
+    static = false;
+}
+
+uniform_float uStrength {
+    default = 0.0;
+    min = 0.0;
+    max = 1.0;
+    step = 0.01;
+    static = false;
+}
+
+shared {
+    // How blurred a pixel is, 0 sharp to 1 fully
+    float circleOfConfusion(vec2 uv)
+    {
+        float depth = omw_GetLinearDepth(uv);
+        return clamp(abs(depth - uFocus) / uRange, 0.0, 1.0) * uStrength;
+    }
+
+    // Nine taps along dir, each weighted by its own blur so the sharp speaker doesn't
+    // smear into the background behind them
+    vec4 blur(vec2 uv, vec2 dir)
+    {
+        float coc = circleOfConfusion(uv);
+        vec4 centre = omw_GetLastShader(uv);
+        if (coc <= 0.001)
+            return centre;
+        const float weights[5] = float[](0.2270270, 0.1945946, 0.1216216, 0.0540540, 0.0162162);
+        vec2 stride = dir * omw.rcpResolution * 2.5 * coc;
+        vec4 sum = centre * weights[0];
+        float total = weights[0];
+        for (int i = 1; i < 5; ++i)
+        {
+            vec2 offset = stride * float(i);
+            float wa = weights[i] * circleOfConfusion(uv + offset);
+            float wb = weights[i] * circleOfConfusion(uv - offset);
+            sum += omw_GetLastShader(uv + offset) * wa + omw_GetLastShader(uv - offset) * wb;
+            total += wa + wb;
+        }
+        return sum / total;
+    }
+}
+
+fragment horizontal {
+    omw_In vec2 omw_TexCoord;
+
+    void main()
+    {
+        omw_FragColor = blur(omw_TexCoord, vec2(1.0, 0.0));
+    }
+}
+
+fragment vertical {
+    omw_In vec2 omw_TexCoord;
+
+    void main()
+    {
+        omw_FragColor = blur(omw_TexCoord, vec2(0.0, 1.0));
+    }
+}
+
+technique {
+    description = "Fallout: the background blur while talking to someone";
+    version = "1.0";
+    author = "OpenNV";
+    passes = horizontal, vertical;
+    flags = hidden;
+}
