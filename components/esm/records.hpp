@@ -98,6 +98,9 @@
 #include <components/esm4/loadperk.hpp>
 #include <components/esm4/loadpgre.hpp>
 #include <components/esm4/loadproj.hpp>
+#include <components/esm4/loadbptd.hpp>
+#include <components/esm4/loaddebr.hpp>
+#include <components/esm4/loadexpl.hpp>
 #include <components/esm4/loadqust.hpp>
 #include <components/esm4/loadvtyp.hpp>
 #include <components/esm4/loadrace.hpp>

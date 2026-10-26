@@ -32,8 +32,10 @@ namespace MWMechanics::ESM4Combat
         MWWorld::Ptr mTarget; // empty if nothing that can be hurt was hit
         MWWorld::Ptr mObject; // the world object that stopped the shot when no actor was hit (OnHitWith)
         osg::Vec3f mPosition; // where the shot ended
+        osg::Vec3f mDirection; // of the shot
         float mDamage = 0.f; // health taken
         bool mKilled = false;
+        int mLimb = -1; // body part hit (ESM4::BodyPartData::PartType), see ESM4Gore
     };
 
     // Damages the target's health; kills it when health runs out. Returns the health taken.

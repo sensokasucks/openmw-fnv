@@ -38,6 +38,7 @@
 #include "actorutil.hpp"
 #include "creaturestats.hpp"
 #include "esm4actors.hpp"
+#include "esm4gore.hpp"
 
 namespace MWMechanics::ESM4Combat
 {
@@ -345,6 +346,7 @@ namespace MWMechanics::ESM4Combat
             }
         }
 
+        result.mDirection = dir;
         if (result.mTarget.isEmpty())
             return result;
         const int projectiles = weapon.mHasFO3Data ? std::max<int>(1, weapon.mFO3Data.projectileCount) : 1;
@@ -357,7 +359,14 @@ namespace MWMechanics::ESM4Combat
             result.mDamage = damage;
             return result;
         }
+        // The limb hit takes its share: a head takes double, and the limb's condition goes down
+        result.mLimb = ESM4Gore::getHitLimb(result.mTarget, origin, dir);
+        if (result.mLimb >= 0)
+            damage *= ESM4Gore::getDamageMult(result.mTarget, result.mLimb);
         result.mDamage = hit(result.mTarget, attacker, damage);
+        if (result.mLimb >= 0)
+            ESM4Gore::damageLimb(result.mTarget, result.mLimb, damage,
+                weapon.mHasFO3Data && weapon.mFO3Data.limbDamageMult > 0.f ? weapon.mFO3Data.limbDamageMult : 1.f);
         result.mKilled = isDead(result.mTarget);
         return result;
     }

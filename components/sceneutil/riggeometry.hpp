@@ -64,6 +64,13 @@ namespace SceneUtil
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
 
+        /// Draw these primitive sets of the source geometry instead of all of them (dismembered limbs). Shared by
+        /// copies of the source geometry; this RigGeometry's own geometry keeps its own list.
+        void setPrimitiveSets(const osg::Geometry::PrimitiveSetList& primitives);
+
+        /// Names of the bones the geometry is skinned to (lower case).
+        std::vector<std::string> getBoneNames() const;
+
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }
         void accept(osg::PrimitiveFunctor&) const override;

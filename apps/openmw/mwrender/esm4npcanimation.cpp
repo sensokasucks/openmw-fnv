@@ -82,6 +82,7 @@ namespace MWRender
         updateParts();
         if (MWMechanics::ESM4Combat::isDead(mPtr))
             playDeath(true);
+        showLostLimbs();
         if (mFace != nullptr && !mFace->empty() && mObjectRoot != nullptr)
         {
             mFaceRandom.seed(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(this)));

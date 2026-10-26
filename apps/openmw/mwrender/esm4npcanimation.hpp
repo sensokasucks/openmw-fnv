@@ -6,6 +6,8 @@
 #include <osg/MatrixTransform>
 #include <osg/Matrixf>
 
+#include <components/esm4/loadbptd.hpp>
+
 #include <map>
 #include <memory>
 #include <optional>
@@ -71,6 +73,15 @@ namespace MWRender
         void setIdleSequence(std::string_view file);
         // Puts a weapon model on the "Weapon" bone of the right hand; empty takes it away.
         void showWeapon(std::string_view model);
+
+        // FO3/FONV dismemberment (see MWMechanics::ESM4Gore, which keeps the lost limbs): the limb's partitions go and
+        // the body's caps for it show; severed, a copy of the limb flies off with a spray of blood from the stump,
+        // exploded, it bursts into the explosion, debris and limb replacement gore of its BPND. lost holds every limb
+        // gone now, this one included. Implemented in esm4dismember.cpp.
+        void dismember(const ESM4::BodyPartData& data, const ESM4::BodyPartData::BodyPart& part, bool explode,
+            const osg::Vec3f& direction, std::uint32_t seed, std::uint32_t lost);
+        // Shows the body without the limbs ESM4Gore says the actor has lost, without any effects.
+        void showLostLimbs();
 
         // Lays the actor down and keeps it there; instant for actors that were already dead when loaded.
         void playDeath(bool instant);
@@ -149,6 +160,11 @@ namespace MWRender
         float mLookPitch = 0.f;
         osg::ref_ptr<osg::MatrixTransform> mLookBone;
         osg::ref_ptr<osg::Callback> mLookCallback;
+
+        // Hides the limbs of the mask on the body and shows their caps (esm4dismember.cpp)
+        void hideLimbs(const ESM4::BodyPartData& data, std::uint32_t lost);
+        void spawnSeveredLimb(const ESM4::BodyPartData::BodyPart& part, const osg::Vec3f& direction, std::uint32_t seed);
+        void spawnLimbGore(const ESM4::BodyPartData::BodyPart& part, const osg::Vec3f& direction, std::uint32_t seed);
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);

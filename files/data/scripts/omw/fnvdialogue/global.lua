@@ -1682,12 +1682,24 @@ obs.bind('GetCombatTarget', function(...)
     local get = combatApi('getTarget')
     return actor and get and get(actor) or 0
 end)
--- `Ref.KillActor [Killer]`
+-- `Ref.KillActor [Killer] [DismemberLimb] [CauseOfDeath]`: a limb comes off (bursts if the cause is 0,
+-- an explosion) through scripts/omw/fnvgore.
 obs.bind('KillActor', function(...)
-    local actor = refAndArgs(...)
+    local actor, _, limb, cause = refAndArgs(...)
     local kill = combatApi('kill')
     if actor and kill and not isDead(actor) then kill(actor) end
+    limb = tonumber(limb)
+    if actor and limb and limb >= 0 and I.FNVGore then
+        I.FNVGore.dismember(actor, limb, tonumber(cause) == 0)
+    end
     return 0
+end)
+-- `Ref.IsLimbGone Limb`
+obs.bind('IsLimbGone', function(...)
+    local actor, limb = refAndArgs(...)
+    limb = tonumber(limb)
+    if actor == nil or limb == nil or I.FNVGore == nil then return 0 end
+    return I.FNVGore.isLimbGone(actor, limb) and 1 or 0
 end)
 
 -- The player's packages in the opening: lying in Doc Mitchell's bed (wake up, sit up), sitting on its

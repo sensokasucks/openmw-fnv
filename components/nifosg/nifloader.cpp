@@ -55,6 +55,7 @@
 #include <components/sceneutil/depth.hpp>
 #include <components/sceneutil/extradata.hpp>
 #include <components/sceneutil/morphgeometry.hpp>
+#include <components/sceneutil/dismemberpartitions.hpp>
 #include <components/sceneutil/riggeometry.hpp>
 #include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/texturetype.hpp>
@@ -1793,28 +1794,39 @@ namespace NifOsg
                     const Nif::BSDismemberSkinInstance* dismember = skin->mRecordType == Nif::RC_BSDismemberSkinInstance
                         ? static_cast<const Nif::BSDismemberSkinInstance*>(skin)
                         : nullptr;
+                    // Body part types 100-999 are dismemberment caps and gore, only shown once a limb is lost.
+                    // The others are the intact body; the partitions are kept for dismemberment (FO3/FONV).
+                    osg::ref_ptr<SceneUtil::DismemberPartitions> parts;
+                    if (dismember)
+                        parts = new SceneUtil::DismemberPartitions;
                     for (size_t i = 0; i < partitions->mPartitions.size(); ++i)
                     {
-                        // Body part types 100-999 are dismemberment caps and gore, only shown once a limb is lost.
-                        // From 1000 up they are ordinary sections (3000 upper left arm, 10000 upper torso...).
-                        if (dismember && i < dismember->mParts.size() && dismember->mParts[i].mType >= 100
-                            && dismember->mParts[i].mType < 1000)
-                            continue;
+                        const bool tagged = dismember && i < dismember->mParts.size();
+                        const std::uint16_t bodyPart = tagged ? dismember->mParts[i].mType : 0;
+                        const bool cap = tagged && SceneUtil::DismemberPartitions::isCap(bodyPart);
+                        auto add = [&](osg::PrimitiveSet* primitives) {
+                            if (tagged)
+                                parts->mParts.push_back({ bodyPart, primitives });
+                            if (!cap)
+                                geometry->addPrimitiveSet(primitives);
+                        };
                         const Nif::NiSkinPartition::Partition& partition = partitions->mPartitions[i];
                         const std::vector<unsigned short>& trueTriangles = partition.mTrueTriangles;
                         if (!trueTriangles.empty())
                         {
-                            geometry->addPrimitiveSet(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLES,
+                            add(new osg::DrawElementsUShort(osg::PrimitiveSet::TRIANGLES,
                                 static_cast<unsigned>(trueTriangles.size()), trueTriangles.data()));
                         }
                         for (const auto& strip : partition.mTrueStrips)
                         {
                             if (strip.size() < 3)
                                 continue;
-                            geometry->addPrimitiveSet(new osg::DrawElementsUShort(
+                            add(new osg::DrawElementsUShort(
                                 osg::PrimitiveSet::TRIANGLE_STRIP, static_cast<unsigned>(strip.size()), strip.data()));
                         }
                     }
+                    if (parts && !parts->mParts.empty())
+                        geometry->getOrCreateUserDataContainer()->addUserObject(parts);
                 }
             }
 

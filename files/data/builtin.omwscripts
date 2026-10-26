@@ -19,6 +19,7 @@ PLAYER: scripts/omw/fnvdialogue/player.lua
 PLAYER: scripts/omw/fnvchargen/player.lua
 GLOBAL: scripts/omw/fnvai/global.lua
 GLOBAL: scripts/omw/fnvcombat/global.lua
+GLOBAL: scripts/omw/fnvgore/global.lua
 GLOBAL: scripts/omw/usehandlers.lua
 GLOBAL: scripts/omw/fnveffects/global.lua
 GLOBAL: scripts/omw/worldeventhandlers.lua

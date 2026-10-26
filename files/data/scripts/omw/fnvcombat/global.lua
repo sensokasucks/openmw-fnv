@@ -293,7 +293,17 @@ return {
             end
             if target ~= nil and target:isValid() and isActor(target) then
                 scriptEvent(target, 'OnHit', e.attacker)
-                if e.killed then scriptEvent(target, 'OnDeath', e.attacker) end
+                if e.killed then
+                    scriptEvent(target, 'OnDeath', e.attacker)
+                    -- Limbs may come off (scripts/omw/fnvgore)
+                    core.sendGlobalEvent('FNVGore_Killed', {
+                        target = target,
+                        attacker = e.attacker,
+                        weapon = e.weapon,
+                        limb = e.limb,
+                        direction = e.direction,
+                    })
+                end
             end
             if target ~= nil and target:isValid() and not e.killed and isActor(target) then
                 startCombat(target, e.attacker)

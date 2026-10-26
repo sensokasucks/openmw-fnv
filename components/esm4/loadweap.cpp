@@ -141,6 +141,7 @@ void ESM4::Weapon::load(ESM4::Reader& reader)
                 get(42, d.projectileCount);
                 get(44, d.minRange);
                 get(48, d.maxRange);
+                get(52, d.onHit);
                 get(56, d.flags2);
                 get(60, d.animAttackMult);
                 get(64, d.fireRate);

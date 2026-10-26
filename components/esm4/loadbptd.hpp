@@ -42,26 +42,49 @@ namespace ESM4
 
     struct BodyPartData
     {
+        enum Flags : std::uint8_t
+        {
+            Flag_Severable = 0x01,
+            Flag_IKData = 0x02,
+            Flag_IKBipedData = 0x04,
+            Flag_Explodable = 0x08,
+            Flag_IKIsHead = 0x10,
+            Flag_IKHeadtracking = 0x20,
+            // FalloutNV.exe reads it as "explode chance is absolute": the chance isn't scaled by bonuses
+            Flag_AbsoluteChance = 0x40,
+        };
+
+        // FO3/FONV limbs; also the body part ids of BSDismemberSkinInstance partitions, where 100 + limb is the cap
+        // on the severed limb, 200 + limb the cap on the body and 1000 * limb the body section next to the limb.
+        enum PartType : std::uint8_t
+        {
+            Part_Torso = 0,
+            Part_Head1 = 1,
+            Part_Head2 = 2,
+            Part_LeftArm1 = 3,
+            Part_LeftArm2 = 4,
+            Part_RightArm1 = 5,
+            Part_RightArm2 = 6,
+            Part_LeftLeg1 = 7,
+            Part_LeftLeg2 = 8,
+            Part_LeftLeg3 = 9,
+            Part_RightLeg1 = 10,
+            Part_RightLeg2 = 11,
+            Part_RightLeg3 = 12,
+            Part_Brain = 13,
+            Part_Weapon = 14,
+            Part_Count = 15,
+        };
+
 #pragma pack(push, 1)
         struct BPND
         {
             float damageMult;
 
-            // Severable
-            // IK Data
-            // IK Data - Biped Data
-            // Explodable
-            // IK Data - Is Head
-            // IK Data - Headtracking
-            // To Hit Chance - Absolute
+            // See Flags
             std::uint8_t flags;
 
-            // Torso
-            // Head
-            // Eye
-            // LookAt
-            // Fly Grab
-            // Saddle
+            // FO3/FONV limb (LIMB_ENUM): see PartType
             std::uint8_t partType;
 
             std::uint8_t healthPercent;
@@ -106,6 +129,14 @@ namespace ESM4
             BPND mData;
             std::string mLimbReplacementModel;
             std::string mGoreEffectsTarget;
+
+            // The forms of mData with the file's load order applied
+            ESM::FormId mExplDebris; // DEBR
+            ESM::FormId mExplExplosion; // EXPL
+            ESM::FormId mSevDebris;
+            ESM::FormId mSevExplosion;
+            ESM::FormId mSevImpactDataSet; // IPDS
+            ESM::FormId mExplImpactDataSet;
 
             void clear();
         };

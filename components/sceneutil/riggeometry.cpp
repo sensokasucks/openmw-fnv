@@ -102,6 +102,22 @@ namespace SceneUtil
         }
     }
 
+    void RigGeometry::setPrimitiveSets(const osg::Geometry::PrimitiveSetList& primitives)
+    {
+        for (osg::ref_ptr<osg::Geometry>& geometry : mGeometry)
+            if (geometry)
+                geometry->setPrimitiveSetList(primitives);
+    }
+
+    std::vector<std::string> RigGeometry::getBoneNames() const
+    {
+        std::vector<std::string> names;
+        if (mData)
+            for (const BoneInfo& bone : mData->mBones)
+                names.push_back(bone.mName);
+        return names;
+    }
+
     osg::ref_ptr<osg::Geometry> RigGeometry::getSourceGeometry() const
     {
         return mSourceGeometry;

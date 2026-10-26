@@ -216,6 +216,16 @@ obs.bind('GetDead', function(...)
     local ok, dead = pcall(core.obscript.combat.isDead, obj)
     return (ok and dead) and 1 or 0
 end)
+-- `Ref.IsLimbGone Limb` (FO3/FNV limbs, scripts/omw/fnvgore)
+obs.bind('IsLimbGone', function(...)
+    local obj, limb = refAndArgs(...)
+    limb = tonumber(limb)
+    local combat = core.obscript and core.obscript.combat
+    if obj == nil or limb == nil or limb < 0 or combat == nil or combat.getLostLimbs == nil then return 0 end
+    local ok, lost = pcall(combat.getLostLimbs, obj)
+    if not ok then return 0 end
+    return math.floor(lost / 2 ^ limb) % 2 == 1 and 1 or 0
+end)
 obs.bind('GetDisabled', function(...)
     local obj = refAndArgs(...)
     return (obj ~= nil and not obj.enabled) and 1 or 0

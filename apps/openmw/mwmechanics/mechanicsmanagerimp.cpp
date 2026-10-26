@@ -2,6 +2,7 @@
 
 #include "esm4actors.hpp"
 #include "esm4combat.hpp"
+#include "esm4gore.hpp"
 
 #include <cassert>
 
@@ -1852,6 +1853,7 @@ namespace MWMechanics
         mActors.clear();
         ESM4Actors::get().clear();
         ESM4Combat::clear();
+        ESM4Gore::clear();
         mStolenItems.clear();
         mClassSelected = false;
         mRaceSelected = false;

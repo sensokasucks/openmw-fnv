@@ -93,6 +93,8 @@ namespace ESM4
             std::uint8_t projectileCount = 1; // 42
             float minRange = 0.f; // 44
             float maxRange = 0.f; // 48
+            // 0 dismember or explode by the usual chances, 1 dismember only, 2 explode only, 3 neither
+            std::uint32_t onHit = 0; // 52
             std::uint32_t flags2 = 0; // 56
             float animAttackMult = 1.f; // 60
             float fireRate = 1.f; // 64

@@ -22,6 +22,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/esm4actors.hpp"
 #include "../mwmechanics/esm4combat.hpp"
+#include "../mwmechanics/esm4gore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/store.hpp"
@@ -36,6 +37,7 @@ namespace MWLua
     namespace
     {
         namespace Combat = MWMechanics::ESM4Combat;
+        namespace Gore = MWMechanics::ESM4Gore;
 
         // By record id ("FormId:0x7ea24") or editor id ("WeapNVVarmintRifle")
         const ESM4::Weapon* findWeapon(std::string_view id)
@@ -57,7 +59,7 @@ namespace MWLua
         }
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
-        // a miss, if anything), damage, killed, position }
+        // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB) }
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon,
             const Combat::HitResult& hit)
         {
@@ -72,6 +74,9 @@ namespace MWLua
                 data["damage"] = hit.mDamage;
                 data["killed"] = hit.mKilled;
                 data["position"] = hit.mPosition;
+                data["direction"] = hit.mDirection;
+                if (hit.mLimb >= 0)
+                    data["limb"] = hit.mLimb;
                 context.mLuaEvents->addGlobalEvent(
                     { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
             });
@@ -290,6 +295,62 @@ namespace MWLua
                     Combat::hit(target.ptr(), attackerPtr, Combat::applyArmor(target.ptr(), damage));
                 },
                 "obscriptCombatHitAction");
+        };
+
+        // FO3/FONV limbs (body part types of BPTD, ESM4::BodyPartData::PartType)
+        sol::table limbs(lua, sol::create);
+        static constexpr std::string_view limbNames[] = { "Torso", "Head1", "Head2", "LeftArm1", "LeftArm2",
+            "RightArm1", "RightArm2", "LeftLeg1", "LeftLeg2", "LeftLeg3", "RightLeg1", "RightLeg2", "RightLeg3",
+            "Brain", "Weapon" };
+        for (std::size_t i = 0; i < std::size(limbNames); ++i)
+            limbs[limbNames[i]] = static_cast<int>(i);
+        api["LIMB"] = LuaUtil::makeReadOnly(limbs);
+
+        // What the blow that killed the actor tears off, as FalloutNV.exe decides it: a list of { limb, explode }.
+        // blow: { limb (the limb hit), weapon (record id, its "On Hit" setting counts), bloodyMess (the killer has
+        // the perk), seed (integer: the same seed gives the same result) }.
+        api["rollDismemberment"] = [](const Object& actor, sol::table blow, sol::this_state s) {
+            Gore::KillingBlow killingBlow;
+            killingBlow.mLimb = blow.get_or("limb", -1);
+            killingBlow.mBloodyMess = blow.get_or("bloodyMess", false);
+            killingBlow.mSeed = static_cast<std::uint32_t>(blow.get_or<double>("seed", 0));
+            if (sol::optional<std::string_view> weapon = blow.get<sol::optional<std::string_view>>("weapon"))
+                killingBlow.mWeapon = findWeapon(*weapon);
+            sol::state_view lua(s);
+            sol::table result(lua, sol::create);
+            for (const Gore::Dismemberment& d : Gore::rollDismemberment(actor.ptr(), killingBlow))
+            {
+                sol::table entry(lua, sol::create);
+                entry["limb"] = d.mLimb;
+                entry["explode"] = d.mExplode;
+                result.add(entry);
+            }
+            return result;
+        };
+
+        // Severs (or explodes) the actor's limb with its gore; direction (optional) pushes the pieces away and the
+        // seed picks how they fly. Global scripts call it through I.FNVGore.dismember, which saves it.
+        api["dismember"] = [context](const Object& actor, int limb, bool explode, sol::optional<osg::Vec3f> direction,
+                               sol::optional<double> seed) {
+            context.mLuaManager->addAction(
+                [actor = Object(actor), limb, explode, direction = direction.value_or(osg::Vec3f()),
+                    seed = static_cast<std::uint32_t>(seed.value_or(0))] {
+                    Gore::dismember(actor.ptr(), limb, explode, direction, seed);
+                },
+                "obscriptCombatDismemberAction");
+        };
+
+        // Limbs the actor has lost and the ones of them that exploded, as bit masks (1 << limb).
+        api["getLostLimbs"] = [](const Object& actor) {
+            return std::make_tuple(Gore::getLostLimbs(actor.ptr()), Gore::getExplodedLimbs(actor.ptr()));
+        };
+        // Restores lost limbs from a saved game: the body shows without them, nothing flies.
+        api["setLostLimbs"] = [context](const Object& actor, std::uint32_t lost, sol::optional<std::uint32_t> exploded) {
+            context.mLuaManager->addAction(
+                [actor = Object(actor), lost, exploded = exploded.value_or(0)] {
+                    Gore::setLostLimbs(actor.ptr(), lost, exploded);
+                },
+                "obscriptCombatSetLostLimbsAction");
         };
 
         return LuaUtil::makeReadOnly(api);

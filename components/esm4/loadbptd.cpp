@@ -39,6 +39,12 @@ void ESM4::BodyPartData::BodyPart::clear()
     mVATSTarget.clear();
     mIKStartNode.clear();
     std::memset(&mData, 0, sizeof(BPND));
+    mExplDebris = {};
+    mExplExplosion = {};
+    mSevDebris = {};
+    mSevExplosion = {};
+    mSevImpactDataSet = {};
+    mExplImpactDataSet = {};
     mLimbReplacementModel.clear();
     mGoreEffectsTarget.clear();
 }
@@ -79,7 +85,19 @@ void ESM4::BodyPartData::load(ESM4::Reader& reader)
                 break;
             case ESM::fourCC("BPND"):
                 if (subHdr.dataSize == sizeof(bodyPart.mData))
+                {
                     reader.get(bodyPart.mData);
+                    const auto adjust = [&](ESM::FormId32 raw, ESM::FormId& out) {
+                        out = ESM::FormId::fromUint32(raw);
+                        reader.adjustFormId(out);
+                    };
+                    adjust(bodyPart.mData.explDebris, bodyPart.mExplDebris);
+                    adjust(bodyPart.mData.explExplosion, bodyPart.mExplExplosion);
+                    adjust(bodyPart.mData.sevDebris, bodyPart.mSevDebris);
+                    adjust(bodyPart.mData.sevExplosion, bodyPart.mSevExplosion);
+                    adjust(bodyPart.mData.sevImpactDataSet, bodyPart.mSevImpactDataSet);
+                    adjust(bodyPart.mData.explImpactDataSet, bodyPart.mExplImpactDataSet);
+                }
                 // FIXME: FO4
                 else
                     reader.skipSubRecordData();
@@ -109,7 +127,8 @@ void ESM4::BodyPartData::load(ESM4::Reader& reader)
                 reader.skipSubRecordData();
                 break;
             default:
-                throw std::runtime_error("ESM4::BPTD::load - Unknown subrecord " + ESM::printName(subHdr.typeId));
+                reader.skipSubRecordData();
+                break;
         }
     }
 
