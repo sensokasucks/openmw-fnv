@@ -7,6 +7,8 @@ local ui = require('openmw.ui')
 local util = require('openmw.util')
 local I = require('openmw.interfaces')
 
+local frame = require('scripts.omw.fnvhud.frame')
+
 local v2 = util.vector2
 
 local WIDTH = 640
@@ -135,7 +137,7 @@ local function show(data)
 
     window = ui.create {
         layer = 'Windows',
-        template = I.MWUI.templates.boxSolidThick,
+        template = frame.boxSolidThick,
         props = {
             relativePosition = v2(0.5, 0.5),
             anchor = v2(0.5, 0.5),

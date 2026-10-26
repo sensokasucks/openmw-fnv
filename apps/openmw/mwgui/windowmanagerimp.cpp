@@ -673,16 +673,18 @@ namespace MWGui
 
         mInventoryWindow->setGuiMode(getMode());
 
-        // If in game mode (or interactive messagebox), show the pinned windows
+        // If in game mode (or interactive messagebox), show the pinned windows. The Fallout HUD has no
+        // Morrowind windows: its map, stats and inventory are on the Pip-Boy, so pinned ones stay hidden.
         if (mGuiModes.empty())
         {
-            mMap->setVisible(mMap->pinned() && !isConsoleMode() && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
+            const bool pinnedAllowed = !isConsoleMode() && !mHud->isFalloutStyle();
+            mMap->setVisible(mMap->pinned() && pinnedAllowed && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
             mStatsWindow->setVisible(
-                mStatsWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
-            mInventoryWindow->setVisible(mInventoryWindow->pinned() && !isConsoleMode()
+                mStatsWindow->pinned() && pinnedAllowed && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
+            mInventoryWindow->setVisible(mInventoryWindow->pinned() && pinnedAllowed
                 && !(mForceHidden & GW_Inventory) && (mAllowed & GW_Inventory));
             mSpellWindow->setVisible(
-                mSpellWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
+                mSpellWindow->pinned() && pinnedAllowed && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
 
             if (Settings::gui().mControllerMenus)
             {
@@ -1823,6 +1825,8 @@ namespace MWGui
             return;
         mHud->setFalloutStyle(enabled);
         mToolTips->setFocusTooltipHidden(enabled);
+        // updateVisible() leaves the sneak box alone
+        mHud->setSneakVisible(mHud->isSneakHidden());
         updateVisible();
     }
 

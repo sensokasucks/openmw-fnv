@@ -26,6 +26,8 @@ local ui = require('openmw.ui')
 local util = require('openmw.util')
 local I = require('openmw.interfaces')
 
+local frame = require('scripts.omw.fnvhud.frame')
+
 local stats = core.obscript and core.obscript.stats
 if stats == nil then
     return {}
@@ -266,7 +268,7 @@ local function showWindow(title, content)
     for _, widget in ipairs(content) do all:add(widget) end
     element = ui.create {
         layer = 'Windows',
-        template = I.MWUI.templates.boxSolidThick,
+        template = frame.boxSolidThick,
         props = { relativePosition = v2(0.5, 0.5), anchor = v2(0.5, 0.5) },
         content = ui.content {
             {
@@ -288,7 +290,7 @@ end
 
 local function nameField(state)
     return {
-        template = I.MWUI.templates.box,
+        template = frame.box,
         content = ui.content {
             {
                 template = I.MWUI.templates.textEditLine,
