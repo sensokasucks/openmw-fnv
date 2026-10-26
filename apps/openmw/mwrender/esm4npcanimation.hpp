@@ -33,6 +33,7 @@ namespace osg
 namespace MWRender
 {
     class FaceMorphs;
+    struct LipSync;
 
     class ESM4NpcAnimation : public Animation
     {
@@ -86,6 +87,10 @@ namespace MWRender
         // the actor stops talking.
         void setEmotion(int type, float value);
 
+        // FO3/FONV: the voice file the actor just started saying. Its lip sync (.lip) moves the mouth, brows and
+        // eyes; without one the mouth follows the voice's loudness.
+        void startLipSync(std::string_view voiceFile);
+
         // Moves the face for the frame: the mouth follows the loudness of the voice line being said, the eyes
         // blink now and then, and the mood shows. Called by the face's update callback.
         void updateFace(float duration);
@@ -127,6 +132,8 @@ namespace MWRender
         float mEmotionValue = 0.f;
         float mEmotionLevel = 0.f;
         float mSilentTime = 0.f;
+        std::shared_ptr<const LipSync> mLipSync;
+        float mLipSyncTime = 0.f;
         std::vector<std::pair<osg::ref_ptr<osg::Node>, osg::ref_ptr<osg::Callback>>> mLoopCallbacks;
         struct RestPose
         {

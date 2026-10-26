@@ -59,6 +59,13 @@ local function publishApparel()
         list[#list + 1] = { recordId = w.recordId, editorId = w.editorId }
     end
     apparelSection:set('worn', list)
+    -- the player's FO3/FNV body (see RenderingManager::hasPlayerBody) wears it too
+    local ai = obscript and obscript.ai
+    if ai and ai.setPlayerBodyApparel then
+        local ids = {}
+        for i, w in ipairs(list) do ids[i] = w.recordId end
+        ai.setPlayerBodyApparel(ids)
+    end
 end
 
 local function itemInfo(item)
