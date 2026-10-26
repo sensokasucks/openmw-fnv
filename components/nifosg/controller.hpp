@@ -9,6 +9,7 @@
 #include <components/nif/controller.hpp>
 #include <components/nif/data.hpp>
 #include <components/nif/nifkey.hpp>
+#include <components/nif/particle.hpp>
 #include <components/sceneutil/keyframe.hpp>
 #include <components/sceneutil/nodecallback.hpp>
 #include <components/sceneutil/statesetupdater.hpp>
@@ -452,6 +453,26 @@ namespace NifOsg
     private:
         float mEmitStart{ 0.f };
         float mEmitStop{ 0.f };
+    };
+
+    // NiPSysEmitterCtlr: the emitter's birth rate and whether it emits, over time
+    class PSysEmitterController
+        : public SceneUtil::NodeCallback<PSysEmitterController, osgParticle::ParticleProcessor*>,
+          public SceneUtil::Controller
+    {
+    public:
+        PSysEmitterController(const Nif::NiPSysEmitterCtlr* ctrl, float defaultRate);
+        PSysEmitterController() = default;
+        PSysEmitterController(const PSysEmitterController& copy, const osg::CopyOp& copyop);
+
+        META_Object(NifOsg, PSysEmitterController)
+
+        void operator()(osgParticle::ParticleProcessor* node, osg::NodeVisitor* nv);
+
+    private:
+        FloatInterpolator mBirthRate;
+        BoolInterpolator mActive;
+        float mDefaultRate{ 0.f };
     };
 
     class PathController : public SceneUtil::NodeCallback<PathController, NifOsg::MatrixTransform*>,

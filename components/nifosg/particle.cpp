@@ -1,5 +1,6 @@
 #include "particle.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -216,9 +217,10 @@ namespace NifOsg
             std::numeric_limits<float>::epsilon(), mLifetime + mLifetimeRandom * Misc::Rng::rollClosedProbability()));
     }
 
-    GrowFadeAffector::GrowFadeAffector(float growTime, float fadeTime)
+    GrowFadeAffector::GrowFadeAffector(float growTime, float fadeTime, float baseScale)
         : mGrowTime(growTime)
         , mFadeTime(fadeTime)
+        , mBaseScale(baseScale)
         , mCachedDefaultSize(0.f)
     {
     }
@@ -235,6 +237,7 @@ namespace NifOsg
     {
         mGrowTime = copy.mGrowTime;
         mFadeTime = copy.mFadeTime;
+        mBaseScale = copy.mBaseScale;
         mCachedDefaultSize = copy.mCachedDefaultSize;
     }
 
@@ -247,7 +250,7 @@ namespace NifOsg
     {
         float size = mCachedDefaultSize;
         if (particle->getAge() < mGrowTime && mGrowTime != 0.f)
-            size *= static_cast<float>(particle->getAge() / mGrowTime);
+            size *= mBaseScale + (1.f - mBaseScale) * static_cast<float>(particle->getAge() / mGrowTime);
         if (particle->getLifeTime() - particle->getAge() < mFadeTime && mFadeTime != 0.f)
             size *= static_cast<float>(particle->getLifeTime() - particle->getAge()) / mFadeTime;
         particle->setSizeRange(osgParticle::rangef(size, size));
@@ -742,4 +745,190 @@ namespace NifOsg
         }
     }
 
+}
+
+namespace NifOsg
+{
+    VolumePlacer::VolumePlacer(Shape shape, const osg::Vec3f& extents)
+        : mShape(shape)
+        , mExtents(extents)
+    {
+    }
+
+    VolumePlacer::VolumePlacer(const VolumePlacer& copy, const osg::CopyOp& copyop)
+        : osgParticle::Placer(copy, copyop)
+        , mShape(copy.mShape)
+        , mExtents(copy.mExtents)
+    {
+    }
+
+    void VolumePlacer::place(osgParticle::Particle* particle) const
+    {
+        auto unit = [] { return 2.f * Misc::Rng::rollClosedProbability() - 1.f; };
+        osg::Vec3f position;
+        switch (mShape)
+        {
+            case Shape::Box:
+                position = osg::Vec3f(unit() * mExtents.x(), unit() * mExtents.y(), unit() * mExtents.z()) * 0.5f;
+                break;
+            case Shape::Sphere:
+            {
+                osg::Vec3f v;
+                do
+                    v = osg::Vec3f(unit(), unit(), unit());
+                while (v.length2() > 1.f);
+                position = v * mExtents.x();
+                break;
+            }
+            case Shape::Cylinder:
+            {
+                osg::Vec2f v;
+                do
+                    v = osg::Vec2f(unit(), unit());
+                while (v.length2() > 1.f);
+                // Gamebryo's emitter cylinders stand along the emitter's x axis
+                position = osg::Vec3f(unit() * mExtents.y() * 0.5f, v.x() * mExtents.x(), v.y() * mExtents.x());
+                break;
+            }
+        }
+        particle->setPosition(position);
+    }
+
+    PSysGravityAffector::PSysGravityAffector(const Nif::NiPSysGravityModifier* gravity)
+        : mAxis(gravity->mGravityAxis)
+        , mStrength(gravity->mStrength)
+        , mPoint(gravity->mForceType == Nif::ForceType::Point)
+        , mWorldAligned(gravity->mWorldAligned)
+    {
+        mAxis.normalize();
+    }
+
+    PSysGravityAffector::PSysGravityAffector(const PSysGravityAffector& copy, const osg::CopyOp& copyop)
+        : osgParticle::Operator(copy, copyop)
+        , mAxis(copy.mAxis)
+        , mStrength(copy.mStrength)
+        , mPoint(copy.mPoint)
+        , mWorldAligned(copy.mWorldAligned)
+    {
+    }
+
+    void PSysGravityAffector::beginOperate(osgParticle::Program* program)
+    {
+        const bool absolute = program->getReferenceFrame() == osgParticle::ParticleProcessor::ABSOLUTE_RF;
+        if (mWorldAligned)
+            mCachedAxis = absolute ? mAxis : program->rotateWorldToLocal(mAxis);
+        else
+            mCachedAxis = absolute ? program->rotateLocalToWorld(mAxis) : mAxis;
+        mCachedAxis.normalize();
+        mCachedPosition = absolute ? program->transformLocalToWorld(osg::Vec3f()) : osg::Vec3f();
+    }
+
+    void PSysGravityAffector::operate(osgParticle::Particle* particle, double dt)
+    {
+        // Gravity pulls against its axis: blood (axis +z, worldaligned) falls
+        osg::Vec3f pull = -mCachedAxis;
+        if (mPoint)
+        {
+            pull = mCachedPosition - particle->getPosition();
+            if (pull.normalize() == 0.f)
+                return;
+        }
+        particle->addVelocity(pull * mStrength * static_cast<float>(dt));
+    }
+
+    PSysDragAffector::PSysDragAffector(float percentage)
+        : mPercentage(percentage)
+    {
+    }
+
+    PSysDragAffector::PSysDragAffector(const PSysDragAffector& copy, const osg::CopyOp& copyop)
+        : osgParticle::Operator(copy, copyop)
+        , mPercentage(copy.mPercentage)
+    {
+    }
+
+    void PSysDragAffector::operate(osgParticle::Particle* particle, double dt)
+    {
+        const float keep = std::max(0.f, 1.f - mPercentage * static_cast<float>(dt));
+        particle->setVelocity(particle->getVelocity() * keep);
+    }
+
+    SimpleColorAffector::SimpleColorAffector(const Nif::BSPSysSimpleColorModifier* modifier)
+        : mFadeIn(modifier->mFadeInPercent)
+        , mFadeOut(modifier->mFadeOutPercent)
+        , mColor1Start(modifier->mColor1StartPercent)
+        , mColor1End(modifier->mColor1EndPercent)
+        , mColor2Start(modifier->mColor2StartPercent)
+        , mColor2End(modifier->mColor2EndPercent)
+    {
+        for (std::size_t i = 0; i < 3; ++i)
+            mColors[i] = i < modifier->mColors.size() ? modifier->mColors[i] : osg::Vec4f(1, 1, 1, 1);
+    }
+
+    SimpleColorAffector::SimpleColorAffector(const SimpleColorAffector& copy, const osg::CopyOp& copyop)
+        : osgParticle::Operator(copy, copyop)
+        , mFadeIn(copy.mFadeIn)
+        , mFadeOut(copy.mFadeOut)
+        , mColor1Start(copy.mColor1Start)
+        , mColor1End(copy.mColor1End)
+        , mColor2Start(copy.mColor2Start)
+        , mColor2End(copy.mColor2End)
+    {
+        for (std::size_t i = 0; i < 3; ++i)
+            mColors[i] = copy.mColors[i];
+    }
+
+    void SimpleColorAffector::operate(osgParticle::Particle* particle, double /* dt */)
+    {
+        const float life = static_cast<float>(particle->getLifeTime());
+        const float t = life > 0.f ? std::clamp(static_cast<float>(particle->getAge()) / life, 0.f, 1.f) : 0.f;
+        auto blend = [](const osg::Vec4f& a, const osg::Vec4f& b, float from, float to, float at) {
+            if (to <= from)
+                return at < to ? a : b;
+            const float f = std::clamp((at - from) / (to - from), 0.f, 1.f);
+            return a * (1.f - f) + b * f;
+        };
+        // Bethesda's three keys: the first colour blends into the second until the colour 1 end, the second holds
+        // and blends into the third from the colour 2 start to the colour 2 end. Without percentages the second
+        // colour is the particles' colour all their life (the first is often black, only a starting point).
+        osg::Vec4f color = mColors[1];
+        if (mColor1End > 0.f && t < mColor1End)
+            color = blend(mColors[0], mColors[1], 0.f, mColor1End, t);
+        else if (mColor2End > mColor2Start && t > mColor2Start)
+            color = blend(mColors[1], mColors[2], mColor2Start, mColor2End, t);
+        // Fade in over the first fade-in share of the life, out from the fade-out point on
+        float alpha = color.a();
+        if (mFadeIn > 0.f && t < mFadeIn)
+            alpha *= t / mFadeIn;
+        if (mFadeOut > 0.f && mFadeOut < 1.f && t > mFadeOut)
+            alpha *= (1.f - t) / (1.f - mFadeOut);
+        color.a() = 1.f;
+        particle->setColorRange(osgParticle::rangev4(color, color));
+        particle->setAlphaRange(osgParticle::rangef(alpha, alpha));
+    }
+}
+
+namespace NifOsg
+{
+    RandomTileAffector::RandomTileAffector(int sTiles, int tTiles)
+        : mSTiles(std::max(1, sTiles))
+        , mTTiles(std::max(1, tTiles))
+    {
+    }
+
+    RandomTileAffector::RandomTileAffector(const RandomTileAffector& copy, const osg::CopyOp& copyop)
+        : osgParticle::Operator(copy, copyop)
+        , mSTiles(copy.mSTiles)
+        , mTTiles(copy.mTTiles)
+    {
+    }
+
+    void RandomTileAffector::operate(osgParticle::Particle* particle, double /* dt */)
+    {
+        // A new particle still has the whole texture as its one tile
+        if (particle->getTileS() == mSTiles && particle->getTileT() == mTTiles)
+            return;
+        const int tile = Misc::Rng::rollDice(mSTiles * mTTiles);
+        particle->setTextureTileRange(mSTiles, mTTiles, tile, tile);
+    }
 }

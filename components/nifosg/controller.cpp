@@ -9,12 +9,14 @@
 
 #include <osgAnimation/Bone>
 
+#include <osgParticle/ConstantRateCounter>
 #include <osgParticle/Emitter>
 
 #include <components/nif/data.hpp>
 #include <components/sceneutil/morphgeometry.hpp>
 
 #include "matrixtransform.hpp"
+#include "particle.hpp"
 
 namespace NifOsg
 {
@@ -908,6 +910,47 @@ namespace NifOsg
             float time = getInputValue(nv);
             node->getParticleSystem()->setFrozen(false);
             node->setEnabled(time >= mEmitStart && time < mEmitStop);
+        }
+        else
+            node->getParticleSystem()->setFrozen(true);
+        traverse(node, nv);
+    }
+
+    PSysEmitterController::PSysEmitterController(const Nif::NiPSysEmitterCtlr* ctrl, float defaultRate)
+        : mDefaultRate(defaultRate)
+    {
+        if (!ctrl->mInterpolator.empty() && ctrl->mInterpolator->mRecordType == Nif::RC_NiFloatInterpolator)
+            mBirthRate = { static_cast<const Nif::NiFloatInterpolator*>(ctrl->mInterpolator.getPtr()) };
+        else
+            mBirthRate = FloatInterpolator(nullptr, defaultRate);
+        if (!ctrl->mVisInterpolator.empty()
+            && (ctrl->mVisInterpolator->mRecordType == Nif::RC_NiBoolInterpolator
+                || ctrl->mVisInterpolator->mRecordType == Nif::RC_NiBoolTimelineInterpolator))
+            mActive = { static_cast<const Nif::NiBoolInterpolator*>(ctrl->mVisInterpolator.getPtr()) };
+        else
+            mActive = BoolInterpolator(nullptr, true);
+    }
+
+    PSysEmitterController::PSysEmitterController(const PSysEmitterController& copy, const osg::CopyOp& copyop)
+        : SceneUtil::NodeCallback<PSysEmitterController, osgParticle::ParticleProcessor*>(copy, copyop)
+        , Controller(copy)
+        , mBirthRate(copy.mBirthRate)
+        , mActive(copy.mActive)
+        , mDefaultRate(copy.mDefaultRate)
+    {
+    }
+
+    void PSysEmitterController::operator()(osgParticle::ParticleProcessor* node, osg::NodeVisitor* nv)
+    {
+        if (hasInput())
+        {
+            const float time = getInputValue(nv);
+            node->getParticleSystem()->setFrozen(false);
+            const bool active = mActive.interpKey(time);
+            node->setEnabled(active);
+            if (auto* emitter = dynamic_cast<Emitter*>(node))
+                if (auto* counter = dynamic_cast<osgParticle::ConstantRateCounter*>(emitter->getCounter()))
+                    counter->setNumberOfParticlesPerSecondToCreate(active ? std::max(0.f, mBirthRate.interpKey(time)) : 0.f);
         }
         else
             node->getParticleSystem()->setFrozen(true);

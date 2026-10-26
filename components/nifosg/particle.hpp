@@ -140,7 +140,8 @@ namespace NifOsg
     class GrowFadeAffector : public osgParticle::Operator
     {
     public:
-        GrowFadeAffector(float growTime, float fadeTime);
+        // baseScale: the share of their size particles start growing from (Gamebryo 20 NiPSysGrowFadeModifier)
+        GrowFadeAffector(float growTime, float fadeTime, float baseScale = 0.f);
         GrowFadeAffector();
         GrowFadeAffector(const GrowFadeAffector& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
 
@@ -154,6 +155,7 @@ namespace NifOsg
     private:
         float mGrowTime;
         float mFadeTime;
+        float mBaseScale{ 0.f };
 
         float mCachedDefaultSize;
     };
@@ -265,6 +267,7 @@ namespace NifOsg
         void setCounter(osgParticle::Counter* counter) { mCounter = counter; }
         void setGeometryEmitterTarget(std::optional<int> recordIndex) { mGeometryEmitterTarget = recordIndex; }
         void setFlags(int flags) { mFlags = flags; }
+        osgParticle::Counter* getCounter() { return mCounter.get(); }
 
     private:
         // NIF Record indices
@@ -280,6 +283,110 @@ namespace NifOsg
         osg::observer_ptr<osg::Vec3Array> mCachedGeometryEmitter;
     };
 
+
+    // Gamebryo 20 particle systems (NiParticleSystem with NiPSys* modifiers, FO3/FONV/Skyrim)
+
+    // Places new particles in a box, sphere or cylinder around the emitter object (NiPSysVolumeEmitter)
+    class VolumePlacer : public osgParticle::Placer
+    {
+    public:
+        enum class Shape
+        {
+            Box,
+            Sphere,
+            Cylinder,
+        };
+
+        VolumePlacer(Shape shape, const osg::Vec3f& extents);
+        VolumePlacer() = default;
+        VolumePlacer(const VolumePlacer& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
+
+        META_Object(NifOsg, VolumePlacer)
+
+        void place(osgParticle::Particle* particle) const override;
+        osg::Vec3 getControlPosition() const override { return osg::Vec3(); }
+
+    private:
+        Shape mShape{ Shape::Box };
+        osg::Vec3f mExtents; // box: width, height, depth; sphere: radius; cylinder: radius, height
+    };
+
+    // NiPSysGravityModifier: a constant pull along the gravity axis (planar) or toward the gravity object (point)
+    class PSysGravityAffector : public osgParticle::Operator
+    {
+    public:
+        PSysGravityAffector(const Nif::NiPSysGravityModifier* gravity);
+        PSysGravityAffector() = default;
+        PSysGravityAffector(const PSysGravityAffector& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
+
+        META_Object(NifOsg, PSysGravityAffector)
+
+        void beginOperate(osgParticle::Program* program) override;
+        void operate(osgParticle::Particle* particle, double dt) override;
+
+    private:
+        osg::Vec3f mAxis;
+        float mStrength{ 0.f };
+        bool mPoint{ false };
+        bool mWorldAligned{ false };
+        osg::Vec3f mCachedAxis;
+        osg::Vec3f mCachedPosition;
+    };
+
+    // NiPSysDragModifier: particles lose a share of their speed every second
+    class PSysDragAffector : public osgParticle::Operator
+    {
+    public:
+        PSysDragAffector(float percentage);
+        PSysDragAffector() = default;
+        PSysDragAffector(const PSysDragAffector& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
+
+        META_Object(NifOsg, PSysDragAffector)
+
+        void operate(osgParticle::Particle* particle, double dt) override;
+
+    private:
+        float mPercentage{ 0.f };
+    };
+
+    // BSPSysSimpleColorModifier: fades particles in and out and blends their colour over three keys of their life
+    class SimpleColorAffector : public osgParticle::Operator
+    {
+    public:
+        SimpleColorAffector(const Nif::BSPSysSimpleColorModifier* modifier);
+        SimpleColorAffector() = default;
+        SimpleColorAffector(const SimpleColorAffector& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
+
+        META_Object(NifOsg, SimpleColorAffector)
+
+        void operate(osgParticle::Particle* particle, double dt) override;
+
+    private:
+        float mFadeIn{ 0.f };
+        float mFadeOut{ 1.f };
+        float mColor1Start{ 0.f };
+        float mColor1End{ 0.f };
+        float mColor2Start{ 0.f };
+        float mColor2End{ 0.f };
+        osg::Vec4f mColors[3];
+    };
+
+    // NiPSysData subtexture offsets: each particle draws one random tile of a texture sheet
+    class RandomTileAffector : public osgParticle::Operator
+    {
+    public:
+        RandomTileAffector(int sTiles, int tTiles);
+        RandomTileAffector() = default;
+        RandomTileAffector(const RandomTileAffector& copy, const osg::CopyOp& copyop = osg::CopyOp::SHALLOW_COPY);
+
+        META_Object(NifOsg, RandomTileAffector)
+
+        void operate(osgParticle::Particle* particle, double dt) override;
+
+    private:
+        int mSTiles{ 1 };
+        int mTTiles{ 1 };
+    };
 }
 
 #endif

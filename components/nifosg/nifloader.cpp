@@ -28,6 +28,8 @@
 #include <components/serialization/osgyaml.hpp>
 
 // particle
+#include <map>
+
 #include <osgParticle/BoxPlacer>
 #include <osgParticle/ConstantRateCounter>
 #include <osgParticle/ModularProgram>
@@ -1075,6 +1077,8 @@ namespace NifOsg
 
             if (nifNode->mRecordType == Nif::RC_NiParticles)
                 handleParticleSystem(nifNode, parent, node, composite, args.mAnimFlags);
+            else if (nifNode->mRecordType == Nif::RC_NiParticleSystem)
+                handlePSysParticleSystem(nifNode, parent, node, composite, args.mAnimFlags);
 
             const bool isNiGeometry = isTypeNiGeometry(nifNode->mRecordType);
             const bool isBSGeometry = isTypeBSGeometry(nifNode->mRecordType);
@@ -1665,6 +1669,185 @@ namespace NifOsg
                 emitterNode->accept(disableOptimizer);
             }
             mEmitterQueue.clear();
+        }
+
+        // Gamebryo 20 particle systems (FO3/FONV): emitters and the other behaviour are modifiers on the system,
+        // driven by NiPSysEmitterCtlr controllers named after their emitter.
+        void handlePSysParticleSystem(const Nif::NiAVObject* nifNode, const Nif::Parent* parent,
+            osg::Group* parentNode, SceneUtil::CompositeStateSetUpdater* composite, int animflags)
+        {
+            auto psys = static_cast<const Nif::NiParticleSystem*>(nifNode);
+            osg::ref_ptr<ParticleSystem> partsys(new ParticleSystem);
+            partsys->setSortMode(osgParticle::ParticleSystem::SORT_BACK_TO_FRONT);
+            int quota = 64;
+            if (!psys->mData.empty())
+                quota = std::max<int>(1, psys->mData->mNumVertices);
+            partsys->setQuota(quota);
+
+            const osgParticle::ParticleProcessor::ReferenceFrame rf = psys->mWorldSpace
+                ? osgParticle::ParticleProcessor::ABSOLUTE_RF
+                : osgParticle::ParticleProcessor::RELATIVE_RF;
+            if (rf == osgParticle::ParticleProcessor::ABSOLUTE_RF)
+                partsys->getOrCreateUserDataContainer()->addDescription("worldspace");
+            partsys->setParticleScaleReferenceFrame(osgParticle::ParticleSystem::LOCAL_COORDINATES);
+            partsys->getDefaultParticleTemplate().setAlphaRange(osgParticle::rangef(1.f, 1.f));
+
+            std::map<std::string, const Nif::NiPSysEmitterCtlr*> emitterControllers;
+            for (Nif::NiTimeControllerPtr ctrl = nifNode->mController; !ctrl.empty(); ctrl = ctrl->mNext)
+                // Effects such as BloodSprayLimb01.nif leave their emitter controllers inactive; the game runs them
+                if (ctrl->mRecordType == Nif::RC_NiPSysEmitterCtlr)
+                {
+                    auto emitterCtrl = static_cast<const Nif::NiPSysEmitterCtlr*>(ctrl.getPtr());
+                    emitterControllers[emitterCtrl->mModifierName] = emitterCtrl;
+                }
+
+            osg::ref_ptr<osgParticle::ModularProgram> program = new osgParticle::ModularProgram;
+            program->setParticleSystem(partsys);
+            program->setReferenceFrame(rf);
+            bool hasEmitter = false;
+
+            // A texture sheet: offsets are (u, v, width, height) of each tile
+            if (auto data = psys->mData.empty() ? nullptr : dynamic_cast<const Nif::NiParticlesData*>(psys->mData.getPtr()))
+                if (data->mSubtextureOffsets.size() > 1)
+                {
+                    const osg::Vec4f& first = data->mSubtextureOffsets.front();
+                    const int sTiles = first.z() > 0.f ? static_cast<int>(std::lround(1.f / first.z())) : 1;
+                    const int tTiles = first.w() > 0.f ? static_cast<int>(std::lround(1.f / first.w())) : 1;
+                    if (sTiles * tTiles > 1)
+                        program->addOperator(new RandomTileAffector(sTiles, tTiles));
+                }
+            for (const Nif::NiPSysModifierPtr& modifierPtr : psys->mModifiers)
+            {
+                if (modifierPtr.empty() || !modifierPtr->mActive)
+                    continue;
+                const Nif::NiPSysModifier* modifier = modifierPtr.getPtr();
+                switch (modifier->mRecordType)
+                {
+                    case Nif::RC_NiPSysBoxEmitter:
+                    case Nif::RC_NiPSysSphereEmitter:
+                    case Nif::RC_NiPSysCylinderEmitter:
+                    {
+                        auto em = static_cast<const Nif::NiPSysVolumeEmitter*>(modifier);
+                        osg::ref_ptr<VolumePlacer> placer;
+                        if (modifier->mRecordType == Nif::RC_NiPSysBoxEmitter)
+                        {
+                            auto box = static_cast<const Nif::NiPSysBoxEmitter*>(modifier);
+                            placer = new VolumePlacer(
+                                VolumePlacer::Shape::Box, osg::Vec3f(box->mWidth, box->mHeight, box->mDepth));
+                        }
+                        else if (modifier->mRecordType == Nif::RC_NiPSysSphereEmitter)
+                        {
+                            auto sphere = static_cast<const Nif::NiPSysSphereEmitter*>(modifier);
+                            placer = new VolumePlacer(VolumePlacer::Shape::Sphere, osg::Vec3f(sphere->mRadius, 0, 0));
+                        }
+                        else
+                        {
+                            auto cylinder = static_cast<const Nif::NiPSysCylinderEmitter*>(modifier);
+                            placer = new VolumePlacer(VolumePlacer::Shape::Cylinder,
+                                osg::Vec3f(cylinder->mRadius, cylinder->mHeight, 0));
+                        }
+                        // osgParticle sizes are half widths, like Gamebryo radii
+                        const float size = em->mInitialRadius;
+                        partsys->getDefaultParticleTemplate().setSizeRange(osgParticle::rangef(size, size));
+                        osg::Vec4f color = em->mInitialColor;
+                        partsys->getDefaultParticleTemplate().setAlphaRange(osgParticle::rangef(color.a(), color.a()));
+                        color.a() = 1.f;
+                        partsys->getDefaultParticleTemplate().setColorRange(osgParticle::rangev4(color, color));
+
+                        osg::ref_ptr<Emitter> emitter = new Emitter(std::vector<int>());
+                        emitter->setPlacer(placer);
+                        emitter->setShooter(new ParticleShooter(em->mSpeed - em->mSpeedVariation * 0.5f,
+                            em->mSpeed + em->mSpeedVariation * 0.5f, em->mPlanarAngle, em->mPlanarAngleVariation,
+                            em->mDeclination, em->mDeclinationVariation, em->mLifespan, em->mLifespanVariation));
+                        osg::ref_ptr<osgParticle::ConstantRateCounter> counter = new osgParticle::ConstantRateCounter;
+                        // Without a controller, keep the pool full
+                        const float lifespan = em->mLifespan + em->mLifespanVariation * 0.5f;
+                        const float defaultRate = lifespan > 0.f ? quota / lifespan : 0.f;
+                        counter->setNumberOfParticlesPerSecondToCreate(defaultRate);
+                        emitter->setCounter(counter);
+                        emitter->setParticleSystem(partsys);
+                        emitter->setReferenceFrame(osgParticle::ParticleProcessor::RELATIVE_RF);
+
+                        auto found = emitterControllers.find(modifier->mName);
+                        if (found != emitterControllers.end())
+                        {
+                            osg::ref_ptr<PSysEmitterController> callback
+                                = new PSysEmitterController(found->second, defaultRate);
+                            setupController(found->second, callback, animflags);
+                            emitter->setUpdateCallback(callback);
+                        }
+                        if (!(animflags & Nif::NiNode::ParticleFlag_AutoPlay))
+                            partsys->setFrozen(true);
+
+                        if (!em->mEmitterObject.empty())
+                            mEmitterQueue.emplace_back(em->mEmitterObject->mRecordIndex, emitter);
+                        else
+                            parentNode->addChild(emitter);
+                        hasEmitter = true;
+                        break;
+                    }
+                    case Nif::RC_NiPSysGrowFadeModifier:
+                    {
+                        auto gf = static_cast<const Nif::NiPSysGrowFadeModifier*>(modifier);
+                        program->addOperator(new GrowFadeAffector(gf->mGrowTime, gf->mFadeTime, gf->mBaseScale));
+                        break;
+                    }
+                    case Nif::RC_NiPSysGravityModifier:
+                        program->addOperator(
+                            new PSysGravityAffector(static_cast<const Nif::NiPSysGravityModifier*>(modifier)));
+                        break;
+                    case Nif::RC_NiPSysDragModifier:
+                        program->addOperator(
+                            new PSysDragAffector(static_cast<const Nif::NiPSysDragModifier*>(modifier)->mPercentage));
+                        break;
+                    case Nif::RC_BSPSysSimpleColorModifier:
+                        program->addOperator(
+                            new SimpleColorAffector(static_cast<const Nif::BSPSysSimpleColorModifier*>(modifier)));
+                        break;
+                    case Nif::RC_NiPSysColorModifier:
+                    {
+                        auto cl = static_cast<const Nif::NiPSysColorModifier*>(modifier);
+                        if (!cl->mData.empty())
+                            program->addOperator(new ParticleColorAffector(cl->mData.getPtr()));
+                        break;
+                    }
+                    default: // ageing, position and bound updates are osgParticle's own; spawning, colliders,
+                             // rotation and the rest are not done
+                        break;
+                }
+            }
+            if (!hasEmitter)
+                return;
+
+            // First frame update, as for NiParticles
+            osg::NodeVisitor nv;
+            partsys->update(0.0, nv);
+
+            parentNode->addChild(program);
+
+            std::vector<const Nif::NiProperty*> drawableProps;
+            collectDrawableProperties(nifNode, parent, drawableProps);
+            applyDrawableProperties(parentNode, drawableProps, composite, true, animflags);
+
+            osg::ref_ptr<osgParticle::ParticleSystemUpdater> updater = new osgParticle::ParticleSystemUpdater;
+            updater->addParticleSystem(partsys);
+            parentNode->addChild(updater);
+
+            if (rf == osgParticle::ParticleProcessor::RELATIVE_RF)
+                parentNode->addChild(partsys);
+            else
+            {
+                osg::MatrixTransform* trans = new osg::MatrixTransform;
+                trans->setUpdateCallback(new InverseWorldMatrix);
+                trans->addChild(partsys);
+                parentNode->addChild(trans);
+            }
+
+            if (Loader::getSoftEffectEnabled())
+                SceneUtil::setupSoftEffect(*partsys,
+                    {
+                        .mSize = partsys->getDefaultParticleTemplate().getSizeRange().maximum,
+                    });
         }
 
         void handleParticleSystem(const Nif::NiAVObject* nifNode, const Nif::Parent* parent, osg::Group* parentNode,

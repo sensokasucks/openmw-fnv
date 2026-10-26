@@ -20,6 +20,7 @@
 #include <osg/MatrixTransform>
 #include <osgParticle/ParticleSystem>
 
+#include <components/debug/debuglog.hpp>
 #include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddebr.hpp>
 #include <components/esm4/loadexpl.hpp>
@@ -357,6 +358,9 @@ namespace MWRender
                 ? MWWorld::ESM4GameSettings::getString("sDismemberRobotParticleDefault", "Gore\\RobotLimbSpray01.nif")
                 : MWWorld::ESM4GameSettings::getString("sDismemberParticleDefault", "Gore\\BloodSprayLimb01.nif");
             const std::string& boneName = part.mGoreEffectsTarget.empty() ? part.mNodeName : part.mGoreEffectsTarget;
+            Log(Debug::Verbose) << "Dismember " << mPtr.getCellRef().getRefId() << " limb "
+                                << static_cast<int>(part.mData.partType) << (explode ? " explodes" : " severed")
+                                << ", spray '" << spray << "' on " << boneName;
             if (!spray.empty() && getNode(boneName) != nullptr)
                 addEffect(meshPath(spray), "dismember" + std::to_string(part.mData.partType), false, boneName, {},
                     false, false, goreOffset(part));
