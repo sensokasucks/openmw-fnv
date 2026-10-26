@@ -53,7 +53,17 @@
 #include <components/detournavigator/navigator.hpp>
 #include <components/detournavigator/navmeshcacheitem.hpp>
 
+#include <components/esm3/loadnpc.hpp>
+#include <components/esm4/loadachr.hpp>
+#include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadnpc.hpp>
+#include <components/misc/strings/algorithm.hpp>
+#include <components/sceneutil/nodecallback.hpp>
+
+#include "../mwclass/esm4npc.hpp"
 #include "../mwworld/cellstore.hpp"
+#include "../mwworld/esmstore.hpp"
+#include "../mwworld/livecellref.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/groundcoverstore.hpp"
 #include "../mwworld/scene.hpp"
@@ -72,6 +82,7 @@
 #include "fogmanager.hpp"
 #include "groundcover.hpp"
 #include "navmesh.hpp"
+#include "esm4npcanimation.hpp"
 #include "npcanimation.hpp"
 #include "objectpaging.hpp"
 #include "pathgrid.hpp"
@@ -730,6 +741,7 @@ namespace MWRender
             updateProjectionMatrix();
         }
         mCamera->update(dt, paused);
+        updatePlayerBody(dt, paused);
 
         bool isUnderwater = mWater->isUnderwater(mCamera->getPosition());
 
@@ -1133,6 +1145,137 @@ namespace MWRender
 
         mCamera->setAnimation(mPlayerAnimation.get());
         mCamera->attachTo(player);
+        createPlayerBody();
+    }
+
+    namespace
+    {
+        // Culls the player's node: while the FO3/FNV body stands in for the Morrowind one, only the body is drawn.
+        // Only drawing is skipped: the Morrowind skeleton is still animated, and the camera and movement use it.
+        class HideCallback : public SceneUtil::NodeCallback<HideCallback, osg::Node*, osg::NodeVisitor*>
+        {
+        public:
+            explicit HideCallback(osg::Node* body)
+                : mBody(body)
+            {
+            }
+
+            bool mHidden = false;
+
+            void operator()(osg::Node* node, osg::NodeVisitor* nv)
+            {
+                if (!mHidden)
+                    traverse(node, nv);
+                else if (osg::ref_ptr<osg::Node> body; mBody.lock(body))
+                    body->accept(*nv);
+            }
+
+        private:
+            osg::observer_ptr<osg::Node> mBody;
+        };
+
+        const ESM4::Npc* findPlayerRecord()
+        {
+            for (const ESM4::Npc& npc : MWBase::Environment::get().getESMStore()->get<ESM4::Npc>())
+                if (npc.mIsFONV && Misc::StringUtils::ciEqual(npc.mEditorId, "Player"))
+                    return &npc;
+            return nullptr;
+        }
+    }
+
+    void RenderingManager::createPlayerBody()
+    {
+        if (mPlayerBodyNode != nullptr)
+            mPlayerNode->removeChild(mPlayerBodyNode);
+        mPlayerBody = nullptr;
+        mPlayerBodyNode = nullptr;
+        mPlayerBodyRef = nullptr;
+        if (mHideMorrowindBody != nullptr)
+            mPlayerNode->removeCullCallback(mHideMorrowindBody);
+        mHideMorrowindBody = nullptr;
+
+        const ESM4::Npc* record = findPlayerRecord();
+        if (record == nullptr || mPlayerAnimation->getObjectRoot() == nullptr)
+            return;
+
+        ESM4::ActorCharacter placement{};
+        placement.mBaseObj = record->mId;
+        placement.mScale = 1.f;
+        auto ref = std::make_shared<MWWorld::LiveCellRef<ESM4::Npc>>(placement, record);
+        MWWorld::Ptr ptr(ref.get(), nullptr);
+
+        // Sex from character creation, apparel from the Pip-Boy
+        const MWWorld::Ptr player = mPlayerAnimation->getPtr();
+        std::vector<const ESM4::Armor*> apparel;
+        const auto& armors = MWBase::Environment::get().getESMStore()->get<ESM4::Armor>();
+        for (ESM::FormId id : mPlayerBodyApparel)
+            if (const ESM4::Armor* armor = armors.search(id))
+                apparel.push_back(armor);
+        MWClass::ESM4Npc::setAppearance(ptr, !player.get<ESM::NPC>()->mBase->isMale(),
+            mPlayerBodyApparel.empty() ? nullptr : &apparel);
+
+        mPlayerBodyNode = new osg::Group;
+        mPlayerNode->addChild(mPlayerBodyNode);
+        mPlayerBodyRef = ref;
+        mPlayerBody = new ESM4NpcAnimation(ptr, mPlayerBodyNode, mResourceSystem);
+        if (!mPlayerBodyIdle.empty())
+            mPlayerBody->playIdleFONV(mPlayerBodyIdle, false);
+
+        mHideMorrowindBody = new HideCallback(mPlayerBodyNode);
+        mPlayerNode->addCullCallback(mHideMorrowindBody);
+        mPlayerBodyLastPosition = player.getRefData().getPosition().asVec3();
+        mPlayerBodySpeed = 0.f;
+    }
+
+    void RenderingManager::setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel)
+    {
+        if (apparel == mPlayerBodyApparel)
+            return;
+        mPlayerBodyApparel = apparel;
+        if (mPlayerBody != nullptr)
+            createPlayerBody();
+    }
+
+    void RenderingManager::setPlayerBodyIdle(std::string_view model)
+    {
+        mPlayerBodyIdle = model;
+        if (mPlayerBody == nullptr)
+            return;
+        if (model.empty())
+            mPlayerBody->setLocomotion(ESM4NpcAnimation::Locomotion::Idle, true);
+        else
+            mPlayerBody->playIdleFONV(model, false);
+    }
+
+    void RenderingManager::updatePlayerBody(float dt, bool paused)
+    {
+        if (mPlayerBody == nullptr)
+            return;
+        const bool firstPerson = mCamera->getMode() == Camera::Mode::FirstPerson;
+        mPlayerBodyNode->setNodeMask(firstPerson ? 0 : ~0u);
+        static_cast<HideCallback*>(mHideMorrowindBody.get())->mHidden = !firstPerson;
+        if (paused || dt <= 0.f)
+            return;
+
+        // Walk or run with the player's ground speed, smoothed over a few frames
+        const osg::Vec3f position = mPlayerAnimation->getPtr().getRefData().getPosition().asVec3();
+        osg::Vec3f moved = position - mPlayerBodyLastPosition;
+        mPlayerBodyLastPosition = position;
+        moved.z() = 0.f;
+        const float speed = std::min(moved.length() / dt, 1000.f);
+        mPlayerBodySpeed += (speed - mPlayerBodySpeed) * std::min(1.f, dt * 8.f);
+        if (!mPlayerBodyIdle.empty())
+            return;
+        using Locomotion = ESM4NpcAnimation::Locomotion;
+        if (mPlayerBodySpeed < 15.f)
+        {
+            mPlayerBody->setLocomotion(Locomotion::Idle);
+            return;
+        }
+        mPlayerBody->setLocomotion(mPlayerBodySpeed > 200.f ? Locomotion::Run : Locomotion::Walk);
+        const float sequenceSpeed = mPlayerBody->getLocomotionSpeed();
+        mPlayerBody->setLocomotionRate(sequenceSpeed > 0.f ? std::clamp(mPlayerBodySpeed / sequenceSpeed, 0.5f, 2.f)
+                                                           : 1.f);
     }
 
     void RenderingManager::rebuildPtr(const MWWorld::Ptr& ptr)

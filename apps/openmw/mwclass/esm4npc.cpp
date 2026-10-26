@@ -190,6 +190,17 @@ namespace MWClass
         return getCustomData(ptr).mEquippedClothing;
     }
 
+    void ESM4Npc::setAppearance(const MWWorld::Ptr& ptr, bool female, const std::vector<const ESM4::Armor*>* apparel)
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        data.mIsFemale = female;
+        if (apparel != nullptr)
+        {
+            data.mEquippedArmor = *apparel;
+            data.mEquippedClothing.clear();
+        }
+    }
+
     const ESM4::Npc* ESM4Npc::getTraitsRecord(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mTraits;

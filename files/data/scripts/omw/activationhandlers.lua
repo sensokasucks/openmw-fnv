@@ -28,6 +28,22 @@ local centeredSeatTypes = { [11] = true, [12] = true, [15] = true }
 
 local seatedActors = {}
 
+-- The player's FO3/FNV body (RenderingManager::hasPlayerBody) plays the loop the idle tree picks for the
+-- furniture, as NPCs do (scripts/omw/fnvai/idles.lua); state: { sitting, sleeping, marker }.
+local function playPlayerBodyIdle(player, state)
+    local ai = core.obscript and core.obscript.ai
+    if ai == nil or ai.setPlayerBodyIdle == nil then
+        return
+    end
+    if state == nil then
+        ai.setPlayerBodyIdle(nil)
+        return
+    end
+    local ok, idles = pcall(require, 'scripts.omw.fnvai.idles')
+    local leaf = ok and idles.pick('FurnitureIdles', player, idles.furnitureOverrides(state)) or nil
+    ai.setPlayerBodyIdle(leaf and idles.modelPath(leaf) or nil)
+end
+
 -- The furniture each seated actor uses, for IsCurrentFurnitureRef in scripts:
 -- actor id -> furniture reference form id.
 local furnitureSection = storage.globalSection('ESM4CurrentFurniture')
@@ -73,6 +89,7 @@ local function standUp(actor)
     seatedActors[actor.id] = nil
     furnitureSection:set(tostring(actor.id), nil)
     types.ESM4Furniture._setActorCollision(actor, true)
+    playPlayerBodyIdle(actor, nil)
     actor:teleport(seated.cell, seated.position, { rotation = seated.rotation, onGround = true })
     actor:sendEvent('FurnitureStand', {})
 end
@@ -111,6 +128,7 @@ local function ESM4FurnitureActivation(furniture, actor)
     actor:teleport(furniture.cell, furniture.position + furniture.rotation:apply(seat * furniture.scale),
         { rotation = yawRotation, onGround = false })
     actor:sendEvent('FurnitureSit', { furniture = furniture, pose = 'sitting' })
+    playPlayerBodyIdle(actor, { sitting = 1, marker = best.type })
     return false
 end
 
@@ -198,6 +216,11 @@ local function setPlayerPose(data)
     -- so the heights are the usual ones for a bed's mattress, about 40 units up)
     local eyeHeight = data.pose == 'lying' and 52 or 88
     player:sendEvent('FurnitureSit', { furniture = bed, pose = data.pose, eyeHeight = eyeHeight })
+    if data.pose == 'lying' then
+        playPlayerBodyIdle(player, { sleeping = 1, marker = 1 })
+    else
+        playPlayerBodyIdle(player, { sitting = 1, marker = 15 })
+    end
 end
 
 local function ESM4BookActivation(book, actor)

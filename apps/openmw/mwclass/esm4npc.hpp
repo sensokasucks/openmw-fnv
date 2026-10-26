@@ -69,6 +69,10 @@ namespace MWClass
         static const ESM4::Npc* getFactionsRecord(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Armor*>& getEquippedArmor(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Clothing*>& getEquippedClothing(const MWWorld::Ptr& ptr);
+        // For a body drawn from an NPC record that isn't placed (the FO3/FNV player's): its sex, and the apparel it
+        // wears instead of the record's own outfit when apparel isn't null.
+        static void setAppearance(
+            const MWWorld::Ptr& ptr, bool female, const std::vector<const ESM4::Armor*>* apparel);
         // FO3/FONV: the weapon from the NPC's inventory it fights with (a gun if it has one), or nullptr.
         static const ESM4::Weapon* getEquippedWeapon(const MWWorld::Ptr& ptr);
 

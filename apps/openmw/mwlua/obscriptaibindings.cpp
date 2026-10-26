@@ -19,6 +19,7 @@
 #include "../mwclass/esm4npc.hpp"
 #include "../mwmechanics/esm4actors.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
+#include "../mwrender/renderingmanager.hpp"
 #include "../mwworld/cell.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -397,6 +398,36 @@ namespace MWLua
                         animation->startLipSync(voiceFile);
                 },
                 "obscriptAIStartLipSyncAction");
+        };
+
+        // The FO3/FNV player body (MWRender::RenderingManager::hasPlayerBody): whether there is one, the idle KF it
+        // loops (a furniture sit, or nil to stand), and the apparel it wears (a list of ARMO record ids).
+        api["hasPlayerBody"] = []() -> bool {
+            MWRender::RenderingManager* rendering = MWBase::Environment::get().getWorld()->getRenderingManager();
+            return rendering != nullptr && rendering->hasPlayerBody();
+        };
+        api["setPlayerBodyIdle"] = [context](sol::optional<std::string> model) {
+            context.mLuaManager->addAction(
+                [model = model.value_or(std::string())] {
+                    MWBase::Environment::get().getWorld()->getRenderingManager()->setPlayerBodyIdle(model);
+                },
+                "obscriptAISetPlayerBodyIdleAction");
+        };
+        api["setPlayerBodyApparel"] = [context](const sol::table& recordIds) {
+            std::vector<ESM::FormId> apparel;
+            for (const auto& [_, value] : recordIds)
+            {
+                if (!value.is<std::string>())
+                    continue;
+                const ESM::RefId refId = ESM::RefId::deserializeText(value.as<std::string>());
+                if (const ESM::FormId* formId = refId.getIf<ESM::FormId>())
+                    apparel.push_back(*formId);
+            }
+            context.mLuaManager->addAction(
+                [apparel = std::move(apparel)] {
+                    MWBase::Environment::get().getWorld()->getRenderingManager()->setPlayerBodyApparel(apparel);
+                },
+                "obscriptAISetPlayerBodyApparelAction");
         };
 
         return LuaUtil::makeReadOnly(api);
