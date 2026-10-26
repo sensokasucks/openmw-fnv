@@ -131,11 +131,15 @@ namespace MWInput
                 quickLoad();
                 break;
             case A_CycleSpellLeft:
-                if (checkAllowedToUseItems() && windowManager->isAllowed(MWGui::GW_Magic))
+                // FO3/FNV have no spells to cycle
+                if (!windowManager->isFalloutHud() && checkAllowedToUseItems()
+                    && windowManager->isAllowed(MWGui::GW_Magic))
                     MWBase::Environment::get().getWindowManager()->cycleSpell(false);
                 break;
             case A_CycleSpellRight:
-                if (checkAllowedToUseItems() && windowManager->isAllowed(MWGui::GW_Magic))
+                // FO3/FNV have no spells to cycle
+                if (!windowManager->isFalloutHud() && checkAllowedToUseItems()
+                    && windowManager->isAllowed(MWGui::GW_Magic))
                     MWBase::Environment::get().getWindowManager()->cycleSpell(true);
                 break;
             case A_CycleWeaponLeft:

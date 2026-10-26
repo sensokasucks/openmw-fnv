@@ -721,6 +721,10 @@ namespace Resource
         std::vector<std::string> makeSortedReservedNames()
         {
             static constexpr std::string_view names[] = {
+                // FO3/FNV skeletons: the empty node weapons hang off, and the camera nodes
+                "Weapon",
+                "Camera1st",
+                "Camera3rd",
                 "Head",
                 "Neck",
                 "Chest",

@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 
+#include <osgUtil/CullVisitor>
 #include <osg/ClipControl>
 #include <osg/ComputeBoundsVisitor>
 #include <osg/Group>
@@ -38,6 +39,7 @@
 #include <components/sceneutil/shadow.hpp>
 #include <components/sceneutil/stateupdater.hpp>
 #include <components/sceneutil/visitor.hpp>
+#include <components/vfs/manager.hpp>
 #include <components/sceneutil/workqueue.hpp>
 #include <components/sceneutil/writescene.hpp>
 
@@ -78,6 +80,7 @@
 
 #include "actorspaths.hpp"
 #include "camera.hpp"
+#include "renderbin.hpp"
 #include "effectmanager.hpp"
 #include "fogmanager.hpp"
 #include "groundcover.hpp"
@@ -1161,17 +1164,58 @@ namespace MWRender
             }
 
             bool mHidden = false;
+            bool mDrawBody = true;
 
             void operator()(osg::Node* node, osg::NodeVisitor* nv)
             {
                 if (!mHidden)
                     traverse(node, nv);
-                else if (osg::ref_ptr<osg::Node> body; mBody.lock(body))
+                else if (osg::ref_ptr<osg::Node> body; mDrawBody && mBody.lock(body))
                     body->accept(*nv);
             }
 
         private:
             osg::observer_ptr<osg::Node> mBody;
+        };
+
+        // The first-person field of view for the FO3/FNV arms (as NpcAnimation's OverrideFieldOfViewCallback)
+        class ArmsFieldOfViewCallback : public osg::NodeCallback
+        {
+        public:
+            ArmsFieldOfViewCallback(float fov, RenderingManager* renderingManager)
+                : mFov(fov)
+                , mRenderingManager(renderingManager)
+            {
+            }
+
+            void operator()(osg::Node* node, osg::NodeVisitor* nv) override
+            {
+                osgUtil::CullVisitor* cv = static_cast<osgUtil::CullVisitor*>(nv);
+                float fov, aspect, zNear, zFar;
+                if (cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar) && std::abs(fov - mFov) > 0.001)
+                {
+                    osg::ref_ptr<osg::RefMatrix> newProjectionMatrix = new osg::RefMatrix();
+                    newProjectionMatrix->makePerspective(mFov, aspect, zNear, zFar);
+                    const osg::Vec2f offset = mRenderingManager->getProjectionOffset();
+                    const double offsetX = (offset.x() / cv->getViewport()->width()) * 2.0;
+                    const double offsetY = (offset.y() / cv->getViewport()->height()) * 2.0;
+                    newProjectionMatrix->postMult(osg::Matrix::translate(offsetX, offsetY, 0.0));
+                    osg::ref_ptr<osg::RefMatrix> invertedOldMatrix
+                        = new osg::RefMatrix(osg::RefMatrix::inverse(*cv->getProjectionMatrix()));
+                    osg::ref_ptr<osg::RefMatrix> viewMatrix = new osg::RefMatrix(*cv->getModelViewMatrix());
+                    viewMatrix->postMult(*newProjectionMatrix);
+                    viewMatrix->postMult(*invertedOldMatrix);
+                    cv->pushModelViewMatrix(viewMatrix, osg::Transform::ReferenceFrame::ABSOLUTE_RF);
+                    traverse(node, nv);
+                    cv->popModelViewMatrix();
+                }
+                else
+                    traverse(node, nv);
+            }
+
+        private:
+            float mFov;
+            RenderingManager* mRenderingManager;
         };
 
         const ESM4::Npc* findPlayerRecord()
@@ -1190,6 +1234,11 @@ namespace MWRender
         mPlayerBody = nullptr;
         mPlayerBodyNode = nullptr;
         mPlayerBodyRef = nullptr;
+        if (mPlayerArmsNode != nullptr)
+            mSceneRoot->removeChild(mPlayerArmsNode);
+        mPlayerArms = nullptr;
+        mPlayerArmsNode = nullptr;
+        mPlayerArmsRef = nullptr;
         if (mHideMorrowindBody != nullptr)
             mPlayerNode->removeCullCallback(mHideMorrowindBody);
         mHideMorrowindBody = nullptr;
@@ -1218,13 +1267,67 @@ namespace MWRender
         mPlayerNode->addChild(mPlayerBodyNode);
         mPlayerBodyRef = ref;
         mPlayerBody = new ESM4NpcAnimation(ptr, mPlayerBodyNode, mResourceSystem);
+        if (!mPlayerBodyWeapon.empty())
+        {
+            mPlayerBody->showWeapon(mPlayerBodyWeapon);
+            mPlayerBody->setIdleSequence(mPlayerBodyAimIdle);
+        }
         if (!mPlayerBodyIdle.empty())
             mPlayerBody->playIdleFONV(mPlayerBodyIdle, false);
 
         mHideMorrowindBody = new HideCallback(mPlayerBodyNode);
         mPlayerNode->addCullCallback(mHideMorrowindBody);
+        createPlayerArms(ptr);
         mPlayerBodyLastPosition = player.getRefData().getPosition().asVec3();
         mPlayerBodySpeed = 0.f;
+        mPlayerBodyVelocity = osg::Vec3f();
+    }
+
+    void RenderingManager::createPlayerArms(const MWWorld::Ptr& ptr)
+    {
+        const VFS::Path::Normalized skeleton("meshes/characters/_1stperson/skeleton.nif");
+        if (!mResourceSystem->getVFS()->exists(skeleton))
+            return;
+        // The arms are built from a copy of the body's reference (the reference holds the appearance)
+        auto ref = std::make_shared<MWWorld::LiveCellRef<ESM4::Npc>>(
+            *static_cast<MWWorld::LiveCellRef<ESM4::Npc>*>(ptr.getBase()));
+        MWWorld::Ptr armsPtr(ref.get(), nullptr);
+        mPlayerArmsRef = ref;
+        mPlayerArmsNode = new osg::MatrixTransform;
+        mPlayerArmsNode->setNodeMask(Mask_FirstPerson);
+        // The game draws them at its own first-person field of view (fDefault1stPersonFOV, 55 degrees)
+        mPlayerArmsNode->addCullCallback(new ArmsFieldOfViewCallback(55.f, this));
+        // Drawn over the world, as the Morrowind first-person body is (NpcAnimation::setRenderBin)
+        mPlayerArmsNode->getOrCreateStateSet()->setRenderBinDetails(
+            RenderBin_FirstPerson, "DepthClear", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
+        mSceneRoot->addChild(mPlayerArmsNode);
+        mPlayerArms = new ESM4NpcAnimation(armsPtr, mPlayerArmsNode, mResourceSystem, skeleton, true);
+        if (!mPlayerBodyWeapon.empty())
+        {
+            mPlayerArms->showWeapon(mPlayerBodyWeapon);
+            mPlayerArms->setIdleSequence(mPlayerBodyAimIdle);
+        }
+        // Where the game's camera sits in this skeleton: the arms are placed so that it meets ours
+        // "Camera1st" is an empty node the loader may drop; it hangs 3.74 units behind "Bip01 Looking", the pivot
+        // the game pitches the arms around at eye height.
+        mPlayerArmsCamera.makeIdentity();
+        osg::Vec3f cameraAt(0.f, -3.74f, 118.f);
+        for (const char* name : { "Camera1st", "Bip01 Looking" })
+        {
+            SceneUtil::FindByNameVisitor findNode(name);
+            mPlayerArms->getObjectRoot()->accept(findNode);
+            if (findNode.mFoundNode == nullptr)
+                continue;
+            const osg::NodePathList paths = findNode.mFoundNode->getParentalNodePaths(mPlayerArmsNode);
+            if (paths.empty())
+                continue;
+            cameraAt = osg::computeLocalToWorld(paths[0]).getTrans();
+            if (std::string_view(name) == "Bip01 Looking")
+                cameraAt += osg::Vec3f(0.f, -3.74f, 0.f);
+            Log(Debug::Verbose) << "First-person arms: camera at " << cameraAt << " from " << name;
+            break;
+        }
+        mPlayerArmsCamera.setTrans(cameraAt);
     }
 
     void RenderingManager::setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel)
@@ -1247,13 +1350,44 @@ namespace MWRender
             mPlayerBody->playIdleFONV(model, false);
     }
 
+    void RenderingManager::setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle)
+    {
+        if (model == mPlayerBodyWeapon && aimIdle == mPlayerBodyAimIdle)
+            return;
+        mPlayerBodyWeapon = model;
+        mPlayerBodyAimIdle = aimIdle;
+        if (mPlayerBody == nullptr)
+            return;
+        mPlayerBody->showWeapon(mPlayerBodyWeapon);
+        mPlayerBody->setIdleSequence(mPlayerBodyWeapon.empty() ? std::string_view() : mPlayerBodyAimIdle);
+        if (mPlayerArms != nullptr)
+        {
+            mPlayerArms->showWeapon(mPlayerBodyWeapon);
+            mPlayerArms->setIdleSequence(mPlayerBodyWeapon.empty() ? std::string_view() : mPlayerBodyAimIdle);
+        }
+    }
+
     void RenderingManager::updatePlayerBody(float dt, bool paused)
     {
         if (mPlayerBody == nullptr)
             return;
         const bool firstPerson = mCamera->getMode() == Camera::Mode::FirstPerson;
+        const bool arms = mPlayerArms != nullptr && firstPerson;
         mPlayerBodyNode->setNodeMask(firstPerson ? 0 : ~0u);
-        static_cast<HideCallback*>(mHideMorrowindBody.get())->mHidden = !firstPerson;
+        auto* hide = static_cast<HideCallback*>(mHideMorrowindBody.get());
+        hide->mHidden = !firstPerson || arms;
+        hide->mDrawBody = !firstPerson;
+        if (mPlayerArmsNode != nullptr)
+        {
+            mPlayerArmsNode->setNodeMask(arms ? Mask_FirstPerson : 0);
+            if (arms)
+            {
+                // The arms skeleton's camera node at our camera, turned the way we look
+                const osg::Matrix place = osg::Matrix::inverse(mPlayerArmsCamera)
+                    * osg::Matrix::rotate(mCamera->getOrient()) * osg::Matrix::translate(mCamera->getPosition());
+                mPlayerArmsNode->setMatrix(place);
+            }
+        }
         if (paused || dt <= 0.f)
             return;
 
@@ -1264,18 +1398,43 @@ namespace MWRender
         moved.z() = 0.f;
         const float speed = std::min(moved.length() / dt, 1000.f);
         mPlayerBodySpeed += (speed - mPlayerBodySpeed) * std::min(1.f, dt * 8.f);
+        if (speed < 1000.f)
+            mPlayerBodyVelocity += (moved / dt - mPlayerBodyVelocity) * std::min(1.f, dt * 8.f);
         if (!mPlayerBodyIdle.empty())
             return;
+        updatePlayerLocomotion(*mPlayerBody);
+        if (mPlayerArms != nullptr)
+            updatePlayerLocomotion(*mPlayerArms);
+    }
+
+    void RenderingManager::updatePlayerLocomotion(ESM4NpcAnimation& body)
+    {
         using Locomotion = ESM4NpcAnimation::Locomotion;
         if (mPlayerBodySpeed < 15.f)
         {
-            mPlayerBody->setLocomotion(Locomotion::Idle);
+            body.setLocomotion(Locomotion::Idle);
             return;
         }
-        mPlayerBody->setLocomotion(mPlayerBodySpeed > 200.f ? Locomotion::Run : Locomotion::Walk);
-        const float sequenceSpeed = mPlayerBody->getLocomotionSpeed();
-        mPlayerBody->setLocomotionRate(sequenceSpeed > 0.f ? std::clamp(mPlayerBodySpeed / sequenceSpeed, 0.5f, 2.f)
-                                                           : 1.f);
+        // Which way the player moves relative to where they face, from the smoothed velocity so a stop or a
+        // slide along a wall doesn't flip the loop
+        if (mPlayerBodyVelocity.length() >= 15.f)
+        {
+            const float yaw = mPlayerAnimation->getPtr().getRefData().getPosition().rot[2];
+            const osg::Vec3f forward(std::sin(yaw), std::cos(yaw), 0.f);
+            const osg::Vec3f right(std::cos(yaw), -std::sin(yaw), 0.f);
+            const float along = mPlayerBodyVelocity * forward;
+            const float across = mPlayerBodyVelocity * right;
+            using Direction = ESM4NpcAnimation::Direction;
+            Direction direction = Direction::Forward;
+            if (std::abs(across) > std::abs(along) * 1.2f)
+                direction = across > 0.f ? Direction::Right : Direction::Left;
+            else if (along < 0.f)
+                direction = Direction::Backward;
+            body.setLocomotionDirection(direction);
+        }
+        body.setLocomotion(mPlayerBodySpeed > 200.f ? Locomotion::Run : Locomotion::Walk);
+        const float sequenceSpeed = body.getLocomotionSpeed();
+        body.setLocomotionRate(sequenceSpeed > 0.f ? std::clamp(mPlayerBodySpeed / sequenceSpeed, 0.5f, 2.f) : 1.f);
     }
 
     void RenderingManager::rebuildPtr(const MWWorld::Ptr& ptr)

@@ -550,6 +550,8 @@ return {
         --- Queue a notice in the top-left corner. `options`: duration (seconds), kind
         -- ('message', 'questAdded', 'objective', 'objectiveCompleted', 'questCompleted'; picks the sound).
         notify = notify,
+        --- Hostile actors are close by (the compass's red ticks); the wait menu does not open then.
+        hostilesNear = function() return #enemies > 0 end,
         --- Show a subtitle at the bottom of the screen for `duration` seconds.
         subtitle = function(message, duration)
             subtitle = { text = tostring(message), time = tonumber(duration) or 3 }

@@ -253,7 +253,20 @@ namespace Gui
         const std::string_view defaultFont = Fallback::Map::getString("Fonts_Font_0");
         const std::string_view scrollFont = Fallback::Map::getString("Fonts_Font_2");
 
-        loadFont(defaultFontId, defaultFont);
+        bool falloutDefault = false;
+        if (sFalloutDefaultFont)
+        {
+            // Monofonto Large's lines are 35 pixels; the Morrowind windows are laid out for about 18
+            constexpr VFS::Path::NormalizedView monofonto("textures/fonts/monofonto_large.fnt");
+            if (const Files::IStreamPtr stream = mVFS->find(monofonto))
+            {
+                loadBitmapFont(defaultFontId, VFS::Path::Normalized(monofonto), *stream,
+                    VFS::Path::NormalizedView("textures/fonts"), true, Settings::gui().mFontSize + 2.f);
+                falloutDefault = true;
+            }
+        }
+        if (!falloutDefault)
+            loadFont(defaultFontId, defaultFont);
         loadFont(scrollFontId, scrollFont);
         // We need to use a TrueType monospace font to display debug texts properly.
         loadFont(monoFontId, "DejaVuLGCSansMono");
@@ -443,7 +456,7 @@ namespace Gui
     } GlyphInfo;
 
     void FontLoader::loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream,
-        VFS::Path::NormalizedView textureDir, bool fallout)
+        VFS::Path::NormalizedView textureDir, bool fallout, float targetLineHeight)
     {
         Log(Debug::Info) << "Loading bitmap font file " << path;
 
@@ -547,6 +560,9 @@ namespace Gui
             }
             lineHeight = bottom - top;
         }
+        // the glyphs' size on screen, against their pixels in the texture
+        const float scale = targetLineHeight > 0.f ? targetLineHeight / lineHeight : 1.f;
+        lineHeight *= scale;
 
         MyGUI::xml::ElementPtr defaultHeight = root->createChild("Property");
         defaultHeight->addAttribute("key", "DefaultHeight");
@@ -702,13 +718,14 @@ namespace Gui
             unsigned long unicodeVal = getUnicode(static_cast<unsigned char>(i), encoder, encoding);
             const std::string coord = MyGUI::utility::toString(x1) + " " + MyGUI::utility::toString(y1) + " "
                 + MyGUI::utility::toString(w) + " " + MyGUI::utility::toString(h);
-            float advance = data[i].width + data[i].kerningRight;
+            float advance = (data[i].width + data[i].kerningRight) * scale;
             // Yes MyGUI, we really do want an advance of 0 sometimes, thank you.
             if (advance == 0.f && data[i].width != 0.f)
                 advance = std::numeric_limits<float>::min();
-            const std::string bearing = MyGUI::utility::toString(data[i].kerningLeft) + ' '
-                + MyGUI::utility::toString((fontSize - data[i].ascent - top));
-            const MyGUI::IntSize size(static_cast<int>(data[i].width), static_cast<int>(data[i].height));
+            const std::string bearing = MyGUI::utility::toString(data[i].kerningLeft * scale) + ' '
+                + MyGUI::utility::toString((fontSize - data[i].ascent - top) * scale);
+            const MyGUI::IntSize size(
+                static_cast<int>(data[i].width * scale + 0.5f), static_cast<int>(data[i].height * scale + 0.5f));
 
             MyGUI::xml::ElementPtr code = codes->createChild("Code");
             code->addAttribute("index", unicodeVal);

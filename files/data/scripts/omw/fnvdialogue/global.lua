@@ -978,18 +978,19 @@ local function stopSpeech(line)
 end
 
 -- The gesture an INFO asks the speaker to make with the line (SNAM, an IDLE or a
--- branch of the idle tree, e.g. Doc Mitchell's shrug), played once over the stance.
+-- branch of the idle tree, e.g. Doc Mitchell's shrug), and the reaction it asks of
+-- the one spoken to (LNAM, an NPC a SayTo is aimed at), played once over the stance.
 local idleTree = nil
-local function playSpeakerIdle(speaker, info)
+local function playLineIdle(actor, idleId, info)
     local ai = core.obscript.ai
-    if not info.speakerIdle or info.speakerIdle == '' or not (ai and ai.playIdle) then return end
-    if not types.ESM4NPC.objectIsInstance(speaker) and not types.ESM4Creature.objectIsInstance(speaker) then return end
+    if not idleId or idleId == '' or not (ai and ai.playIdle) or not actor or not actor:isValid() then return end
+    if not types.ESM4NPC.objectIsInstance(actor) and not types.ESM4Creature.objectIsInstance(actor) then return end
     idleTree = idleTree or require('scripts.omw.fnvai.idles')
-    local idle = idleTree.get(info.speakerIdle)
-    if idle and not idleTree.isLeaf(idle) then idle = idleTree.pick(idle, speaker) end
+    local idle = idleTree.get(idleId)
+    if idle and not idleTree.isLeaf(idle) then idle = idleTree.pick(idle, actor) end
     if idle and idleTree.isLeaf(idle) then
-        tlog(('%s gestures %s with INFO %s'):format(tostring(speaker.recordId), idle.editorId, info.id))
-        ai.playIdle(speaker, idleTree.modelPath(idle))
+        tlog(('%s plays %s with INFO %s'):format(tostring(actor.recordId), idle.editorId, info.id))
+        ai.playIdle(actor, idleTree.modelPath(idle))
     end
 end
 
@@ -997,7 +998,7 @@ local function startSpeech(speaker, info, subtitles, onDone)
     for _, line in ipairs(speaking) do
         if line.speaker == speaker then line.interrupted = true end
     end
-    if speaker:isValid() then playSpeakerIdle(speaker, info) end
+    playLineIdle(speaker, info.speakerIdle, info)
     local responses = {}
     for _, r in ipairs(info.responses) do responses[#responses + 1] = r end
     table.sort(responses, function(a, b) return (a.number or 0) < (b.number or 0) end)
@@ -1045,6 +1046,7 @@ local function sayLine(speaker, target, topicIdOrEditorId, afterward)
         runScript(info.scriptEnd, label .. ' end', speaker)
         endDone = true
     end
+    playLineIdle(target, info.listenerIdle, info)
     startSpeech(speaker, info, true, function()
         if not endDone then
             runScript(info.scriptEnd, label .. ' end', speaker)

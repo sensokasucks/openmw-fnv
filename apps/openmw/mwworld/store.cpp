@@ -1275,6 +1275,7 @@ template class MWWorld::TypedDynamicStore<ESM4::RecipeCategory>;
 template class MWWorld::TypedDynamicStore<ESM4::MiscItem>;
 template class MWWorld::TypedDynamicStore<ESM4::MovableStatic>;
 template class MWWorld::TypedDynamicStore<ESM4::Note>;
+template class MWWorld::TypedDynamicStore<ESM4::LoadScreen>;
 template class MWWorld::TypedDynamicStore<ESM4::MagicEffect>;
 template class MWWorld::TypedDynamicStore<ESM4::Spell>;
 template class MWWorld::TypedDynamicStore<ESM4::Enchantment>;

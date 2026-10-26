@@ -613,6 +613,14 @@ namespace MWGui
         void onClipboardRequested(std::string_view type, std::string& data);
 
         void createTextures();
+        void createFalloutTextures();
+
+    public:
+        /// FO3/FNV content, known before the window manager is made: its skins and fonts take FNV's look
+        static void setFalloutUi(bool enabled) { sFalloutUi = enabled; }
+
+    private:
+        static inline bool sFalloutUi = false;
         void createCursors();
         void setMenuTransparency(float value);
 

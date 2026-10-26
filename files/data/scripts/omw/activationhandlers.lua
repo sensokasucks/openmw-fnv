@@ -5,6 +5,7 @@ local types = require('openmw.types')
 local world = require('openmw.world')
 local util = require('openmw.util')
 local auxUtil = require('openmw_aux.util')
+local I = require('openmw.interfaces')
 
 local EnableObject = async:registerTimerCallback('EnableObject', function(obj) obj.enabled = true end)
 
@@ -223,11 +224,54 @@ local function setPlayerPose(data)
     end
 end
 
+-- FO3/FNV skill books: the player reads one on picking it up (FalloutNV.exe FUN_00515040, called from the
+-- pick-up code FUN_0088c830): the skill's base value goes up, by one more with a perk whose Adjust Book Skill
+-- Points entry point applies (Comprehension), up to 100, "%s increased by %d" (sSkillIncreasedNum) shows,
+-- and the book is gone. The base of 3 points is the game's; the perk bonus is assumed to be 1.
+local SKILL_NAMES = { [32] = 'Barter', [33] = 'Big Guns', [34] = 'Energy Weapons', [35] = 'Explosives',
+    [36] = 'Lockpick', [37] = 'Medicine', [38] = 'Melee Weapons', [39] = 'Repair', [40] = 'Science', [41] = 'Guns',
+    [42] = 'Sneak', [43] = 'Speech', [44] = 'Survival', [45] = 'Unarmed' }
+local BOOK_POINTS = 3
+
+local function hasComprehension()
+    local state = storage.globalSection('FNVCharacter'):get('state')
+    local stats = core.obscript and core.obscript.stats
+    if state == nil or state.perks == nil or stats == nil then return false end
+    local ok, perks = pcall(stats.perks)
+    if not ok then return false end
+    for _, perk in ipairs(perks) do
+        if perk.editorId == 'Comprehension' and (state.perks[perk.id] or state.perks[perk.id:lower()] or 0) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+local function readSkillBook(book, actor)
+    local obscript = core.obscript
+    if obscript == nil or obscript.itemInfo == nil or I.FNVStats == nil then return false end
+    local ok, info = pcall(obscript.itemInfo, book)
+    -- DATA's skill is the skill's number (0 Barter .. 13 Unarmed); its actor value is 32 more
+    local skill = ok and info.bookSkill and info.bookSkill >= 0 and info.bookSkill + 32 or -1
+    if SKILL_NAMES[skill] == nil then return false end
+    local points = BOOK_POINTS + (hasComprehension() and 1 or 0)
+    local base = I.FNVStats.getBase(actor, skill) or 0
+    local gained = math.max(0, math.min(100, base + points) - base)
+    if gained > 0 then I.FNVStats.setBase(actor, skill, base + gained) end
+    local format = core.getFNVGMST and core.getFNVGMST('sSkillIncreasedNum') or '%s increased by %d'
+    local okText, text = pcall(string.format, format, SKILL_NAMES[skill], gained)
+    actor:sendEvent('FNVHudNotify', { text = okText and text or (SKILL_NAMES[skill] .. ' increased') })
+    book:remove()
+    return true
+end
+
 local function ESM4BookActivation(book, actor)
     if actor.type == types.Player then
-        actor:sendEvent('AddUiMode', { mode = 'Book', target = book })
+        if readSkillBook(book, actor) then return false end
+        -- other books are picked up, as in FNV (Morrowind's book window has no FNV counterpart)
+        return
     end
-    return false -- read in place; C++ would otherwise pick the book up
+    return false
 end
 
 local function ESM4NoteActivation(note, actor)

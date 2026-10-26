@@ -124,6 +124,10 @@ namespace MWBase
         /// \param fade time in seconds to fade out current track before start this one.
 
         virtual bool isMusicPlaying() = 0;
+
+        /// FO3/FNV: turns every sound but voices (and the movie) down to factor of its volume, reaching it over
+        /// seconds; factor 1 brings them back. The original does this while someone talks to the player.
+        virtual void setDucking(float factor, float seconds) = 0;
         ///< Returns true if music is playing
 
         virtual void say(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename) = 0;

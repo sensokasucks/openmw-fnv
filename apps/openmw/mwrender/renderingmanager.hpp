@@ -235,6 +235,8 @@ namespace MWRender
         void setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel);
         // Loops an idle KF (e.g. a furniture sit) on the body; empty goes back to standing and walking.
         void setPlayerBodyIdle(std::string_view model);
+        // The weapon in the body's hand (a WEAP model) and the aim idle of its animation type; empty puts it away.
+        void setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle);
 
         void processChangedSettings(const Settings::CategorySettingVector& settings);
 
@@ -355,14 +357,25 @@ namespace MWRender
         std::shared_ptr<void> mPlayerBodyRef; // the MWWorld::LiveCellRef<ESM4::Npc> the body is drawn from
         osg::ref_ptr<osg::Group> mPlayerBodyNode;
         osg::ref_ptr<ESM4NpcAnimation> mPlayerBody;
+        // The FO3/FNV first-person arms: the same record on characters/_1stperson/skeleton.nif, kept at the camera
+        std::shared_ptr<void> mPlayerArmsRef;
+        osg::ref_ptr<osg::MatrixTransform> mPlayerArmsNode;
+        osg::ref_ptr<ESM4NpcAnimation> mPlayerArms;
+        osg::Matrixf mPlayerArmsCamera; // Camera1st in the arms skeleton, at rest
         osg::ref_ptr<osg::Callback> mHideMorrowindBody;
         std::vector<ESM::FormId> mPlayerBodyApparel;
         std::string mPlayerBodyIdle;
+        std::string mPlayerBodyWeapon;
+        std::string mPlayerBodyAimIdle;
         osg::Vec3f mPlayerBodyLastPosition;
         float mPlayerBodySpeed = 0.f;
+        osg::Vec3f mPlayerBodyVelocity;
 
         void createPlayerBody();
+        void createPlayerArms(const MWWorld::Ptr& ptr);
         void updatePlayerBody(float dt, bool paused);
+        // Walks, runs or stands the body or the arms with the player's movement
+        void updatePlayerLocomotion(ESM4NpcAnimation& animation);
         osg::ref_ptr<SceneUtil::PositionAttitudeTransform> mPlayerNode;
         std::unique_ptr<Camera> mCamera;
         osg::ref_ptr<Debug::DebugDrawer> mDebugDraw;

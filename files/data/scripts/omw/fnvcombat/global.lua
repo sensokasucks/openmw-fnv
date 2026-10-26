@@ -281,6 +281,11 @@ return {
             section:set('editorId', e.editorId)
             section:set('animType', e.animType or 0)
             section:set('drawn', e.drawn == true)
+            -- the player's FO3/FNV body holds it (RenderingManager::hasPlayerBody)
+            local ai = core.obscript and core.obscript.ai
+            if ai and ai.setPlayerBodyWeapon then
+                ai.setPlayerBodyWeapon(e.weapon, e.drawn == true)
+            end
         end,
         -- From the engine once a shot is resolved
         FNVCombat_Shot = function(e)

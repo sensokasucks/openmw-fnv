@@ -27,6 +27,8 @@ namespace Fallback
         }
 
         static std::string_view getString(std::string_view fall);
+        /// Replace a string value (FO3/FNV content recolours the FontColor_color_* values)
+        static void setString(std::string_view fall, std::string value);
         static float getFloat(std::string_view fall);
         static int getInt(std::string_view fall);
         static bool getBool(std::string_view fall);

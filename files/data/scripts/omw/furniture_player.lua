@@ -1,7 +1,8 @@
 -- Player side of sitting on ESM4 furniture (see ESM4FurnitureActivation in activationhandlers.lua).
 -- There is no sit animation for the player yet, so sitting locks movement and lowers the first-person camera
--- to the eye height of someone seated (or lying, in the opening of a new game). Without the FO3/FNV player
--- body the Morrowind body would stand in the seat, so then the view stays in first person until the player gets up.
+-- to the eye height of someone seated (or lying, in the opening of a new game). With the FO3/FNV player body
+-- the view goes to third person while seated, as in the game; without it the Morrowind body would stand in the
+-- seat, so then the view stays in first person until the player gets up.
 
 local async = require('openmw.async')
 local camera = require('openmw.camera')
@@ -50,13 +51,15 @@ end
 
 -- data: { furniture, pose = 'sitting' | 'lying', eyeHeight = eye height above the feet (optional) }
 local function lockFirstPerson()
+    previousMode = camera.getMode()
     local ai = core.obscript and core.obscript.ai
     if ai and ai.hasPlayerBody and ai.hasPlayerBody() then
-        -- the FO3/FNV body sits for real (RenderingManager::hasPlayerBody), so any view will do
-        previousMode = nil
+        -- The FO3/FNV body sits for real (RenderingManager::hasPlayerBody); the game shows that from third
+        -- person while furniture is used, and so do we (the first-person arms have no seated poses).
+        I.Camera.disableModeControl('furniture')
+        camera.setMode(camera.MODE.ThirdPerson)
         return
     end
-    previousMode = camera.getMode()
     previousVanity = types.Player.getControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode)
     types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, false)
     I.Camera.disableModeControl('furniture')
@@ -65,14 +68,15 @@ local function lockFirstPerson()
 end
 
 local function unlockFirstPerson()
-    if previousMode == nil then
-        return
-    end
     I.Camera.enableModeControl('furniture')
     I.Camera.enableStandingPreview('furniture')
-    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, previousVanity)
-    if previousMode == camera.MODE.ThirdPerson then
-        camera.setMode(camera.MODE.ThirdPerson)
+    local ai = core.obscript and core.obscript.ai
+    local body = ai and ai.hasPlayerBody and ai.hasPlayerBody()
+    if not body then
+        types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, previousVanity)
+    end
+    if previousMode == camera.MODE.ThirdPerson or previousMode == camera.MODE.FirstPerson then
+        camera.setMode(previousMode)
     end
 end
 
