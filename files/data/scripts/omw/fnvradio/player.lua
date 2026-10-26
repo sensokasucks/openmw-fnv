@@ -39,6 +39,8 @@ table.sort(stations, function(a, b) return a.name < b.name end)
 local tuned = nil -- station id, saved
 local playing = nil -- { file, fileStart }
 local volume = 1
+-- Turned down while someone talks to the player (fRadioDialogMute; FNVRadio.setMute)
+local mute, muteTarget, muteRate = 1, 1, 0
 local staticVolume = 0
 
 local function lower(x)
@@ -118,6 +120,7 @@ local function update()
         return
     end
     local v, sv = mix(s, strength)
+    v, sv = v * mute, sv * mute
     setStatic(sv)
     if info.file == nil then
         stopPlaying()
@@ -175,6 +178,12 @@ return {
             stopPlaying()
             update()
         end,
+        --- Turns the radio down to factor of its volume over seconds (1 brings it back), as the
+        -- original does while someone talks to the player.
+        setMute = function(factor, seconds)
+            muteTarget = factor
+            muteRate = (seconds and seconds > 0) and math.abs(factor - mute) / seconds or math.huge
+        end,
         turnOff = function()
             tuned = nil
             update()
@@ -189,6 +198,12 @@ return {
     engineHandlers = {
         -- onFrame runs while the world is paused too (the Pip-Boy open)
         onFrame = function()
+            if mute ~= muteTarget then
+                local step = muteRate * core.getRealFrameDuration()
+                if math.abs(muteTarget - mute) <= step then mute = muteTarget
+                elseif mute < muteTarget then mute = mute + step
+                else mute = mute - step end
+            end
             update()
         end,
         onSave = function()

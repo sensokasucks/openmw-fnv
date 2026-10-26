@@ -9,6 +9,9 @@
 
 #include "../mwworld/esmstore.hpp"
 
+#include <cmath>
+#include <stdexcept>
+
 #include <components/esm3/loadsoun.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/settings/values.hpp>
@@ -143,6 +146,14 @@ namespace MWLua
             return lua["openmw_ambient"];
 
         sol::table api(lua, sol::create);
+
+        // setDucking(factor, seconds): every sound but voices goes to factor of its volume over seconds (FO3/FNV,
+        // while someone talks to the player); setDucking(1, seconds) brings them back.
+        api["setDucking"] = [](float factor, float seconds) {
+            if (!std::isfinite(factor) || !std::isfinite(seconds))
+                throw std::runtime_error("setDucking: not a number");
+            MWBase::Environment::get().getSoundManager()->setDucking(factor, seconds);
+        };
 
         api["playSound"] = [](std::string_view soundId, const sol::optional<sol::table>& options) {
             auto args = getPlaySoundArgs(options);
