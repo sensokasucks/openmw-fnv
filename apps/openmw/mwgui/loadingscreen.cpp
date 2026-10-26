@@ -89,8 +89,7 @@ namespace MWGui
         mFalloutStyle = enabled;
         if (!enabled)
             return;
-        // loading_menu.xml draws a 3D scene from the location's LSCR record over this backdrop; that scene is
-        // not done yet
+        // until the content is loaded; then each loading screen shows its LSCR record's picture
         constexpr std::string_view backdrop = "textures/interface/loading/loading_background.dds";
         if (mResourceSystem->getVFS()->exists(VFS::Path::Normalized(backdrop)))
             mSplashScreens = { std::string(backdrop) };
@@ -137,12 +136,23 @@ namespace MWGui
         }
         if (tips.empty())
         {
+            mTipPicture.clear();
             mTipBar->setVisible(false);
             return;
         }
         const ESM4::LoadScreen* tip = tips[Misc::Rng::rollDice(static_cast<int>(tips.size()))];
         Log(Debug::Verbose) << "Loading screen tip " << tip->mEditorId << " of " << tips.size();
         mTipText->setCaption(MyGUI::UString(tip->mText));
+        // the record's picture (interface\loading\loading_billboard06.dds and the like) fills the screen
+        mTipPicture.clear();
+        if (!tip->mIcon.empty())
+        {
+            const VFS::Path::Normalized picture("textures/" + tip->mIcon);
+            if (mResourceSystem->getVFS()->exists(picture))
+                mTipPicture = picture.value();
+        }
+        if (mShowWallpaper)
+            changeWallpaper();
         mTipBar->setVisible(true);
     }
 
@@ -281,7 +291,12 @@ namespace MWGui
 
     void LoadingScreen::changeWallpaper()
     {
-        if (!mSplashScreens.empty())
+        if (mFalloutStyle && !mTipPicture.empty())
+        {
+            mSplashImage->setVisible(true);
+            mSplashImage->setBackgroundImage(mTipPicture, false, true);
+        }
+        else if (!mSplashScreens.empty())
         {
             std::string const& randomSplash = mSplashScreens.at(Misc::Rng::rollDice(mSplashScreens.size()));
 

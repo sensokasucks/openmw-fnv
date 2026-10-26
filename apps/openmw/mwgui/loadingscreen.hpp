@@ -78,6 +78,7 @@ namespace MWGui
         bool mShowWallpaper;
         bool mFalloutStyle = false;
         bool mTipsReady = false;
+        std::string mTipPicture; // the shown tip's picture, which the wallpaper changes keep
         MyGUI::ImageBox* mTipBar = nullptr;
         MyGUI::EditBox* mTipText = nullptr;
 
