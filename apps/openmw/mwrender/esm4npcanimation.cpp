@@ -21,7 +21,6 @@
 #include <osg/Transform>
 
 #include <components/debug/debuglog.hpp>
-#include <components/misc/constants.hpp>
 #include <components/misc/mathutil.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
@@ -214,6 +213,27 @@ namespace MWRender
         };
     }
 
+    namespace
+    {
+        // Resets the rotation of every transform below a rigid head part (its translation and scale stay)
+        class DropRotationVisitor : public osg::NodeVisitor
+        {
+        public:
+            DropRotationVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::MatrixTransform& transform) override
+            {
+                osg::Matrix matrix = transform.getMatrix();
+                matrix.setRotate(osg::Quat());
+                transform.setMatrix(matrix);
+                traverse(transform);
+            }
+        };
+    }
+
     osg::ref_ptr<osg::Node> ESM4NpcAnimation::attachPart(std::string_view model)
     {
         if (model.empty() || !Misc::StringUtils::ciEndsWith(model, ".nif"))
@@ -244,14 +264,17 @@ namespace MWRender
         auto found = nodeMap.find(headBone);
         if (found == nodeMap.end())
             return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
-        // The game keeps a head part's root transform, which the NIF reader drops; some parts need it (HairBun.NIF
-        // turns its root one way and its shapes back, so without it the bun hangs in front of the face).
-        osg::Matrixf root;
-        if (!templateNode->getUserValue(Constants::DiscardedRootTransform, root))
-            root.makeIdentity();
-        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(root * mHeadBinding);
+        // The game (BSFaceGenManager, FUN_00654720 and FUN_00655320 for hair) takes the shapes out of the file and
+        // sets each one's rotation to a fixed quarter turn under the head bone, which is the head binding here. So
+        // the file's own rotations are dropped: the NIF reader already drops the root's, and the shapes' go here.
+        // Hair meshes turn their root one way and their shapes back (HairBun.NIF), and with only the shapes'
+        // rotation the bun hung in front of the face.
+        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(mHeadBinding);
         found->second->addChild(binding);
-        return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
+        osg::ref_ptr<osg::Node> part = SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
+        DropRotationVisitor dropRotation;
+        part->accept(dropRotation);
+        return part;
     }
 
     void ESM4NpcAnimation::initHeadBinding(std::string_view headModel)
