@@ -14,6 +14,8 @@ local frame = require('scripts.omw.fnvhud.frame')
 local v2 = util.vector2
 
 local WIDTH = 640
+-- the dialogue menu's font (dialog_menu.xml: font 6, Monofonto Large)
+local FONT = 'FalloutFont6'
 local normalColor = util.color.rgb(0.79, 0.65, 0.38)
 local hoverColor = util.color.rgb(1.0, 0.88, 0.6)
 local noticeColor = util.color.rgb(0.55, 0.55, 0.55)
@@ -62,6 +64,7 @@ local function paragraph(text, color)
         type = ui.TYPE.TextEdit,
         props = {
             text = text,
+            font = FONT,
             textSize = 18,
             textColor = color or normalColor,
             autoSize = true,
@@ -82,6 +85,7 @@ local function optionLine(text, onClick)
         type = ui.TYPE.Text,
         props = {
             text = text,
+            font = FONT,
             textSize = 18,
             textColor = normalColor,
             autoSize = true,
@@ -151,6 +155,7 @@ local function show(data)
         type = ui.TYPE.Text,
         props = {
             text = data.speaker or '',
+            font = FONT,
             textSize = 22,
             textColor = hoverColor,
             autoSize = true,
