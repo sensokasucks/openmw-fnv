@@ -1295,7 +1295,8 @@ namespace MWRender
         mPlayerArmsRef = ref;
         mPlayerArmsNode = new osg::MatrixTransform;
         mPlayerArmsNode->setNodeMask(Mask_FirstPerson);
-        mPlayerArmsNode->addCullCallback(new ArmsFieldOfViewCallback(mFirstPersonFieldOfView, this));
+        // The game draws them at its own first-person field of view (fDefault1stPersonFOV, 55 degrees)
+        mPlayerArmsNode->addCullCallback(new ArmsFieldOfViewCallback(55.f, this));
         // Drawn over the world, as the Morrowind first-person body is (NpcAnimation::setRenderBin)
         mPlayerArmsNode->getOrCreateStateSet()->setRenderBinDetails(
             RenderBin_FirstPerson, "DepthClear", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
