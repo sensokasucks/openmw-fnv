@@ -256,6 +256,7 @@ namespace MWGui
         bool setHudVisibility(bool show) override;
         bool isHudVisible() const override { return mHudEnabled; }
         void setFalloutHud(bool enabled) override;
+        bool isFalloutHud() const override;
         bool isSneakHidden() const override;
 
         void disallowMouse() override;

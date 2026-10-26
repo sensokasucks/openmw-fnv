@@ -17,6 +17,7 @@
 
 local core = require('openmw.core')
 local storage = require('openmw.storage')
+local types = require('openmw.types')
 local world = require('openmw.world')
 local I = require('openmw.interfaces')
 
@@ -58,6 +59,22 @@ end
 local function message(text)
     local p = player()
     if p then p:sendEvent('FNVCharacterMessage', { text = text }) end
+end
+
+-- The player is Morrowind's "player" NPC, whose race and birthsign give it spells and powers (a Dark Elf's
+-- Ancestor Guardian): FNV has none, so they go, once per session (new game or load).
+local spellsStripped = false
+local function stripMorrowindSpells()
+    if spellsStripped then return end
+    local p = player()
+    if p == nil then return end
+    spellsStripped = true
+    if not (core.contentFiles.has('falloutnv.esm') or core.contentFiles.has('fallout3.esm')) then return end
+    local spells = types.Actor.spells(p)
+    local ids = {}
+    for _, spell in pairs(spells) do ids[#ids + 1] = spell.id end
+    for _, id in ipairs(ids) do spells:remove(id) end
+    if #ids > 0 then log(('removed %d Morrowind spells from the player'):format(#ids)) end
 end
 
 local function publish()
@@ -413,6 +430,7 @@ return {
             dirty = true
         end,
         onUpdate = function()
+            stripMorrowindSpells()
             checkLevel()
             checkAlignment()
             if dirty then publish() end

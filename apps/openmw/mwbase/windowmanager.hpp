@@ -245,6 +245,8 @@ namespace MWBase
 
         /// Scripts draw a Fallout HUD: hides the Morrowind HUD elements and the crosshair tooltip.
         virtual void setFalloutHud(bool enabled) = 0;
+        /// The Fallout HUD is on: FO3/FNV content, whose Lua menus replace the pause menu and the rest dialog
+        virtual bool isFalloutHud() const = 0;
         /// The player sneaks unnoticed (the Morrowind HUD's sneak icon).
         virtual bool isSneakHidden() const = 0;
 

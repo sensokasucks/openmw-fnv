@@ -194,6 +194,9 @@ namespace MWInput
 
         if (!MWBase::Environment::get().getWindowManager()->isGuiMode()) // No open GUIs, open up the MainMenu
         {
+            // the FNV pause menu (scripts/omw/fnvmenus) opens on the GameMenu action instead
+            if (MWBase::Environment::get().getWindowManager()->isFalloutHud())
+                return;
             MWBase::Environment::get().getWindowManager()->pushGuiMode(MWGui::GM_MainMenu);
         }
         else // Close current GUI
@@ -217,6 +220,10 @@ namespace MWInput
     void ActionManager::rest()
     {
         if (!MWBase::Environment::get().getInputManager()->getControlSwitch("playercontrols"))
+            return;
+
+        // the FNV wait menu (scripts/omw/fnvmenus) opens on the Rest action instead
+        if (MWBase::Environment::get().getWindowManager()->isFalloutHud())
             return;
 
         if (!MWBase::Environment::get().getWindowManager()->getRestEnabled()

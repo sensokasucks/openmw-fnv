@@ -1,7 +1,10 @@
 -- The Pip-Boy 3000, as a flat screen over the game while FNV content is loaded.
 -- Tab, as in FNV, or the Inventory key opens it in place of the Morrowind
--- inventory, map and stats windows; Tab or Escape closes it. Tab no longer
--- switches between first and third person while FNV content is loaded.
+-- inventory, map, magic and stats windows, which it replaces (I.UI.registerWindow)
+-- so that nothing opens them; Tab or Escape closes it. The Journal key opens DATA >
+-- Quests. The Inventory key does nothing while it is on the right mouse button,
+-- FNV's aim button. Tab no longer switches between first and third person while
+-- FNV content is loaded.
 --
 --   STATS   Status (derived statistics and active effects), S.P.E.C.I.A.L.,
 --           Skills, Perks (and traits), General (level, karma, reputations)
@@ -130,6 +133,7 @@ local function text(str, props)
     props.text = tostring(str)
     props.textColor = props.textColor or color
     props.textSize = props.textSize or TEXT
+    props.font = props.font or 'FalloutFont2' -- stats_menu.xml's and inventory_menu.xml's font: Monofonto
     if props.autoSize == nil then props.autoSize = props.size == nil end
     return { type = ui.TYPE.Text, props = props }
 end
@@ -1099,9 +1103,14 @@ local function refresh()
     core.sendGlobalEvent('FNVPipBoyRefresh', { player = self.object, map = true })
 end
 
-local function show(tab)
+local function show(tab, sub)
     for i, t in ipairs(TABS) do
-        if t.id == tab then tabIndex = i end
+        if t.id == tab then
+            tabIndex = i
+            for j, s in ipairs(t.subs) do
+                if s.id == sub then subIndex[i] = j end
+            end
+        end
     end
     if not open then
         open = true
@@ -1136,6 +1145,31 @@ local function close()
     closingByScript = false
 end
 
+-- The Inventory or Journal key (scripts/omw/input/playercontrols.lua)
+local function menuKey(tab, sub)
+    if open then
+        close()
+        return
+    end
+    if I.UI.getMode() ~= nil or core.isWorldPaused() then return end
+    if tab == nil then
+        local ok, name = pcall(input._getActionKeyName, input.ACTION.Inventory)
+        if ok and name and name:gsub('#{sMouse}', 'Mouse') == 'Mouse 3' then return end
+    end
+    show(tab, sub)
+end
+
+-- The Morrowind windows of the Interface mode: whatever opens that mode with them (a script, a mod, the
+-- Inventory key) gets the Pip-Boy instead, through UiModeChanged below. I.UI (scripts/omw/ui.lua) loads
+-- after this script, so this waits for the first frame.
+local windowsReplaced = false
+local function replaceWindows()
+    windowsReplaced = true
+    for _, window in ipairs({ 'Inventory', 'Map', 'Magic', 'Stats' }) do
+        I.UI.registerWindow(window, function() end, function() end)
+    end
+end
+
 local function moveSelection(delta)
     if #rows == 0 then return end
     select((selected[currentSub()] or 1) + delta)
@@ -1153,8 +1187,11 @@ return {
     -- @context player
     interface = {
         version = 0,
-        --- Open the Pip-Boy, on 'stats', 'items' or 'data' (default: the last tab).
+        --- Open the Pip-Boy, on 'stats', 'items' or 'data' (default: the last tab), and optionally a sub-tab
+        -- ('quests', 'map', ...).
         open = show,
+        --- What the Inventory key does (the Journal key passes 'data', 'quests').
+        menuKey = menuKey,
         close = close,
         isOpen = function() return open end,
         --- Whether the world pauses while the Pip-Boy is open (on by default; off for co-op).
@@ -1227,6 +1264,7 @@ return {
             moveSelection(vertical > 0 and -1 or 1)
         end,
         onFrame = function(dt)
+            if not windowsReplaced then replaceWindows() end
             -- the local map's tiles arrive a frame after they are asked for
             if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
             if viewRestoreFrames > 0 and I.UI.getMode() == nil then
@@ -1268,10 +1306,9 @@ return {
                 if not closingByScript and e.newMode ~= 'Interface' then closed() end
                 return
             end
-            -- The Inventory key opened the Morrowind windows: show the Pip-Boy instead. Windows of FNV
-            -- scripts (dialogue, terminals, barter) open Interface mode with no Morrowind windows.
-            if e.newMode == 'Interface' and e.oldMode == nil and not closingByScript
-                and I.UI.isWindowVisible('Inventory') then
+            -- Something opened the Morrowind windows: show the Pip-Boy instead. Windows of FNV scripts
+            -- (dialogue, terminals, barter) open Interface mode with no Morrowind windows.
+            if e.newMode == 'Interface' and not closingByScript and I.UI.isWindowVisible('Inventory') then
                 show()
             end
         end,

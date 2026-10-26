@@ -103,6 +103,8 @@ namespace MWBase
             const MWWorld::Ptr& actor, const ESM::DialInfo& info, const ESM::Dialogue& record)
             = 0;
         virtual void questUpdated(const ESM::RefId& questId, int stage) = 0;
+        // A message box the Fallout HUD shows in its place (MWGui::WindowManager::messageBox)
+        virtual void falloutMessage(std::string_view text) = 0;
         // `arg` is either forwarded from MWGui::pushGuiMode or empty
         virtual void uiModeChanged(const MWWorld::Ptr& arg) = 0;
         virtual void viewportResized(int width, int height) = 0;

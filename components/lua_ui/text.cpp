@@ -1,5 +1,7 @@
 #include "text.hpp"
 
+#include <MyGUI_ResourceManager.h>
+
 #include "alignment.hpp"
 
 namespace LuaUi
@@ -23,6 +25,12 @@ namespace LuaUi
     {
         mAutoSized = propertyValue("autoSize", true);
 
+        // a font loaded by Gui::FontLoader, such as "FalloutFont1"; before the size, which a new font resets
+        std::string font = propertyValue("font", std::string());
+        if (font.empty() || !MyGUI::ResourceManager::getInstance().isExist(font))
+            font = "DefaultFont";
+        if (getFontName() != font)
+            setFontName(font);
         setCaption(propertyValue("text", std::string()));
         setFontHeight(propertyValue("textSize", 10));
         setTextColour(propertyValue("textColor", MyGUI::Colour(0, 0, 0, 1)));
@@ -50,7 +58,7 @@ namespace LuaUi
     {
         static std::vector<std::string_view> usedProps = std::invoke([this] {
             std::vector<std::string_view> props = { "text", "textSize", "textColor", "wordWrap", "textAlignH",
-                "textAlignV", "multiline", "readOnly", "autoSize", "textShadow", "textShadowColor" };
+                "textAlignV", "multiline", "readOnly", "autoSize", "textShadow", "textShadowColor", "font" };
             auto baseProps = WidgetExtension::allUsedProperties();
             props.insert(props.end(), baseProps.begin(), baseProps.end());
             return props;

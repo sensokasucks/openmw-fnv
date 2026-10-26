@@ -175,6 +175,7 @@ local function textLayout(text, color, size)
         props = {
             text = escape(text),
             textSize = textSize,
+            font = 'FalloutFont5', -- computers_menu.xml's font: Fixedsys
             textColor = color,
             size = size,
             multiline = true,

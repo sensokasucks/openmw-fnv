@@ -76,7 +76,8 @@ local render
 local function text(str, size, color)
     return {
         type = ui.TYPE.Text,
-        props = { text = str, textSize = size or 18, textColor = color or normalColor, autoSize = true },
+        props = { text = str, textSize = size or 18, textColor = color or normalColor, autoSize = true,
+            font = 'FalloutFont2' },
     }
 end
 

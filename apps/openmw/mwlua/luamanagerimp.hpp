@@ -123,6 +123,7 @@ namespace MWLua
         }
         void objectTeleported(const MWWorld::Ptr& ptr) override;
         void questUpdated(const ESM::RefId& questId, int stage) override;
+        void falloutMessage(std::string_view text) override;
         void uiModeChanged(const MWWorld::Ptr& arg) override;
         void viewportResized(int width, int height) override;
         void actorDied(const MWWorld::Ptr& actor) override;

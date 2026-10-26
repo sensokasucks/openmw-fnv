@@ -76,6 +76,9 @@ local function text(props)
     props.textShadow = true
     props.textShadowColor = shadowColor
     props.textSize = props.textSize or TEXT_SIZE
+    -- Monofonto. hud_main_menu.xml has font 7, the same with a glow baked in, but its glyphs reach 10 pixels past
+    -- their advance and MyGUI cuts the last one off; the shadow stands in for the glow.
+    props.font = props.font or 'FalloutFont2'
     props.autoSize = props.autoSize ~= false
     return { type = ui.TYPE.Text, props = props }
 end
@@ -576,6 +579,10 @@ return {
         -- { text, duration, kind } from global scripts (scripts/omw/fnvhud/global.lua, obscript.lua)
         FNVHudNotify = function(data)
             notify(data.text, data)
+        end,
+        -- engine message boxes and ui.showMessage, which the Fallout HUD shows here (WindowManager::messageBox)
+        FNVMessageBox = function(data)
+            notify(data.text)
         end,
         FNVHudMarkers = function(data)
             questMarkers = data.markers or {}

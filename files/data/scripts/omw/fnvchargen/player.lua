@@ -189,7 +189,8 @@ end
 local function text(str, color, size)
     return {
         type = ui.TYPE.Text,
-        props = { text = str, textSize = size or textSize, textColor = color or colors.normal, autoSize = true },
+        props = { text = str, textSize = size or textSize, textColor = color or colors.normal, autoSize = true,
+            font = 'FalloutFont2' },
     }
 end
 

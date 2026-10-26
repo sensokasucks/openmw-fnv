@@ -76,6 +76,10 @@ Properties
   * - textShadowColor
     - util.color (``rgb(0, 0, 0)``)
     - The color of the text shadow.
+  * - font
+    - string ("DefaultFont")
+    - | A font by its name: "DefaultFont", "MonoFont", or with FO3/FNV archives loaded
+      | "FalloutFont1" .. "FalloutFont8" (Fallout_default.ini's sFontFile_1 .. 8).
 
 Events
 ------
