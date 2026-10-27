@@ -353,6 +353,29 @@ functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
     return state.talkedTo[referenceId(obj)] == true
 end
+-- ESM4 actors in the active cells. world.activeActors leaves them out (their classes aren't
+-- Morrowind actors), so they are collected as they become active.
+local esm4Actors = {} -- id -> object
+local function activeEsm4Actors()
+    local list = {}
+    local inScene = core.obscript.ai and core.obscript.ai.isInScene
+    for id, obj in pairs(esm4Actors) do
+        if not obj:isValid() or (inScene and not inScene(obj)) then
+            esm4Actors[id] = nil
+        else
+            list[#list + 1] = obj
+        end
+    end
+    return list
+end
+
+-- The same cell, or both outside in the same worldspace (exterior grid squares are cells of their own).
+local function sameSpace(a, b)
+    if a == nil or b == nil then return false end
+    if a.id == b.id then return true end
+    return a.isExterior and b.isExterior
+end
+
 local function isDead(obj)
     local c = I.FNVCombat
     if obj == nil or c == nil or c.isDead == nil then return false end
@@ -1202,9 +1225,8 @@ end
 
 local function tickChatter(player)
     if getTopic('IdleChatter') == nil then return end
-    for _, npc in ipairs(world.activeActors) do
-        if types.ESM4NPC.objectIsInstance(npc) and npc.cell and player.cell
-            and (npc.cell.id == player.cell.id or (npc.cell.isExterior and player.cell.isExterior))
+    for _, npc in ipairs(activeEsm4Actors()) do
+        if types.ESM4NPC.objectIsInstance(npc) and sameSpace(npc.cell, player.cell)
             and (npc.position - player.position):length() <= IDLE_CHATTER_RANGE then
             local due = nextChatter[npc.id]
             if due == nil then
@@ -1235,8 +1257,8 @@ local function tickGreetings(dt)
     end
     local distance = gmst('fAIMinGreetingDistance', 150)
     local cooldown = gmst('fAIGreetingTimer', 20)
-    for _, npc in ipairs(world.activeActors) do
-        if types.ESM4NPC.objectIsInstance(npc) and npc.cell and player.cell and npc.cell.id == player.cell.id
+    for _, npc in ipairs(activeEsm4Actors()) do
+        if types.ESM4NPC.objectIsInstance(npc) and sameSpace(npc.cell, player.cell)
             and (npc.position - player.position):length() <= distance
             and simTime - (lastHello[npc.id] or -cooldown) >= cooldown
             and not isSpeaking(npc) and not isDead(npc)
@@ -1288,7 +1310,7 @@ local function trackDeaths(dt)
     deathCheckTimer = 1
     state.deadRefs = state.deadRefs or {}
     state.deadCounts = state.deadCounts or {}
-    for _, actor in ipairs(world.activeActors) do
+    for _, actor in ipairs(activeEsm4Actors()) do
         if types.ESM4NPC.objectIsInstance(actor) and isDead(actor) then
             local data = dlg.getActor(actor)
             if data and not state.deadRefs[data.reference] then
@@ -2574,6 +2596,11 @@ return {
     engineHandlers = {
         onNewGame = function()
             isNewGame = true
+        end,
+        onObjectActive = function(obj)
+            if types.ESM4NPC.objectIsInstance(obj) or types.ESM4Creature.objectIsInstance(obj) then
+                esm4Actors[obj.id] = obj
+            end
         end,
         onUpdate = function(dt)
             if not state.initialized then initState() end

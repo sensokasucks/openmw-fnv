@@ -870,6 +870,8 @@ local followsPlayer = {}
 -- it is up to fFollowExtraCatchUpSpeedMult faster, always between fFollowWalkMinSlowdownMultiplier and
 -- fFollowWalkMaxSpeedupMultiplier of its own. Accompany fails when the leader gets more than 300 beyond D.
 local FOLLOWER_RADIUS = 32 -- bound radius of a person, about
+local BRING_AGAIN_AFTER = 5 -- seconds before the same follower is brought along again
+local lastBrought = {} -- id -> simTime
 local FAST_TRAVEL_DISTANCE = 16384 -- a follower this far from the player outside was left behind by fast travel
 local ACCOMPANY_FAIL_MARGIN = 300
 
@@ -991,13 +993,15 @@ local function bringFollowers()
             followsPlayer[id] = nil
             return
         end
+        -- (worldspace ids aren't compared: Goodsprings' cells and the WastelandNV squares around it report
+        -- different ones, and a follower walking across was moved again and again)
         local bothOutside = npc.cell.isExterior and p.cell.isExterior
-        local otherWorld = bothOutside and npc.cell.worldSpaceId ~= nil and p.cell.worldSpaceId ~= nil
-            and npc.cell.worldSpaceId ~= p.cell.worldSpaceId
-        local away = (not bothOutside and not sameCell(npc.cell, p.cell)) or otherWorld
+        local away = (not bothOutside and not sameCell(npc.cell, p.cell))
             -- fast travel: far out of the loaded cells
             or (bothOutside and (npc.position - p.position):length() > FAST_TRAVEL_DISTANCE)
-        if npc.enabled and away and not isWaiting(npc) then moving[id] = npc end
+        if npc.enabled and away and not isWaiting(npc) and simTime >= (lastBrought[id] or 0) + BRING_AGAIN_AFTER then
+            moving[id] = npc
+        end
     end
     for id, npc in pairs(teammates) do consider(id, npc) end
     for id, npc in pairs(followsPlayer) do consider(id, npc) end
@@ -1011,7 +1015,11 @@ local function bringFollowers()
         local npc = moving[id]
         if furniture.inUse(states[id] or {}) then furniture.release(states[id]) end
         offset = offset + gmstFloat('fFollowSpaceBetweenFollowers', 192) + FOLLOWER_RADIUS
-        teleport(npc, p.cell, p.position + back * offset, yaw)
+        local position = p.position + back * offset
+        log(('%s (%s) comes along: from %s in %s to %s in %s'):format(npc.recordId, tostring(id),
+            tostring(npc.position), tostring(npc.cell), tostring(position), tostring(p.cell)))
+        teleport(npc, p.cell, position, yaw)
+        lastBrought[id] = simTime
         local s = states[id]
         if s ~= nil then
             s.phase = nil
