@@ -394,9 +394,18 @@ local function isDead(obj)
     return ok and dead == true
 end
 functions[46] = function(_, obj) return isDead(obj) end -- GetDead
+local voiceTypeExplained = 0
 functions[427] = function(cond, obj) -- GetIsVoiceType: a voice type, or a form list of them
     if obj == nil or isPlayer(obj) then return false end
-    if dlg.isVoiceType then return dlg.isVoiceType(obj, cond.param1Form) end
+    if dlg.isVoiceType then
+        local yes = dlg.isVoiceType(obj, cond.param1Form)
+        if not yes and dlg.describeVoiceType and voiceTypeExplained < 3 then
+            voiceTypeExplained = voiceTypeExplained + 1
+            log(('GetIsVoiceType %s is false for %s: %s'):format(cond.param1Form, tostring(obj.recordId),
+                dlg.describeVoiceType(obj, cond.param1Form)))
+        end
+        return yes
+    end
     return dlg.getVoiceType(obj) == cond.param1Form
 end
 -- Variables of object scripts, as their local scripts publish them
