@@ -1,6 +1,7 @@
 #ifndef GAME_MWMECHANICS_ESM4COMBAT_H
 #define GAME_MWMECHANICS_ESM4COMBAT_H
 
+#include <functional>
 #include <vector>
 
 #include <osg/Vec3f>
@@ -42,6 +43,10 @@ namespace MWMechanics::ESM4Combat
 
     // Damages the target's health; kills it when health runs out. Returns the health taken.
     float hit(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker, float damage);
+
+    // Called when a melee weapon, unarmed or creature blow lands: attacker, weapon (nullptr unarmed), result.
+    using BlowListener = std::function<void(const MWWorld::Ptr&, const ESM4::Weapon*, const HitResult&)>;
+    void setBlowListener(BlowListener listener);
 
     // Fires one shot of a gun along a ray: the first FO3/FONV actor in front of any wall takes the weapon's damage.
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,

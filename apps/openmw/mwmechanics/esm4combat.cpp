@@ -129,6 +129,7 @@ namespace MWMechanics::ESM4Combat
             const ESM4::Weapon* mWeapon = nullptr; // melee weapon swung; unarmed when null
         };
         std::vector<PendingHit> sPendingHits;
+        BlowListener sBlowListener;
 
         std::mt19937& random()
         {
@@ -802,11 +803,30 @@ namespace MWMechanics::ESM4Combat
                 continue;
             const float damage = applyArmor(target,
                 blow.mWeapon != nullptr ? getWeaponDamage(attacker, *blow.mWeapon) : getUnarmedDamage(attacker));
+            HitResult result;
+            result.mTarget = target;
+            result.mPosition = target.getRefData().getPosition().asVec3();
+            result.mDirection = delta;
+            result.mDirection.normalize();
             if (target == getPlayer())
+            {
                 hurtPlayer(target, damage);
+                result.mDamage = damage;
+                result.mKilled = target.getClass().getCreatureStats(target).isDead();
+            }
             else
-                hit(target, attacker, damage);
+            {
+                result.mDamage = hit(target, attacker, damage);
+                result.mKilled = isDead(target);
+            }
+            if (sBlowListener)
+                sBlowListener(attacker, blow.mWeapon, result);
         }
+    }
+
+    void setBlowListener(BlowListener listener)
+    {
+        sBlowListener = std::move(listener);
     }
 
     void clear()
