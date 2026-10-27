@@ -1256,6 +1256,7 @@ end
 
 local chatterTries, chatterSaid, chatterReport = 0, 0, 60
 local chatterExplained = 0
+local questConditionsDumped = {}
 
 -- Why a speaker has no line for a topic: how many of its INFOs a stopped quest, Say Once
 -- or a condition holds back, with the first failing condition of a few of them.
@@ -1280,6 +1281,15 @@ local function explainNoLine(npc, topicEditorId)
                 if qs.running and quest.conditions and #quest.conditions > 0 then
                     local _, failed, value = conditions.evaluate(quest.conditions, ctx)
                     why = why .. ', its dialogue conditions fail: ' .. conditions.describe(failed, value)
+                    if not questConditionsDumped[info.quest] then
+                        questConditionsDumped[info.quest] = true
+                        for i, cond in ipairs(quest.conditions) do
+                            local ok, got = conditions.check(cond, ctx)
+                            log(('    %s condition %d: %s%s runOn %s -> %s'):format(quest.editorId, i,
+                                conditions.describe(cond, got), cond.isOr and ' OR' or '', tostring(cond.runOn),
+                                ok and 'passes' or 'fails'))
+                        end
+                    end
                 end
                 questFails[info.quest] = why
                 log(('  quest %s: %s'):format(quest.editorId, why))
