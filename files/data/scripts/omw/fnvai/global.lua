@@ -1237,6 +1237,11 @@ local function patrol(npc, s, dest, pkg)
     local point = getObject(p.points[p.index])
     if point == nil then
         -- no route to walk: stand at the location
+        if not s.patrolReported then
+            s.patrolReported = true
+            log(('%s (%s): %s has no patrol route (location %s), stays there'):format(npc.recordId,
+                tostring(npc.id), pkg.editorId, tostring(dest.ref and dest.ref.recordId or dest.position)))
+        end
         goAndStay(npc, s, dest, pkg, function() end)
         return
     end

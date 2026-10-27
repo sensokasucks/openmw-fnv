@@ -121,6 +121,7 @@ local function startCombat(actor, target)
     end
     fighting[actor.id] = s
     tracked[actor.id] = actor
+    print(('[combat] %s (%s) fights %s'):format(actor.recordId, tostring(actor.id), tostring(target.recordId)))
     scriptEvent(actor, 'OnStartCombat', target)
 end
 
@@ -544,7 +545,10 @@ return {
                     end
                 end
                 local state = danger and 'danger' or (noticed and 'caution' or 'hidden')
-                if detectionSection:get('state') ~= state then detectionSection:set('state', state) end
+                if detectionSection:get('state') ~= state then
+                    print(('[combat] detection: %s'):format(state))
+                    detectionSection:set('state', state)
+                end
             end
             for id, actor in pairs(tracked) do
                 if not actor:isValid() or not ai.isInScene(actor) or not isAlive(actor) then

@@ -1207,7 +1207,9 @@ local function tickChatter(player)
                 nextChatter[npc.id] = simTime + chatterDelay()
                 if not isSpeaking(npc) and not isDead(npc) and not conversing[npc.id]
                     and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
-                    sayLine(npc, nil, 'IdleChatter')
+                    if sayLine(npc, nil, 'IdleChatter') then
+                        log(('%s (%s) says an IdleChatter line'):format(npc.recordId, tostring(npc.id)))
+                    end
                 end
             end
         end
@@ -1235,7 +1237,10 @@ local function tickGreetings(dt)
             and not (I.FNVCombat and I.FNVCombat.noticesPlayer and not I.FNVCombat.noticesPlayer(npc))
             and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
             lastHello[npc.id] = simTime
-            if sayLine(npc, player, 'HELLO') then return end
+            if sayLine(npc, player, 'HELLO') then
+                log(('%s (%s) greets the player'):format(npc.recordId, tostring(npc.id)))
+                return
+            end
         end
     end
 end
