@@ -152,6 +152,14 @@ namespace MWMechanics
             path = ESM4Navigation::Path();
             path->mPoints.push_back(target);
         }
+        else if (path && options.mDirect && !path->mPoints.empty())
+        {
+            // The navmesh got only part of the way (the goal is past the edge of the loaded navmesh, such as
+            // across an exterior cell border): go on straight from where it ends
+            const osg::Vec3f& end = path->mPoints.back();
+            if (osg::Vec2f(target.x() - end.x(), target.y() - end.y()).length() > std::max(options.mTolerance, 64.f))
+                path->mPoints.push_back(target);
+        }
         if (!path)
         {
             Log(Debug::Verbose) << "ESM4 AI: no path for " << ptr.getCellRef().getRefNum().toString() << " from "
@@ -547,19 +555,21 @@ namespace MWMechanics
 
         // Follow the ground of the navmesh along the corridor
         const auto& corridor = state.mPath.mCorridor;
+        bool onCorridor = false;
         for (std::size_t i = state.mCorridorIndex; i < corridor.size() && i < state.mCorridorIndex + 16; ++i)
         {
             if (ESM4Navigation::contains2D(corridor[i], position.x(), position.y()))
             {
                 state.mCorridorIndex = i;
                 position.z() = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
+                onCorridor = true;
                 break;
             }
         }
 
-        if (corridor.empty())
+        if (!onCorridor)
         {
-            // Straight moves keep to the ground below
+            // Straight moves, and the straight end of a path beyond the navmesh, keep to the ground below
             const osg::Vec3f up(0.f, 0.f, 128.f);
             const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(position + up,
                 position - up * 4.f, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
