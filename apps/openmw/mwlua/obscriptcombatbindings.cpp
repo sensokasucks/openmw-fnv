@@ -21,6 +21,7 @@
 #include "../mwbase/soundmanager.hpp"
 #include "../mwclass/esm4creature.hpp"
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/esm4actors.hpp"
 #include "../mwmechanics/esm4combat.hpp"
 #include "../mwmechanics/esm4gore.hpp"
@@ -283,6 +284,14 @@ namespace MWLua
         };
 
         // Plays the NPC's reload sequence.
+        // Whether the actor (the player too) is sneaking.
+        api["isSneaking"] = [](const Object& actor) -> bool {
+            const MWWorld::Ptr ptr = actor.ptrOrEmpty();
+            if (ptr.isEmpty() || !ptr.getClass().isActor() || ptr.getType() == ESM::REC_NPC_4
+                || ptr.getType() == ESM::REC_CREA4)
+                return false;
+            return ptr.getClass().getCreatureStats(ptr).getStance(MWMechanics::CreatureStats::Stance_Sneak);
+        };
         // detect(observer, target, { sleeping, inCombat, alert }): the detection score (CalcDetectionScore) and
         // whether the observer has a line of sight to the target.
         api["detect"] = [](const Object& observer, const Object& target, sol::optional<sol::table> options)

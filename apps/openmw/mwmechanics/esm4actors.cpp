@@ -1,5 +1,6 @@
 #include "esm4actors.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <osg/Math>
@@ -165,6 +166,15 @@ namespace MWMechanics
                             << " in " << state.mPath.mPoints.size() << " legs over " << state.mPath.mCorridor.size()
                             << " triangles";
         return true;
+    }
+
+    void ESM4Actors::setPace(const MWWorld::Ptr& ptr, float speedMult, bool run)
+    {
+        auto it = mStates.find(ptr.getCellRef().getRefNum());
+        if (it == mStates.end())
+            return;
+        it->second.mOptions.mSpeedMult = std::clamp(speedMult, 0.f, 2.f);
+        it->second.mOptions.mRun = run;
     }
 
     void ESM4Actors::stop(const MWWorld::Ptr& ptr)
@@ -490,12 +500,19 @@ namespace MWMechanics
             if (ptr.getType() == ESM::REC_NPC_4)
             {
                 // NPC speed comes from the formula; the walk or run loop is played faster or slower to keep pace
-                speed = state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr);
+                speed = (state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr)) * state.mOptions.mSpeedMult;
                 animation->setLocomotionRate(animationSpeed > 1.f ? speed / animationSpeed : 1.f);
             }
-            else if (animationSpeed > 1.f)
-                speed = animationSpeed;
+            else
+            {
+                if (animationSpeed > 1.f)
+                    speed = animationSpeed;
+                speed *= state.mOptions.mSpeedMult;
+                animation->setLocomotionRate(state.mOptions.mSpeedMult);
+            }
         }
+        else
+            speed *= state.mOptions.mSpeedMult;
 
         osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
         float remaining = speed * duration;

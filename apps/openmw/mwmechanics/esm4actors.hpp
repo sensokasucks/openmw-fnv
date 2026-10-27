@@ -42,6 +42,7 @@ namespace MWMechanics
             std::optional<float> mFinalYaw; // radians, turned to on arrival
             bool mDirect = false; // without a navmesh route, go straight there
             bool mStraight = false; // go straight there, ignoring the navmesh
+            float mSpeedMult = 1.f; // walk or run speed scaled (followers slowing down or catching up)
         };
 
         // How a piece of furniture is used, as the original engine does it: the actor stands on the furniture
@@ -76,6 +77,8 @@ namespace MWMechanics
         // False when no route exists (the status is then NoPath).
         bool moveTo(const MWWorld::Ptr& ptr, const osg::Vec3f& target, const MoveOptions& options);
         void stop(const MWWorld::Ptr& ptr);
+        // Changes the speed and gait of the current move without finding a new path.
+        void setPace(const MWWorld::Ptr& ptr, float speedMult, bool run);
         // Turns in place.
         void face(const MWWorld::Ptr& ptr, float yaw);
         Status getStatus(const MWWorld::Ptr& ptr) const;

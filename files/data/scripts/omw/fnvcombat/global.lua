@@ -36,6 +36,7 @@ local types = require('openmw.types')
 local storage = require('openmw.storage')
 local util = require('openmw.util')
 local world = require('openmw.world')
+local I = require('openmw.interfaces')
 
 local combat = core.obscript and core.obscript.combat
 if combat == nil or types.ESM4Creature == nil then
@@ -150,6 +151,7 @@ local function noticesPlayer(actor)
 end
 
 local function wantsFight(actor, player)
+    if I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(actor) then return false end
     local distance = (player.position - actor.position):length()
     if not noticesPlayer(actor) then return false end
     local aggression = stats.get(actor, 'Aggression')
@@ -211,7 +213,100 @@ local function shootAt(s, actor, target)
     s.nextAttack = simTime + delay
 end
 
+-- ---------------------------------------------------------------- teammates and target selection
+
+
+local function isTeammate(actor)
+    return I.FNVAI ~= nil and I.FNVAI.isTeammate ~= nil and I.FNVAI.isTeammate(actor)
+end
+
+local function onPlayerSide(actor)
+    return types.Player.objectIsInstance(actor) or isTeammate(actor)
+end
+
+-- Target score of the original's combat target selection (FalloutNV.exe): +1000 when seen, +100 with a line of
+-- sight, +100 for the current target and +1000 more if it was seen in the last 2 s, up to +1000 for being close
+-- (nothing from 2048 units on). Dead targets are left out (the original takes 500 off).
+local RESELECT_EVERY = 1.0
+local CLOSE_RANGE = 2048
+
+local function targetScore(s, actor, target)
+    local score = 0
+    local d = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+    local seen = d ~= nil and d > gmst('fSneakNoticedMin', -20)
+    local sight = combat.hasLineOfFire(actor, target)
+    s.seen = s.seen or {}
+    if seen then
+        score = score + 1000
+        s.seen[target.id] = simTime
+    end
+    if sight then score = score + 100 end
+    if target == s.target then
+        score = score + 100
+        if simTime - (s.seen[target.id] or -math.huge) <= 2 then score = score + 1000 end
+    end
+    local distance = (target.position - actor.position):length()
+    score = score + math.max(0, 1000 * (1 - distance / CLOSE_RANGE))
+    return score
+end
+
+-- Who an actor could fight: for the player's side, those fighting it; for the others, the player and its
+-- teammates if they fight one of them.
+local function candidateTargets(s, actor, player)
+    local list = {}
+    if onPlayerSide(actor) then
+        for id, other in pairs(fighting) do
+            if id ~= actor.id and other.target ~= nil and onPlayerSide(other.target) and not onPlayerSide(other.actor)
+                and isAlive(other.actor) then
+                list[#list + 1] = other.actor
+            end
+        end
+    elseif s.target ~= nil and onPlayerSide(s.target) then
+        if isAlive(player) then list[#list + 1] = player end
+        for id, other in pairs(tracked) do
+            if other:isValid() and isAlive(other) and isTeammate(other) and other.cell ~= nil and actor.cell ~= nil
+                and other.cell.id == actor.cell.id then
+                list[#list + 1] = other
+            end
+        end
+    end
+    return list
+end
+
+local function selectTarget(s, player)
+    if s.fleeing or simTime < (s.nextSelect or 0) then return end
+    s.nextSelect = simTime + RESELECT_EVERY
+    local best, bestScore = nil, -math.huge
+    for _, candidate in ipairs(candidateTargets(s, s.actor, player)) do
+        local score = targetScore(s, s.actor, candidate)
+        if score > bestScore then best, bestScore = candidate, score end
+    end
+    if best ~= nil and best ~= s.target then
+        s.target = best
+        s.straight = false
+    end
+end
+
+-- Teammates join every fight against the player or another teammate, as the original's teammates take on the
+-- player's enemies.
+local function teammatesHelp(player)
+    if I.FNVAI == nil or I.FNVAI.isTeammate == nil then return end
+    for id, mate in pairs(tracked) do
+        if fighting[id] == nil and mate:isValid() and isAlive(mate) and isTeammate(mate) then
+            for otherId, other in pairs(fighting) do
+                if otherId ~= id and other.target ~= nil and onPlayerSide(other.target)
+                    and not onPlayerSide(other.actor) and isAlive(other.actor)
+                    and (other.actor.position - mate.position):length() <= GIVE_UP_DISTANCE then
+                    startCombat(mate, other.actor)
+                    break
+                end
+            end
+        end
+    end
+end
+
 local function fight(s)
+    selectTarget(s, world.players[1])
     local actor, target = s.actor, s.target
     if not isAlive(target) then
         stopCombat(actor)
@@ -281,6 +376,9 @@ return {
         kill = function(target) combat.hit(target, nil, 1e9) end,
         --- Whether the actor is fighting or running away; its AI package waits meanwhile.
         isInCombat = function(actor) return fighting[actor.id] ~= nil end,
+        --- Whether the actor's detection score of the player is above fSneakNoticedMin (checked every
+        -- fDetectionTimerSetting seconds).
+        noticesPlayer = function(actor) return noticesPlayer(actor) end,
         getTarget = function(actor)
             local s = fighting[actor.id]
             return s and s.target
@@ -388,6 +486,7 @@ return {
                     callForHelp(actor, player)
                 end
             end
+            if playerAlive then teammatesHelp(player) end
             for id, s in pairs(fighting) do
                 if tracked[id] == nil or not s.actor:isValid() then
                     fighting[id] = nil

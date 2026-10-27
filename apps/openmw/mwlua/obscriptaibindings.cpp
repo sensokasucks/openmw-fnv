@@ -312,7 +312,7 @@ namespace MWLua
 
         // Walks the NPC to the position along the navmesh. options: run (bool), tolerance (units), yaw (radians to
         // face on arrival), direct (go straight there when the navmesh has no route), straight (go straight there,
-        // ignoring the navmesh). The move starts with the next frame; status() reports how it goes.
+        // ignoring the navmesh), speedMult (walk or run speed scaled). The move starts with the next frame; status() reports how it goes.
         api["moveTo"] = [context](const Object& object, const osg::Vec3f& target, sol::optional<sol::table> options) {
             MWMechanics::ESM4Actors::MoveOptions moveOptions;
             if (options)
@@ -321,6 +321,7 @@ namespace MWLua
                 moveOptions.mTolerance = options->get_or("tolerance", moveOptions.mTolerance);
                 moveOptions.mDirect = options->get_or("direct", false);
                 moveOptions.mStraight = options->get_or("straight", false);
+                moveOptions.mSpeedMult = options->get_or("speedMult", 1.f);
                 if (sol::optional<float> yaw = options->get<sol::optional<float>>("yaw"))
                     moveOptions.mFinalYaw = *yaw;
             }
@@ -329,6 +330,15 @@ namespace MWLua
                     MWMechanics::ESM4Actors::get().moveTo(object.ptr(), target, moveOptions);
                 },
                 "obscriptAIMoveToAction");
+        };
+
+        // Changes the speed (speedMult, 0 to 2) and gait (run) of the current move without a new path.
+        api["setPace"] = [context](const Object& object, float speedMult, bool run) {
+            context.mLuaManager->addAction(
+                [object = Object(object), speedMult, run] {
+                    MWMechanics::ESM4Actors::get().setPace(object.ptr(), speedMult, run);
+                },
+                "obscriptAISetPaceAction");
         };
 
         api["stop"] = [context](const Object& object) {

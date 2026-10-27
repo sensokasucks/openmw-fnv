@@ -388,6 +388,13 @@ functions[53] = function(cond) -- GetScriptVariable ref index
     return name and vars.locals[name:lower()] or 0
 end
 
+functions[454] = function(cond, obj) -- GetPlayerTeammate
+    return obj ~= nil and I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(obj) and 1 or 0
+end
+functions[455] = function() -- GetPlayerTeammateCount
+    return I.FNVAI and I.FNVAI.teammateCount and I.FNVAI.teammateCount() or 0
+end
+
 functions[462] = function(cond) -- IsPlayerTagSkill
     local av = stats.actorValue(cond.param1)
     if av == nil or stats.getTagSkills == nil then return false end
@@ -1065,21 +1072,39 @@ end
 -- choices (TCLT) that has a line for them, until a line has no choices or is
 -- a Goodbye. The original also walks them to each other first (inferred: a
 -- conversation package); here they talk where they stand.
+local MAX_CONVERSATION_LINES = 100 -- the original stops a conversation after this many lines
+local conversing = {} -- npc id -> true while in a conversation with another NPC
+
 local function converse(speaker, listener, topicIdOrEditorId)
+    local lines = 0
+    local function over()
+        conversing[speaker.id] = nil
+        conversing[listener.id] = nil
+    end
     local function turn(a, b, topicId)
+        lines = lines + 1
         return sayLine(a, b, topicId, function(info)
-            if hasFlag(info.flags, INFO_GOODBYE) or not (a:isValid() and b:isValid()) then return end
+            if hasFlag(info.flags, INFO_GOODBYE) or lines >= MAX_CONVERSATION_LINES
+                or not (a:isValid() and b:isValid()) then
+                return over()
+            end
             for _, choice in ipairs(info.choices) do
                 local topic = getTopic(choice)
                 local actor = dlg.getActor(b)
                 if topic and actor and pickInfoFor(topic, b, actor, a) then
-                    turn(b, a, choice)
+                    if not turn(b, a, choice) then over() end
                     return
                 end
             end
+            over()
         end)
     end
-    return turn(speaker, listener, topicIdOrEditorId)
+    local started = turn(speaker, listener, topicIdOrEditorId)
+    if started then
+        conversing[speaker.id] = true
+        conversing[listener.id] = true
+    end
+    return started
 end
 
 local function lineOver(line, dt)
@@ -1135,8 +1160,9 @@ end
 
 -- ------------------------------------------------ greetings (Hello barks)
 -- An NPC that is not busy says a HELLO line when the player comes within
--- fAIMinGreetingDistance, at most once per fAIGreetingTimer seconds
--- (thresholds from the game settings; the exact trigger is inferred).
+-- fAIMinGreetingDistance, at most once per fAIGreetingTimer seconds, as
+-- FalloutNV.exe does it: only if it has detected the player (scripts/omw/fnvcombat)
+-- and the player is not sneaking.
 local function gmst(name, fallback)
     local value = core.getFNVGMST and core.getFNVGMST(name)
     return type(value) == 'number' and value or fallback
@@ -1153,6 +1179,9 @@ local function tickGreetings(dt)
     helloCheck = 0.5
     local player = world.players[1]
     if player == nil then return end
+    if core.obscript.combat and core.obscript.combat.isSneaking and core.obscript.combat.isSneaking(player) then
+        return
+    end
     local distance = gmst('fAIMinGreetingDistance', 150)
     local cooldown = gmst('fAIGreetingTimer', 20)
     for _, npc in ipairs(world.activeActors) do
@@ -1160,6 +1189,7 @@ local function tickGreetings(dt)
             and (npc.position - player.position):length() <= distance
             and simTime - (lastHello[npc.id] or -cooldown) >= cooldown
             and not isSpeaking(npc) and not isDead(npc)
+            and not (I.FNVCombat and I.FNVCombat.noticesPlayer and not I.FNVCombat.noticesPlayer(npc))
             and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
             lastHello[npc.id] = simTime
             if sayLine(npc, player, 'HELLO') then return end
@@ -1713,6 +1743,20 @@ local PLAYER_POSES = {
 }
 
 -- `Ref.AddScriptPackage Package` / `Ref.RemoveScriptPackage`
+-- `ref.SetPlayerTeammate 1`: the actor joins the player's team (scripts/omw/fnvai): it follows the
+-- player through doors unless its Waiting variable is 1, and fights the player's enemies.
+obs.bind('SetPlayerTeammate', function(...)
+    local npc, flag = refAndArgs(...)
+    if npc and not isPlayer(npc) and I.FNVAI and I.FNVAI.setTeammate then
+        I.FNVAI.setTeammate(npc, (tonumber(flag) or 0) ~= 0)
+    end
+    return 0
+end)
+obs.bind('GetPlayerTeammate', function(...)
+    local npc = refAndArgs(...)
+    return npc and I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(npc) and 1 or 0
+end)
+
 obs.bind('AddScriptPackage', function(...)
     local npc, package = refAndArgs(...)
     local pose = isPlayer(npc) and type(package) == 'string' and PLAYER_POSES[package:lower()]
@@ -2318,6 +2362,18 @@ return {
         setStage = function(q, stage)
             local quest = getQuest(q)
             if quest then setStage(quest, stage) end
+        end,
+        --- A conversation between two NPCs (sandbox conversations, scripts/omw/fnvai): the speaker opens with
+        -- the topic (HELLO by default) and they take turns until a Goodbye line or 100 lines.
+        -- @return whether the speaker had a line
+        converseWith = function(speaker, listener, topic)
+            if conversing[speaker.id] or conversing[listener.id] or isSpeaking(speaker) or isSpeaking(listener) then
+                return false
+            end
+            return converse(speaker, listener, topic or 'HELLO')
+        end,
+        isConversing = function(npc)
+            return conversing[npc.id] == true
         end,
         --- Declares that a player script shows the menu a command opens
         -- (`ShowRaceMenu`, `GetPlayerName`, `ShowSPECIALMenu`, `SetTagSkills`,
