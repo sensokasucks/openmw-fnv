@@ -235,6 +235,10 @@ return {
         end,
     },
     eventHandlers = {
+        -- from scripts/omw/furniture_player.lua: the view the player should be in once the dialogue ends
+        FNVFurnitureView = function(data)
+            dialogueCamera.setPreviousMode(data.mode)
+        end,
         FNVDialogueShow = show,
         FNVDialogueClose = function()
             close()

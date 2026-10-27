@@ -104,6 +104,12 @@ local function apply()
     camera.setExtraPitch(state.pitch - self.rotation:getPitch())
 end
 
+-- The view to go back to after the dialogue. Furniture changes it while a line is spoken (the opening:
+-- the player gets up from Doc Mitchell's bed in the middle of his lines), so the furniture script tells us.
+function M.setPreviousMode(mode)
+    if state then state.previousMode = mode end
+end
+
 function M.start(speaker)
     if state then
         state.speaker = speaker

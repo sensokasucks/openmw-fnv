@@ -548,6 +548,9 @@ end
 
 local function enable()
     ui._setFalloutHud(true)
+    -- Fallout has no vanity camera: Morrowind's would swing out to a view of the player's body after a while
+    -- without input, which is what the player's FO3/FNV body is drawn for.
+    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, false)
 end
 
 return {
