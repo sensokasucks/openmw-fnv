@@ -27,10 +27,15 @@
 --     side, unless FollowerSwitchAggressive is 0 (passive) and nobody attacks
 --     them. Targets are picked by the original's score.
 --   * At most 15 actors that only heard the player join a fight against it.
---   * Attackers run to the target along the navmesh (straight when there is
---     no route) and use their unarmed or creature attacks within reach. NPCs
---     with a gun draw it, stop within its range and shoot (aim error from
---     their weapon skill), reloading when the clip runs dry.
+--   * What an attacker does next comes from the original's combat planner
+--     (scripts/omw/fnvcombat/planner.lua): every second it tries the goals in
+--     order (flee, find a lost target, kill the target, ...) and runs the first
+--     step of the cheapest plan: draw or switch to its best weapon for the
+--     distance, run to the target along the navmesh (straight when there is no
+--     route), swing a melee weapon, fists or creature attacks within reach,
+--     shoot from within gun range with a line of fire (aim error from the weapon
+--     skill, reloading when the clip runs dry), or search where the target was
+--     last noticed, giving up after fCombatTargetLostRemoveTime.
 -- While an NPC fights, its AI package (scripts/omw/fnvai) waits.
 --
 -- From the console (luag): I.FNVCombat.kill(obj), I.FNVCombat.health(obj),
@@ -110,13 +115,14 @@ local function startCombat(actor, target)
         confidenceMod = gmst('fCombatConfidenceModifierMin', -0.25) + math.random()
             * (gmst('fCombatConfidenceModifierMax', 1.0) - gmst('fCombatConfidenceModifierMin', -0.25)),
         nextThreatCheck = simTime + math.random() * gmst('fCombatThreatRatioUpdateTime', 7.5) }
+    -- what it carries and holds, for the combat planner (weapon types: 1 ranged, 2 melee, 6 hand to hand, 7 none drawn)
+    s.equippedType, s.drawnType = 6, 6
     if types.ESM4NPC.objectIsInstance(actor) then
+        s.weapons = combat.getActorWeapons(actor)
         local weapon = combat.getActorWeapon(actor)
-        if weapon and weapon.isGun then
-            s.gun = weapon
-            s.clip = math.max(1, weapon.clipSize)
-            s.reloadUntil = 0
-            combat.drawWeapon(actor, true)
+        if weapon then
+            s.inHand = weapon
+            s.equippedType, s.drawnType = weapon.type, 7
         end
     end
     fighting[actor.id] = s
@@ -133,7 +139,7 @@ local function stopCombat(actor, why)
         scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
             ai.stop(actor)
-            if s.gun then combat.drawWeapon(actor, false) end
+            if s.drawnType ~= 7 and s.inHand ~= nil then combat.drawWeapon(actor, false) end
         end
     end
 end
@@ -394,6 +400,305 @@ wantsToFlee = function(s)
     return t > threatRatio(s)
 end
 
+-- ---------------------------------------------------------------- the combat planner (scripts/omw/fnvcombat/planner)
+--
+-- Every second (and whenever a step fails) the actor plans again from what it knows: the first of the original's
+-- goals that yields a plan wins (FLEE, FIND_TARGET when it lost the target, KILL_TARGET, ...), and the plan's
+-- first step runs as a procedure here. Cover, flanking, grenades and combat items are not planned yet.
+
+local P = require('scripts.omw.fnvcombat.planner')
+local PW = P.W
+local REPLAN_EVERY = 1.0
+local LOST_AFTER = 3 -- seconds without noticing the target before it counts as lost
+local STEP_TIMEOUT = 15
+
+local function lostRemoveTime()
+    return gmst('fCombatTargetLostRemoveTime', 30)
+end
+
+-- How good a weapon is: damage over time, more for guns at range and for melee up close (inferred: the
+-- original's weapon suitability is not decoded yet).
+local function weaponScore(weapon, weaponType, distance)
+    local damage = math.max(weapon.damage or 1, 1)
+    local rate = weapon.shotsPerSecond and weapon.shotsPerSecond > 0 and weapon.shotsPerSecond or 1
+    if weaponType == PW.RANGED then
+        local range = gunRange(weapon)
+        return damage * rate * (distance > range * 1.5 and 0.7 or 1)
+    end
+    return damage * (distance > STRAIGHT_DISTANCE and 0.5 or 1)
+end
+
+-- The NPC's best weapon of each type it carries (creatures fight hand to hand with their own attacks)
+local function bestWeapons(s, distance)
+    local best = {}
+    for _, weapon in ipairs(s.weapons or {}) do
+        local t = weapon.type
+        -- explosives, grenades and mines wait for their procedures
+        if t == PW.RANGED or t == PW.MELEE or t == PW.HAND_TO_HAND then
+            local score = weaponScore(weapon, t, distance)
+            if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
+        end
+    end
+    if next(best) == nil then best[PW.HAND_TO_HAND] = { score = 1 } end
+    return best
+end
+
+local function meleeReach(s)
+    local weapon = s.inHand
+    if weapon and (weapon.type == PW.MELEE or weapon.type == PW.HAND_TO_HAND) and (weapon.reach or 0) > 0 then
+        return math.min(math.max(REACH * weapon.reach, 100), 250)
+    end
+    return REACH
+end
+
+-- How close counts as at the target: gunmen without a line of fire come right up (the navmesh may end short)
+local function closeEnough(s, los)
+    return (s.gun ~= nil and not los) and REACH or 300
+end
+
+local function targetLost(s)
+    return simTime - (s.lastSeenAt or s.since) > LOST_AFTER
+end
+
+local function inGunRange(s, distance)
+    return s.gun ~= nil and distance <= gunRange(s.gun)
+end
+
+local function worldState(s, distance, los)
+    local P_F, L = P.F, P.L
+    local best = s.best
+    local function at(kind)
+        if kind == L.TARGET then return distance <= closeEnough(s, los) or (los and inGunRange(s, distance)) end
+        if kind == L.MELEE then return distance <= meleeReach(s) end
+        if kind == L.FLEE then return distance >= FLEE_DISTANCE end
+        if kind == L.LOS then return los and (s.gun == nil or inGunRange(s, distance)) end
+        if kind == L.INVESTIGATE then
+            return s.searchPos ~= nil and (s.actor.position - s.searchPos):length() <= 128
+        end
+        return kind == L.DESTINATION or kind == L.GUARD or kind == L.CLUSTER or kind == L.COMBAT_AREA
+    end
+    return function(fact, param)
+        if fact == P_F.TARGET_DEAD then return isAlive(s.target) and 0 or 1 end
+        if fact == P_F.AT_LOCATION then return at(param) and 1 or 0 end
+        if fact == P_F.NOT_AT_LOCATION then return at(param) and 0 or 1 end
+        if fact == P_F.TARGET_LOST then return targetLost(s) and 1 or 0 end
+        if fact == P_F.TARGET_DETECTED then return targetLost(s) and 0 or 1 end
+        if fact == P_F.TARGET_360_LOS then return los and (s.drawnType ~= PW.RANGED or inGunRange(s, distance)) and 1 or 0 end
+        if fact == P_F.WEAPON_DRAWN then return s.drawnType end
+        if fact == P_F.WEAPON_TYPE_EQUIPPED then return s.equippedType end
+        if fact == P_F.HAS_WEAPON_TYPE then return best[param] ~= nil and 1 or 0 end
+        if fact == P_F.WANTS_TO_FLEE then return s.fleeing and 1 or 0 end
+        if fact == P_F.EXECUTION_FLAGS then
+            return (param == P.X.SEARCH or param == P.X.MOVE or param == P.X.MELEE) and 1 or 0
+        end
+        return 0
+    end
+end
+
+-- Base cost, plus for attacks the original's weapon suitability term: the best weapon's score less this one's
+-- (FalloutNV.exe 0x97ac30). A teammate told to fight in melee (CombatStyleMelee 1) never shoots.
+local function planCost(s)
+    local topScore = 0
+    for _, b in pairs(s.best) do topScore = math.max(topScore, b.score) end
+    local meleeOnly = isTeammate(s.actor) and refVar(s.actor, 'combatstylemelee') == 1
+    return function(action, param)
+        local weaponType = action.attack
+        if action.weapon then weaponType = param end
+        if weaponType == nil then return action.cost end
+        local b = s.best[weaponType]
+        if b == nil or b.score <= 0 then return P.INF end
+        if meleeOnly and (weaponType == PW.RANGED or weaponType == PW.EXPLOSIVE or weaponType == PW.GRENADE) then
+            return P.INF
+        end
+        return action.cost + (topScore - b.score)
+    end
+end
+
+local function stepLabel(step)
+    return step.name .. (step.param ~= nil and ('(' .. step.param .. ')') or '')
+end
+
+local function replan(s, distance, los)
+    s.best = bestWeapons(s, distance)
+    local actorType = s.equippedType
+    if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
+    local weaponTypes = {}
+    for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
+    local ctx = { actorType = actorType, locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE },
+        weaponTypes = weaponTypes, cost = planCost(s) }
+    local goal, plan = P.plan(worldState(s, distance, los), ctx)
+    s.replanAt = simTime + REPLAN_EVERY
+    s.stepFailed = false
+    local current = s.plan and s.plan[s.step]
+    if plan == nil then
+        s.plan, s.step = nil, nil
+        return
+    end
+    local labels = {}
+    for _, step in ipairs(plan) do labels[#labels + 1] = stepLabel(step) end
+    local text = goal.name .. ': ' .. table.concat(labels, ' > ')
+    if text ~= s.planText then
+        print(('[combat] %s (%s) plans %s'):format(s.actor.recordId, tostring(s.actor.id), text))
+        s.planText = text
+    end
+    -- the same first step carries on where it was
+    if current == nil or current.name ~= plan[1].name or current.param ~= plan[1].param then
+        s.stepStarted = simTime
+        s.stepState = {}
+    end
+    s.plan, s.step = plan, 1
+end
+
+-- ---------------------------------------------------------------- procedures: 'running', 'done' or 'failed'
+
+local function holdStill(actor)
+    if ai.status(actor) == 'moving' then ai.stop(actor) end
+end
+
+local function equipType(s, weaponType)
+    local b = s.best[weaponType]
+    local actor = s.actor
+    if b and b.weapon then
+        if s.inHand == nil or s.inHand.id ~= b.weapon.id then
+            combat.equipWeapon(actor, b.weapon.id)
+            s.inHand = b.weapon
+        end
+        combat.drawWeapon(actor, true)
+    elseif types.ESM4NPC.objectIsInstance(actor) then
+        combat.drawWeapon(actor, false) -- fists
+        s.inHand = nil
+    end
+    s.equippedType, s.drawnType = weaponType, weaponType
+    if weaponType == PW.RANGED and s.inHand and s.inHand.isGun then
+        if s.gun == nil or s.gun.id ~= s.inHand.id then
+            s.gun = s.inHand
+            s.clip = math.max(1, s.gun.clipSize)
+        end
+    else
+        s.gun = nil
+    end
+end
+
+local function moveTowards(s, kind, distance, los)
+    local actor, target = s.actor, s.target
+    local L = P.L
+    local state = s.stepState
+    if kind == L.FLEE then
+        if distance >= FLEE_DISTANCE then
+            holdStill(actor)
+            return 'done'
+        end
+        if simTime >= (state.nextMove or 0) then
+            state.nextMove = simTime + 1.0
+            local offset = target.position - actor.position
+            local away = util.vector3(-offset.x, -offset.y, 0):normalize() * FLEE_DISTANCE
+            ai.moveTo(actor, actor.position + away, { run = true, direct = true, tolerance = 64 })
+        end
+        return 'running'
+    end
+    if kind == L.INVESTIGATE then
+        if s.searchPos == nil then return 'failed' end
+        if (actor.position - s.searchPos):length() <= 128 then
+            holdStill(actor)
+            return 'done'
+        end
+        if state.sentTo ~= s.searchPos or ai.status(actor) == 'idle' then
+            state.sentTo = s.searchPos
+            ai.moveTo(actor, s.searchPos, { run = true, direct = true, tolerance = 96 })
+        elseif ai.status(actor) == 'nopath' then
+            return 'failed'
+        end
+        return 'running'
+    end
+    -- the target, a spot in melee reach or one with a line of fire
+    local reach
+    if kind == L.MELEE then
+        reach = meleeReach(s)
+        if distance <= reach then return 'done' end
+    else
+        reach = closeEnough(s, los)
+        if los and (s.gun == nil or inGunRange(s, distance)) or kind == L.TARGET and distance <= reach then
+            s.straight = false
+            return 'done'
+        end
+        if not los then reach = REACH end
+    end
+    approach(s, actor, target, reach, s.gun ~= nil and not los)
+    return 'running'
+end
+
+local function attackRanged(s, distance, los)
+    local actor, target = s.actor, s.target
+    if s.gun == nil or not los or not inGunRange(s, distance) then return 'failed' end
+    s.straight = false
+    holdStill(actor)
+    ai.face(actor, yawTo(actor.position, target.position))
+    if simTime >= s.nextAttack then shootAt(s, actor, target) end
+    return 'running'
+end
+
+local function attackMelee(s, distance)
+    local actor, target = s.actor, s.target
+    local reach = meleeReach(s)
+    if distance > reach * 1.3 then return 'failed' end
+    s.straight = false
+    holdStill(actor)
+    ai.face(actor, yawTo(actor.position, target.position))
+    if simTime >= s.nextAttack then
+        s.nextAttack = simTime + 1.2 + math.random() * 0.8
+        combat.attack(actor, target, reach)
+    end
+    return 'running'
+end
+
+local procedures = {
+    MOVE = function(s, step, distance, los) return moveTowards(s, step.param, distance, los) end,
+    MOVE_AND_SWITCH_TO_MELEE = function(s, step, distance, los)
+        if s.equippedType ~= PW.MELEE or s.drawnType ~= PW.MELEE then equipType(s, PW.MELEE) end
+        return moveTowards(s, step.param, distance, los)
+    end,
+    MOVE_AND_ATTACK_RANGED = function(s, step, distance, los)
+        if los and s.gun and simTime >= s.nextAttack and inGunRange(s, distance) then
+            shootAt(s, s.actor, s.target)
+        end
+        return moveTowards(s, step.param, distance, los)
+    end,
+    DRAW_WEAPON = function(s, step)
+        local state = s.stepState
+        if state.readyAt == nil then
+            equipType(s, step.param)
+            state.readyAt = simTime + 0.6
+        end
+        return simTime >= state.readyAt and 'done' or 'running'
+    end,
+    ATTACK_RANGED = function(s, step, distance, los) return attackRanged(s, distance, los) end,
+    ATTACK_MELEE = function(s, step, distance) return attackMelee(s, distance) end,
+    ATTACK_HAND_TO_HAND = function(s, step, distance) return attackMelee(s, distance) end,
+    APPROACH_TARGET = function() return 'done' end,
+    ACQUIRE_LINE_OF_SIGHT = function() return 'done' end,
+    IGNORE_BLOCKED_TARGET = function() return 'done' end,
+    -- looks around where the target was last noticed, then tries another spot near it
+    INVESTIGATE = function(s)
+        local state = s.stepState
+        holdStill(s.actor)
+        state.until_ = state.until_ or simTime + 3
+        if simTime < state.until_ then return 'running' end
+        local from = s.lastSeenPos or s.actor.position
+        local angle = math.random() * 2 * math.pi
+        local radius = 256 + math.random() * 512
+        s.searchPos = from + util.vector3(math.cos(angle) * radius, math.sin(angle) * radius, 0)
+        return 'done'
+    end,
+    -- runs off until far enough, then stays away while it still wants to flee
+    FLEE = function(s, step, distance)
+        if distance < FLEE_DISTANCE * 0.75 then return 'failed' end
+        holdStill(s.actor)
+        return 'running'
+    end,
+}
+procedures.SWITCH_WEAPON = procedures.DRAW_WEAPON
+procedures.SEARCH = procedures.INVESTIGATE
+
 local function fight(s)
     selectTarget(s, world.players[1])
     local actor, target = s.actor, s.target
@@ -411,42 +716,51 @@ local function fight(s)
     if simTime >= s.nextThreatCheck then
         s.nextThreatCheck = simTime + gmst('fCombatThreatRatioUpdateTime', 7.5)
         local wants = wantsToFlee(s)
-        if wants and not s.fleeing then s.nextMove = 0 end
-        if not wants and s.fleeing then ai.stop(actor) end
+        if wants ~= s.fleeing then
+            ai.stop(actor)
+            s.replanAt = 0
+        end
         s.fleeing = wants
     end
-    if s.fleeing then
-        if distance >= FLEE_DISTANCE then
-            ai.stop(actor)
-            return
-        end
-        if simTime >= s.nextMove then
-            s.nextMove = simTime + 1.0
-            local away = util.vector3(-offset.x, -offset.y, 0):normalize() * FLEE_DISTANCE
-            ai.moveTo(actor, actor.position + away, { run = true, direct = true, tolerance = 64 })
-        end
+
+    -- where the target was last noticed
+    local los = combat.hasLineOfFire(actor, target)
+    local noticed
+    if types.Player.objectIsInstance(target) then
+        noticed = noticesPlayer(actor)
+    else
+        noticed = los or distance <= REACH * 2
+    end
+    if noticed then
+        if targetLost(s) then s.replanAt = 0 end
+        s.lastSeenAt, s.lastSeenPos = simTime, target.position
+        s.searchPos = target.position
+    elseif simTime - (s.lastSeenAt or s.since) > lostRemoveTime() then
+        stopCombat(actor, 'target lost')
         return
     end
 
     if combat.isActing(actor) then return end
-    local reach = s.gun and gunRange(s.gun) or REACH
-    -- Gunmen move up until they have a clear shot
-    local blocked = s.gun and not combat.hasLineOfFire(actor, target)
-    if distance > reach or (blocked and distance > REACH) then
-        approach(s, actor, target, blocked and REACH or reach, blocked)
+    if s.plan == nil or s.stepFailed or simTime >= (s.replanAt or 0) then
+        replan(s, distance, los)
+    end
+    local step = s.plan and s.plan[s.step]
+    if step == nil then
+        holdStill(actor)
         return
     end
-    s.straight = false
-    if ai.status(actor) == 'moving' then
-        ai.stop(actor)
+    local procedure = procedures[step.name]
+    local result = procedure and procedure(s, step, distance, los) or 'failed'
+    if result == 'running' and simTime - (s.stepStarted or simTime) > STEP_TIMEOUT
+        and step.name:sub(1, 6) ~= 'ATTACK' and step.name ~= 'FLEE' then
+        result = 'failed'
     end
-    ai.face(actor, yawTo(actor.position, target.position))
-    if simTime < s.nextAttack then return end
-    if s.gun then
-        shootAt(s, actor, target)
-    else
-        s.nextAttack = simTime + 1.2 + math.random() * 0.8
-        combat.attack(actor, target, REACH)
+    if result == 'done' then
+        s.step = s.step + 1
+        s.stepStarted, s.stepState = simTime, {}
+        if s.plan[s.step] == nil then s.plan = nil end
+    elseif result == 'failed' then
+        s.stepFailed = true
     end
 end
 
@@ -480,6 +794,11 @@ return {
         getTarget = function(actor)
             local s = fighting[actor.id]
             return s and s.target
+        end,
+        --- The actor's combat plan as text ("KILL_TARGET: MOVE(0) > APPROACH_TARGET > ATTACK_RANGED"), nil if none.
+        getPlan = function(actor)
+            local s = fighting[actor.id]
+            return s and s.planText
         end,
         startCombat = startCombat,
         stopCombat = stopCombat,

@@ -126,6 +126,7 @@ namespace MWMechanics::ESM4Combat
             ESM::RefNum mTarget;
             float mTime; // until the blow lands
             float mReach;
+            const ESM4::Weapon* mWeapon = nullptr; // melee weapon swung; unarmed when null
         };
         std::vector<PendingHit> sPendingHits;
 
@@ -488,6 +489,39 @@ namespace MWMechanics::ESM4Combat
         return weapon.mHasFO3Data && weapon.mFO3Data.animType >= 3 && weapon.mFO3Data.animType <= 9;
     }
 
+    int getWeaponType(const ESM4::Weapon& weapon)
+    {
+        // DNAM anim types: 0 hand to hand, 1-2 melee, 3-8 guns, 9 launchers, 10/13 grenades, 11/12 mines
+        const std::uint32_t anim = weapon.mHasFO3Data ? weapon.mFO3Data.animType : 3;
+        if (anim == 0)
+            return 6;
+        if (anim <= 2)
+            return 2;
+        if (anim <= 8)
+            return 1;
+        if (anim == 9)
+            return 0;
+        if (anim == 10 || anim == 13)
+            return 3;
+        return 4;
+    }
+
+    const std::vector<const ESM4::Weapon*>& getActorWeapons(const MWWorld::Ptr& actor)
+    {
+        static const std::vector<const ESM4::Weapon*> none;
+        if (actor.getType() != ESM::REC_NPC_4)
+            return none;
+        return MWClass::ESM4Npc::getWeapons(actor);
+    }
+
+    void equipWeapon(const MWWorld::Ptr& actor, const ESM4::Weapon* weapon)
+    {
+        if (actor.getType() != ESM::REC_NPC_4 || getActorWeapon(actor) == weapon)
+            return;
+        drawWeapon(actor, false);
+        MWClass::ESM4Npc::setEquippedWeapon(actor, weapon);
+    }
+
     void drawWeapon(const MWWorld::Ptr& actor, bool drawn)
     {
         MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
@@ -717,17 +751,23 @@ namespace MWMechanics::ESM4Combat
     {
         if (isDead(attacker) || ESM4Actors::get().isActing(attacker))
             return false;
+        // NPCs with a melee weapon (or a hand to hand one, like a power fist) in hand swing it
+        const ESM4::Weapon* weapon = getActorWeapon(attacker);
+        if (weapon != nullptr && getWeaponType(*weapon) != 2 && getWeaponType(*weapon) != 6)
+            weapon = nullptr;
+        float length = 0.f;
+        if (weapon != nullptr)
+            length = ESM4Actors::get().playAction(attacker, attackSequence(*weapon));
         // Creatures keep their attacks next to the skeleton
         static constexpr std::string_view attacks[]
             = { "h2hattackleft.kf", "h2hattackright.kf", "h2hattackpower.kf", "h2hattackforwardpower.kf" };
         const std::size_t first = std::uniform_int_distribution<std::size_t>(0, 1)(random());
-        float length = 0.f;
         for (std::size_t i = 0; i < std::size(attacks) && length <= 0.f; ++i)
             length = ESM4Actors::get().playAction(attacker, attacks[(first + i) % std::size(attacks)]);
         if (length <= 0.f)
             length = 1.f; // no sequence: the blow still lands
         sPendingHits.push_back(
-            { attacker.getCellRef().getRefNum(), target.getCellRef().getRefNum(), length * 0.45f, reach });
+            { attacker.getCellRef().getRefNum(), target.getCellRef().getRefNum(), length * 0.45f, reach, weapon });
         return true;
     }
 
@@ -760,7 +800,8 @@ namespace MWMechanics::ESM4Combat
                 = target.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
             if (delta.length() > blow.mReach * 1.5f)
                 continue;
-            const float damage = applyArmor(target, getUnarmedDamage(attacker));
+            const float damage = applyArmor(target,
+                blow.mWeapon != nullptr ? getWeaponDamage(attacker, *blow.mWeapon) : getUnarmedDamage(attacker));
             if (target == getPlayer())
                 hurtPlayer(target, damage);
             else

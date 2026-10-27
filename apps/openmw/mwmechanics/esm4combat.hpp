@@ -1,6 +1,8 @@
 #ifndef GAME_MWMECHANICS_ESM4COMBAT_H
 #define GAME_MWMECHANICS_ESM4COMBAT_H
 
+#include <vector>
+
 #include <osg/Vec3f>
 
 #include "../mwworld/ptr.hpp"
@@ -58,6 +60,14 @@ namespace MWMechanics::ESM4Combat
     // The weapon an FO3/FONV NPC fights with (from its inventory), nullptr for creatures and the unarmed.
     const ESM4::Weapon* getActorWeapon(const MWWorld::Ptr& actor);
     bool isGun(const ESM4::Weapon& weapon);
+
+    // The combat planner's weapon types (FalloutNV.exe): 0 explosive (launchers), 1 ranged, 2 melee, 3 grenade,
+    // 4 mine, 6 hand to hand.
+    int getWeaponType(const ESM4::Weapon& weapon);
+
+    // Every weapon an FO3/FONV NPC carries, and putting one in its hands.
+    const std::vector<const ESM4::Weapon*>& getActorWeapons(const MWWorld::Ptr& actor);
+    void equipWeapon(const MWWorld::Ptr& actor, const ESM4::Weapon* weapon);
 
     // Takes the actor's weapon in hand and aims it (true), or puts it away.
     void drawWeapon(const MWWorld::Ptr& actor, bool drawn);
