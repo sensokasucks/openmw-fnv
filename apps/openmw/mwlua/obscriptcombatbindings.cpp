@@ -83,13 +83,17 @@ namespace MWLua
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
         // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB) }
-        void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon,
-            const Combat::HitResult& hit)
+        // Melee, unarmed and creature blows send it too, with melee = true (weapon nil when unarmed).
+        void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon,
+            const Combat::HitResult& hit, bool melee = false)
         {
             context.mLua->protectedCall([&](LuaUtil::LuaView& view) {
                 sol::table data = view.newTable();
                 data["attacker"] = GObject(attacker);
-                data["weapon"] = formIdText(weapon.mId);
+                if (weapon != nullptr)
+                    data["weapon"] = formIdText(weapon->mId);
+                if (melee)
+                    data["melee"] = true;
                 if (!hit.mTarget.isEmpty())
                     data["target"] = GObject(hit.mTarget);
                 else if (!hit.mObject.isEmpty())
@@ -170,6 +174,11 @@ namespace MWLua
     {
         sol::state_view lua = context.sol();
         sol::table api(lua, sol::create);
+
+        Combat::setBlowListener(
+            [context](const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon, const Combat::HitResult& hit) {
+                sendShot(context, attacker, weapon, hit, true);
+            });
 
         // Weapon record (WEAP) by record id or editor id, nil if there is none.
         api["getWeapon"] = [](std::string_view id, sol::this_state s) -> sol::object {
@@ -382,7 +391,7 @@ namespace MWLua
                     }
 
                     const Combat::HitResult hit = Combat::fire(attackerPtr, *weapon, origin, direction);
-                    sendShot(context, attackerPtr, *weapon, hit);
+                    sendShot(context, attackerPtr, weapon, hit);
                 },
                 "obscriptCombatFireAction");
         };
@@ -452,7 +461,7 @@ namespace MWLua
                 [context, actor = Object(actor), target = Object(target)] {
                     Combat::HitResult hit;
                     if (Combat::shoot(actor.ptr(), target.ptr(), hit))
-                        sendShot(context, actor.ptr(), *Combat::getActorWeapon(actor.ptr()), hit);
+                        sendShot(context, actor.ptr(), Combat::getActorWeapon(actor.ptr()), hit);
                 },
                 "obscriptCombatShootAction");
         };

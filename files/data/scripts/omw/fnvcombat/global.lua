@@ -729,7 +729,9 @@ local function fight(s)
     if types.Player.objectIsInstance(target) then
         noticed = noticesPlayer(actor)
     else
-        noticed = los or distance <= REACH * 2
+        -- the same detection score as for the player, in combat and alert
+        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        noticed = los or distance <= REACH * 2 or (score ~= nil and score > gmst('fSneakNoticedMin', -20))
     end
     if noticed then
         if targetLost(s) then s.replanAt = 0 end
@@ -825,7 +827,7 @@ return {
                 ai.setPlayerBodyWeapon(e.weapon, e.drawn == true)
             end
         end,
-        -- From the engine once a shot is resolved
+        -- From the engine once a shot is resolved, or a melee, unarmed or creature blow lands (melee = true)
         FNVCombat_Shot = function(e)
             if e.attacker == nil or not e.attacker:isValid() then return end
             local target = e.target
@@ -907,6 +909,11 @@ return {
             end
             for id, actor in pairs(tracked) do
                 if not actor:isValid() or not ai.isInScene(actor) or not isAlive(actor) then
+                    if fighting[id] ~= nil then
+                        print(('[combat] %s (%s) leaves combat (%s)'):format(actor.recordId, tostring(id),
+                            not actor:isValid() and 'gone' or (not ai.isInScene(actor) and 'out of the scene'
+                                or 'dead or cannot be hit')))
+                    end
                     tracked[id] = nil
                     fighting[id] = nil
                 elseif fighting[id] == nil and playerAlive and wantsFight(actor, player) then
