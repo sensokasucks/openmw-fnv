@@ -25,6 +25,7 @@ local camera = require('openmw.camera')
 local core = require('openmw.core')
 local nearby = require('openmw.nearby')
 local self = require('openmw.self')
+local storage = require('openmw.storage')
 local types = require('openmw.types')
 local ui = require('openmw.ui')
 local util = require('openmw.util')
@@ -255,7 +256,17 @@ local function updateBars()
 
     local sneakText = nil
     if self.controls.sneak then
-        sneakText = ui._isSneakHidden() and gmst('sSneakHidden', '[HIDDEN]') or gmst('sSneakDetected', '[DETECTED]')
+        -- the detection of the player by FNV actors (scripts/omw/fnvcombat)
+        local state = storage.globalSection('FNVDetection'):get('state')
+        if state == 'danger' then
+            sneakText = gmst('sSneakDanger', '[DANGER]')
+        elseif state == 'caution' then
+            sneakText = gmst('sSneakCaution', '[CAUTION]')
+        elseif state == 'hidden' then
+            sneakText = gmst('sSneakHidden', '[HIDDEN]')
+        else
+            sneakText = ui._isSneakHidden() and gmst('sSneakHidden', '[HIDDEN]') or gmst('sSneakDetected', '[DETECTED]')
+        end
     end
     setPart('sneak', visible and sneakText or nil, function()
         return anchored(v2(0.5, 0.5), v2(0.5, 1), v2(0, -28), {

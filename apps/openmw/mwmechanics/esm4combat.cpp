@@ -39,6 +39,7 @@
 #include "creaturestats.hpp"
 #include "esm4actors.hpp"
 #include "esm4gore.hpp"
+#include "movement.hpp"
 
 namespace MWMechanics::ESM4Combat
 {
@@ -526,6 +527,134 @@ namespace MWMechanics::ESM4Combat
             muzzle(attacker), aimPoint(target), { attacker, target }, {},
             MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
         return !wall.mHit;
+    }
+
+    namespace
+    {
+        // Light on the target, 0 to 100 [inferred: FNV reads the light level of the actor's position; this uses
+        // the sun outdoors and the cell lighting indoors]
+        float lightLevel(const MWWorld::Ptr& target)
+        {
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            const MWWorld::CellStore* cell = target.getCell();
+            if (cell == nullptr || cell->getCell()->isExterior() || cell->getCell()->isQuasiExterior())
+                return 15.f + 65.f * std::clamp(world.getSunPercentage() * world.getSunVisibility(), 0.f, 1.f);
+            auto luminance = [](std::uint32_t rgba) {
+                const float r = static_cast<float>(rgba & 0xff);
+                const float g = static_cast<float>((rgba >> 8) & 0xff);
+                const float b = static_cast<float>((rgba >> 16) & 0xff);
+                return (0.299f * r + 0.587f * g + 0.114f * b) / 255.f;
+            };
+            const auto& mood = cell->getCell()->getMood();
+            return std::clamp(100.f * (luminance(mood.mAmbiantColor) + 0.5f * luminance(mood.mDirectionalColor)), 0.f,
+                100.f);
+        }
+
+        bool isMoving(const MWWorld::Ptr& actor)
+        {
+            if (actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4)
+                return ESM4Actors::get().isMoving(actor);
+            const osg::Vec3f& movement = actor.getClass().getMovementSettings(actor).asVec3();
+            return movement.x() != 0.f || movement.y() != 0.f;
+        }
+
+        bool isRunning(const MWWorld::Ptr& actor)
+        {
+            if (actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4)
+                return ESM4Actors::get().isRunning(actor);
+            return actor.getClass().getCreatureStats(actor).getStance(CreatureStats::Stance_Run);
+        }
+
+        bool isSneaking(const MWWorld::Ptr& actor)
+        {
+            if (actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4)
+                return false;
+            return actor.getClass().getCreatureStats(actor).getStance(CreatureStats::Stance_Sneak);
+        }
+    }
+
+    Detection detect(const MWWorld::Ptr& observer, const MWWorld::Ptr& target, const DetectionContext& context)
+    {
+        using MWWorld::ESM4GameSettings::getFloat;
+        using MWWorld::ESM4GameSettings::getInt;
+        namespace Stats = MWClass::ESM4Stats;
+        Detection result;
+        if (observer.getCell() == nullptr || target.getCell() == nullptr)
+            return result;
+        const MWWorld::Cell& observerCell = *observer.getCell()->getCell();
+        const MWWorld::Cell& targetCell = *target.getCell()->getCell();
+        if (observerCell.isExterior() != targetCell.isExterior()
+            || (!observerCell.isExterior() && observer.getCell() != target.getCell()))
+            return result;
+
+        const osg::Vec3f from = observer.getRefData().getPosition().asVec3();
+        const osg::Vec3f to = target.getRefData().getPosition().asVec3();
+        const float distance = (to - from).length();
+        float maxDistance = getFloat("fSneakMaxDistance", 2500.f);
+        if (observerCell.isExterior())
+            maxDistance *= getFloat("fSneakExteriorDistanceMult", 2.f);
+        if (maxDistance <= 0.f || distance >= maxDistance)
+            return result;
+        const float distanceFactor = std::pow(std::max((maxDistance - distance) / maxDistance, 0.f),
+            getFloat("fSneakDistanceAttenuationExponent", 2.f));
+
+        // Line of sight: inside the view cone (half of fDetectionViewCone either side) with nothing in between
+        osg::Vec3f toTarget = to - from;
+        toTarget.z() = 0.f;
+        const float facing = observer.getRefData().getPosition().rot[2];
+        const osg::Vec3f forward(std::sin(facing), std::cos(facing), 0.f);
+        const float halfCone = osg::DegreesToRadians(getFloat("fDetectionViewCone", 190.f) * 0.5f);
+        const bool inCone = toTarget.length2() < 1.f
+            || (toTarget * forward) / toTarget.length() >= std::cos(std::min(halfCone, static_cast<float>(osg::PI)));
+        result.mLineOfSight = !context.mSleeping && inCone && hasLineOfFire(observer, target);
+
+        const bool moving = isMoving(target);
+        const bool running = moving && isRunning(target);
+        const bool sneaking = isSneaking(target);
+
+        // Sound: footsteps, louder running, carried further with a line of sight
+        const float soundFactor
+            = result.mLineOfSight ? distanceFactor : distanceFactor * getFloat("fSneakSoundLosMult", 0.1f);
+        float footsteps = 0.f;
+        if (moving)
+            footsteps = getFloat("fSneakBootWeightBase", 12.f) * (running ? getFloat("fSneakRunningMult", 1.5f) : 1.f);
+        const float sound = std::max(0.f, footsteps * soundFactor);
+
+        // Sight: the light on the target, more so when it moves
+        float sight = 0.f;
+        if (result.mLineOfSight)
+            sight = std::max(0.f,
+                distanceFactor
+                    * (1.f + (running ? getFloat("fSneakLightRunMult", 0.2f) : 0.f)
+                        + (moving ? getFloat("fSneakLightMoveMult", 0.01f) : 0.f))
+                    * getFloat("fSneakLightMult", 1.4f)
+                    * (lightLevel(target) + getFloat("fDetectionSneakLightMod", 0.f)));
+
+        // Perception against Sneak
+        const float perception = Stats::getCurrent(observer, Stats::Perception);
+        const float perceptionMin = getFloat("fSneakPerceptionSkillMin", 10.f);
+        const float perceptionMax = getFloat("fSneakPerceptionSkillMax", 90.f);
+        const float awareness = 1.f + (context.mAlert ? getFloat("fSneakAlertMod", 0.2f) : 0.f)
+            + (context.mSleeping ? getFloat("fSneakSleepBonus", -0.2f) : 0.f)
+            + (context.mInCombat ? getFloat("fSneakCombatMod", -0.4f) : 0.f);
+        float skill = awareness * (perceptionMin + perception / 10.f * (perceptionMax - perceptionMin)) * distanceFactor;
+        if (sneaking)
+        {
+            const int level = Stats::getLevel(target);
+            const float startBonus = static_cast<float>(std::max(
+                getInt("iSneakStartBonus", 50) - level * getInt("iSneakStartBonusLevelPenatly", 10), 0));
+            skill -= Stats::getCurrent(target, Stats::Sneak) + startBonus;
+        }
+        skill *= getFloat("fSneakSkillMult", 0.5f);
+
+        float score = getFloat("fSneakBaseValue", -35.f) + sound + sight + skill;
+        // between 0 and 1 counts as 1, the rest is truncated
+        if (score > 0.f && score < 1.f)
+            score = 1.f;
+        else
+            score = std::trunc(score);
+        result.mScore = score;
+        return result;
     }
 
     bool shoot(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, HitResult& result)

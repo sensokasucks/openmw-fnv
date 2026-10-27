@@ -9,7 +9,11 @@
 --
 -- Combat AI, following the AI data of the actor's record and its factions'
 -- relations with the player's (FACT combat reactions, either way round):
---   * Aggressive actors attack the player on sight when their factions are
+--   * Actors notice the player by the original detection score (core.obscript.combat.detect: distance, line of
+--     sight, light, footsteps, Perception against Sneak), re-checked every fDetectionTimerSetting seconds; a
+--     score above fSneakNoticedMin counts. The HUD shows [HIDDEN], [CAUTION] (noticed by someone) or [DANGER]
+--     (someone fights the player) while sneaking.
+--   * Aggressive actors attack the player once they notice them when their factions are
 --     enemies of the player's, Very Aggressive ones also when neutral,
 --     Frenzied ones always. Creatures with an aggro radius attack inside it
 --     unless friendly. Allies and friends only fight when attacked. Anyone
@@ -41,7 +45,6 @@ local stats = core.obscript.stats
 local ai = core.obscript.ai
 
 local TICK_EVERY = 0.2 -- seconds between AI updates
-local NOTICE_DISTANCE = 1500 -- how close aggressive actors notice the player
 local GIVE_UP_DISTANCE = 6000 -- combat ends when the target gets this far
 local ASSIST_DISTANCE = 1500
 local REACH = 150 -- unarmed and creature attacks
@@ -80,6 +83,7 @@ end
 local tracked = {} -- id -> actor in an active cell
 local fighting = {} -- id -> { actor, target, fleeing, nextAttack, nextMove }
 local simTime, nextTick = 0, 0
+local nextDetection = 0
 
 local function startCombat(actor, target)
     if not isAlive(actor) or not isAlive(target) or actor == target then return end
@@ -129,9 +133,25 @@ local function healthFraction(actor)
     return stats.get(actor, 'Health') / full
 end
 
+local function gmst(name, default)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    return type(value) == 'number' and value or default
+end
+
+-- Detection of the player: actor id -> { score, sight }
+local detection = {}
+local detectionSection = storage.globalSection('FNVDetection')
+detectionSection:setLifeTime(storage.LIFE_TIME.GameSession)
+local actorAI = storage.globalSection('ESM4ActorAI')
+
+local function noticesPlayer(actor)
+    local d = detection[actor.id]
+    return d ~= nil and d.score > gmst('fSneakNoticedMin', -20)
+end
+
 local function wantsFight(actor, player)
     local distance = (player.position - actor.position):length()
-    if distance > NOTICE_DISTANCE then return false end
+    if not noticesPlayer(actor) then return false end
     local aggression = stats.get(actor, 'Aggression')
     if aggression >= 3 then return true end
     local reaction = combat.getReaction(actor)
@@ -336,6 +356,29 @@ return {
             nextTick = simTime + TICK_EVERY
             local player = world.players[1]
             local playerAlive = player ~= nil and isAlive(player)
+            if simTime >= nextDetection and playerAlive and combat.detect then
+                -- staggered like the original's 0.3 s timer
+                nextDetection = simTime + gmst('fDetectionTimerSetting', 0.3)
+                local noticed, danger = false, false
+                for id, actor in pairs(tracked) do
+                    if actor:isValid() and isAlive(actor) then
+                        local aiState = actorAI:get(tostring(id))
+                        local s = fighting[id]
+                        local score, sight = combat.detect(actor, player, {
+                            sleeping = aiState ~= nil and (aiState.sleeping or 0) >= 2,
+                            inCombat = s ~= nil,
+                            alert = s ~= nil and s.gun ~= nil,
+                        })
+                        detection[id] = { score = score, sight = sight }
+                        if score > gmst('fSneakNoticedMin', -20) then noticed = true end
+                        if s ~= nil and s.target == player and not s.fleeing then danger = true end
+                    else
+                        detection[id] = nil
+                    end
+                end
+                local state = danger and 'danger' or (noticed and 'caution' or 'hidden')
+                if detectionSection:get('state') ~= state then detectionSection:set('state', state) end
+            end
             for id, actor in pairs(tracked) do
                 if not actor:isValid() or not ai.isInScene(actor) or not isAlive(actor) then
                     tracked[id] = nil

@@ -69,6 +69,25 @@ namespace MWMechanics::ESM4Combat
     // Whether nothing solid stands between the attacker's eyes and the target's upper body.
     bool hasLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
 
+    // How well the observer detects the target (CalcDetectionScore, FalloutNV.exe 0x642ed0): sound and sight fall
+    // off with distance (fSneakMaxDistance, doubled outdoors), sight needs a line of sight inside the observer's
+    // view cone (fDetectionViewCone) and scales with the light, and the observer's Perception counts against the
+    // target's Sneak skill while the target sneaks. Above fSneakNoticedMin the target is noticed, above
+    // fSneakSeenMin seen. The light level is approximated: outdoors from the sun, indoors from the cell's ambient
+    // and directional light.
+    struct DetectionContext
+    {
+        bool mSleeping = false; // the observer is asleep
+        bool mInCombat = false; // the observer is fighting
+        bool mAlert = false; // the observer has its weapon out
+    };
+    struct Detection
+    {
+        float mScore = -100.f;
+        bool mLineOfSight = false; // in the view cone with nothing in between
+    };
+    Detection detect(const MWWorld::Ptr& observer, const MWWorld::Ptr& target, const DetectionContext& context);
+
     // Plays the weapon's reload sequence; returns how long it takes (the weapon's reload time if longer).
     float reload(const MWWorld::Ptr& actor);
 

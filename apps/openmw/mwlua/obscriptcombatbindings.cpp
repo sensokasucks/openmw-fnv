@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 #include <sol/state_view.hpp>
 #include <sol/table.hpp>
@@ -282,6 +283,21 @@ namespace MWLua
         };
 
         // Plays the NPC's reload sequence.
+        // detect(observer, target, { sleeping, inCombat, alert }): the detection score (CalcDetectionScore) and
+        // whether the observer has a line of sight to the target.
+        api["detect"] = [](const Object& observer, const Object& target, sol::optional<sol::table> options)
+            -> std::tuple<float, bool> {
+            Combat::DetectionContext context;
+            if (options)
+            {
+                context.mSleeping = options->get_or("sleeping", false);
+                context.mInCombat = options->get_or("inCombat", false);
+                context.mAlert = options->get_or("alert", false);
+            }
+            const Combat::Detection detection = Combat::detect(observer.ptr(), target.ptr(), context);
+            return { detection.mScore, detection.mLineOfSight };
+        };
+
         api["reload"] = [context](const Object& actor) {
             context.mLuaManager->addAction(
                 [actor = Object(actor)] { Combat::reload(actor.ptr()); }, "obscriptCombatReloadAction");
