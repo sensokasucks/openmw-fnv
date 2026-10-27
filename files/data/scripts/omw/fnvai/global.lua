@@ -1166,7 +1166,6 @@ end
 -- point the route loops back to, or, when it does not loop, walks it back the other way. A repeatable patrol
 -- starts at the point nearest the actor. It walks, unless the package has Always Run.
 local PATROL_ARRIVE_RADIUS = 32
-local PATROL_FAIL_RETRY = 60 -- seconds before a patrol without a route is tried again
 
 local function referenceIdOf(obj)
     local ok, id = pcall(function() return dlg.getReferenceId(obj) end)
@@ -1240,12 +1239,13 @@ local function patrol(npc, s, dest, pkg)
     local p = s.patrol
     local point = getObject(p.points[p.index])
     if #p.points == 0 then
-        -- no chain of linked references: the original's patrol fails to start (0x92adb0) and the package is
-        -- picked again; it is left out of the picks for a while so the next package in the list can run
+        -- no chain of linked references: the original's patrol fails to start (0x92adb0) and the next package
+        -- in the list runs. The chain can't appear later, so it is left out of the picks while the actor stays in
+        -- the scene (the original fails it again at every pick, which comes to the same)
         log(('%s (%s): %s has no patrol route, picks another package'):format(npc.recordId, tostring(npc.id),
             pkg.editorId))
         s.failedUntil = s.failedUntil or {}
-        s.failedUntil[pkg.id] = simTime + PATROL_FAIL_RETRY
+        s.failedUntil[pkg.id] = math.huge
         s.patrol = nil
         s.nextEvaluation = simTime
         return
