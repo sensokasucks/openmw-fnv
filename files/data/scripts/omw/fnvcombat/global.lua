@@ -400,6 +400,16 @@ wantsToFlee = function(s)
     return t > threatRatio(s)
 end
 
+-- What blocks the attacker's line of fire (diagnostics)
+local function describeLine(actor, target)
+    if combat.getLineOfFire == nil then return '?' end
+    local line = combat.getLineOfFire(actor, target)
+    local function v(p) return p and ('(%.0f %.0f %.0f)'):format(p.x, p.y, p.z) or '-' end
+    return ('ray %s -> %s, actor at %s, target at %s, hit %s at %s'):format(v(line.from), v(line.to),
+        v(actor.position), v(target.position), line.hit and (line.hitObject or 'terrain') or 'nothing',
+        v(line.hitPosition))
+end
+
 -- ---------------------------------------------------------------- the combat planner (scripts/omw/fnvcombat/planner)
 --
 -- Every second (and whenever a step fails) the actor plans again from what it knows: the first of the original's
@@ -629,6 +639,11 @@ end
 
 local function attackRanged(s, distance, los)
     local actor, target = s.actor, s.target
+    if s.gun ~= nil and not los and distance < 1000 and not s.blockedLogged then
+        s.blockedLogged = true
+        print(('[combat] %s (%s) has no line of fire to %s at %.0f: %s'):format(actor.recordId, tostring(actor.id),
+            tostring(target.recordId), distance, describeLine(actor, target)))
+    end
     if s.gun == nil or not los or not inGunRange(s, distance) then return 'failed' end
     s.straight = false
     holdStill(actor)
@@ -717,6 +732,10 @@ local function fight(s)
         s.nextThreatCheck = simTime + gmst('fCombatThreatRatioUpdateTime', 7.5)
         local wants = wantsToFlee(s)
         if wants ~= s.fleeing then
+            print(('[combat] %s (%s) %s (Confidence %s, Aggression %s, threat ratio %.2f, own health %.0f)'):format(
+                actor.recordId, tostring(actor.id), wants and 'wants to flee' or 'stops fleeing',
+                tostring(stats.get(actor, 'Confidence')), tostring(stats.get(actor, 'Aggression')), threatRatio(s),
+                stats.get(actor, 'Health')))
             ai.stop(actor)
             s.replanAt = 0
         end
@@ -735,9 +754,9 @@ local function fight(s)
     end
     if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > LOST_AFTER then
         local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
-        print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, height difference %.0f, moving %s)')
+        print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, moving %s; %s)')
             :format(actor.recordId, tostring(actor.id), tostring(target.recordId), distance, tostring(score),
-                tostring(los), target.position.z - actor.position.z, tostring(ai.status(actor))))
+                tostring(los), tostring(ai.status(actor)), describeLine(actor, target)))
     end
     if noticed then
         if targetLost(s) then s.replanAt = 0 end

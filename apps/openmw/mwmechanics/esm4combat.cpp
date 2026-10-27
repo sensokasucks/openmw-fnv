@@ -566,6 +566,20 @@ namespace MWMechanics::ESM4Combat
         return !wall.mHit;
     }
 
+    LineOfFire getLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target)
+    {
+        LineOfFire result;
+        result.mFrom = muzzle(attacker);
+        result.mTo = aimPoint(target);
+        const MWPhysics::RayCastingResult wall = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(
+            result.mFrom, result.mTo, { attacker, target }, {},
+            MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
+        result.mHit = wall.mHit;
+        result.mHitPosition = wall.mHitPos;
+        result.mHitObject = wall.mHitObject;
+        return result;
+    }
+
     namespace
     {
         // Light on the target, 0 to 100 [inferred: FNV reads the light level of the actor's position; this uses
