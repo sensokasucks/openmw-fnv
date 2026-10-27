@@ -1705,7 +1705,7 @@ startPackage = function(npc, s, pkg)
     s.resumeSeated = nil
     if pkg ~= nil then
         s.dest = resolveLocation(npc, pkg, s)
-        log(('%s picked package %s (%s)'):format(npc.recordId, pkg.editorId, pkg.typeName))
+        log(('%s (%s) picked package %s (%s)'):format(npc.recordId, tostring(npc.id), pkg.editorId, pkg.typeName))
         if hasFlag(pkg.flags, FLAG_ONCE_PER_DAY) then
             ranOn[npc.id] = ranOn[npc.id] or {}
             ranOn[npc.id][pkg.id] = today()
