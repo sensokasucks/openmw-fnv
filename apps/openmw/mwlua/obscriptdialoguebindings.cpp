@@ -678,6 +678,36 @@ namespace MWLua
             return id.isZeroOrUnset() ? std::string() : formIdText(id);
         };
 
+        // What GetIsVoiceType sees, for the log: the NPC's own voice, its race's defaults, and the list's members.
+        api["describeVoiceType"] = [](const Object& object, std::string_view typeOrList) -> std::string {
+            const MWWorld::Ptr& ptr = object.ptr();
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            std::string text = "voice " + formIdText(voiceTypeOf(ptr));
+            if (ptr.getType() == ESM::REC_NPC_4)
+            {
+                const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(ptr);
+                text += ", own " + formIdText(ptr.get<ESM4::Npc>()->mBase->mVoiceType);
+                if (traits != nullptr)
+                    text += ", traits " + traits->mEditorId + " " + formIdText(traits->mVoiceType);
+                if (const ESM4::Race* race = MWClass::ESM4Npc::getRace(ptr))
+                    text += ", race " + race->mEditorId + " " + formIdText(race->mDefaultVoice[0]) + "/"
+                        + formIdText(race->mDefaultVoice[1]);
+                text += MWClass::ESM4Npc::isFemale(ptr) ? ", female" : ", male";
+            }
+            const ESM::FormId listId = parseFormId(typeOrList);
+            if (const ESM4::FormIdList* list = store.get<ESM4::FormIdList>().search(ESM::RefId(listId)))
+            {
+                text += "; list " + list->mEditorId + " (" + std::to_string(list->mObjects.size()) + "):";
+                for (std::size_t i = 0; i < list->mObjects.size() && i < 40; ++i)
+                    text += " " + formIdText(list->mObjects[i]);
+            }
+            else if (const ESM4::VoiceType* voice = store.get<ESM4::VoiceType>().search(ESM::RefId(listId)))
+                text += "; voice type " + voice->mEditorId;
+            else
+                text += "; " + std::string(typeOrList) + " is neither a form list nor a voice type";
+            return text;
+        };
+
         // GetIsVoiceType: the voice type is the given VTYP, or one of a form list of them (FLST, nested lists
         // included), as GenericIdleChatter and the generic greetings ask.
         api["isVoiceType"] = [](const Object& object, std::string_view typeOrList) -> bool {
