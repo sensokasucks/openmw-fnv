@@ -78,10 +78,21 @@ local function getQuest(idOrEditorId)
     return quest or nil
 end
 
+-- Quests flagged "start game enabled" (QUST DATA 0x01) run from the start. A quest first
+-- looked at before initState (a condition, a greeting) must not be created as stopped.
+local startEnabled = nil
+local function isStartEnabled(questId)
+    if startEnabled == nil then
+        startEnabled = {}
+        for _, id in ipairs(dlg.getStartGameEnabledQuests()) do startEnabled[id] = true end
+    end
+    return startEnabled[questId] == true
+end
+
 local function questState(quest)
     local s = state.quests[quest.id]
     if s == nil then
-        s = { running = false, stage = 0, done = {}, objectives = {} }
+        s = { running = isStartEnabled(quest.id), stage = 0, done = {}, objectives = {} }
         state.quests[quest.id] = s
     end
     return s
@@ -1256,7 +1267,7 @@ local function explainNoLine(npc, topicEditorId)
     local quests = {}
     for q in pairs(stopped) do
         local quest = getQuest(q)
-        quests[#quests + 1] = quest and quest.editorId or q
+        quests[#quests + 1] = (quest and quest.editorId or q) .. (isStartEnabled(q) and '[start-enabled]' or '')
         if #quests >= 6 then break end
     end
     log(('%s has no %s line: %d INFOs, %d held back by a stopped quest (%s), %d said already, %d by conditions')
@@ -1488,7 +1499,9 @@ end)
 obs.bind('StartQuest', function(q)
     local quest = questArg(q)
     if quest then
-        questState(quest).running = true
+        local s = questState(quest)
+        s.running = true
+        s.stopped = nil
         publishQuest(quest)
     end
     return 0
@@ -1496,7 +1509,9 @@ end)
 obs.bind('StopQuest', function(q)
     local quest = questArg(q)
     if quest then
-        questState(quest).running = false
+        local s = questState(quest)
+        s.running = false
+        s.stopped = true
         publishQuest(quest)
     end
     return 0
@@ -2681,6 +2696,15 @@ return {
             state.factions = state.factions or {}
             for k, v in pairs(data.globals or {}) do obs._globals[k] = v end
             loadScriptVars(data.vars)
+            -- Saves from before questState knew start-game-enabled quests can hold them as
+            -- stopped without anything having stopped them (GenericIdleChatter): those that
+            -- never advanced and were never stopped run again.
+            for id, s in pairs(state.quests) do
+                if not s.running and not s.completed and not s.failed and not s.stopped
+                    and (s.stage or 0) == 0 and next(s.done or {}) == nil and isStartEnabled(id) then
+                    s.running = true
+                end
+            end
             publishAllQuests()
         end,
     },
