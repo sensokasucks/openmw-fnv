@@ -219,9 +219,12 @@ local function yawTo(from, to)
     return math.atan2(d.x, d.y)
 end
 
--- How close gunmen get before they stop and shoot: the weapon's range, within reason
+-- How close gunmen get before they stop and shoot: the weapon's range, within reason; many FNV guns leave their
+-- range at 0 [inferred: 1500 then, about where NPCs stop noticing each other]
 local function gunRange(gun)
-    return math.min(math.max(gun.maxRange or 0, 600), 1500)
+    local range = gun.maxRange or 0
+    if range <= 0 then return 1500 end
+    return math.min(math.max(range, 600), 2000)
 end
 
 local function approach(s, actor, target, reach, aroundObstacles)
