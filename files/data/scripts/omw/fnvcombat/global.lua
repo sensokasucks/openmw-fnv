@@ -19,9 +19,14 @@
 --     unless friendly. Allies and friends only fight when attacked. Anyone
 --     shot fights back.
 --   * Actors with Assistance help others of their kind (same name) nearby.
---   * Confidence decides when an actor runs away: Cowardly at once,
---     Cautious below half health, Average below a quarter, Brave below a
---     tenth, Foolhardy never.
+--   * Confidence decides when an actor runs away, as the original's threat
+--     ratio check: every fCombatThreatRatioUpdateTime it compares its side's
+--     health with the enemy side's; Cowardly actors always run, Foolhardy and
+--     Frenzied ones never, and nobody starts running after 2 minutes.
+--   * Player teammates (SetPlayerTeammate) join fights against the player's
+--     side, unless FollowerSwitchAggressive is 0 (passive) and nobody attacks
+--     them. Targets are picked by the original's score.
+--   * At most 15 actors that only heard the player join a fight against it.
 --   * Attackers run to the target along the navmesh (straight when there is
 --     no route) and use their unarmed or creature attacks within reach. NPCs
 --     with a gun draw it, stop within its range and shoot (aim error from
@@ -51,7 +56,17 @@ local ASSIST_DISTANCE = 1500
 local REACH = 150 -- unarmed and creature attacks
 local STRAIGHT_DISTANCE = 600 -- closer than this, attackers leave the navmesh and go straight for the target
 local FLEE_DISTANCE = 2000 -- how far a fleeing actor runs from its attacker
-local FLEE_HEALTH = { [0] = 1.01, [1] = 0.5, [2] = 0.25, [3] = 0.1, [4] = 0 } -- by Confidence
+-- Flee check (FalloutNV.exe 0x9a1380): an actor wants to flee when its Confidence value, less a per-fight random
+-- modifier (fCombatConfidenceModifierMin..Max), is above the threat ratio, its side's strength over the enemy's.
+-- Values by Confidence (Cowardly .. Foolhardy) as FalloutNV.esm sets them; Foolhardy (0) never flees.
+local CONFIDENCE_FLEE = { [0] = 1000, [1] = 0.375, [2] = 0.1875, [3] = 0.0375, [4] = 0 }
+local THREAT_RATIO_STOP = 120 -- seconds into a fight after which the ratio is no longer checked
+local PLAYER_ATTACKER_SOFT_CAP = 15 -- iCombatTargetPlayerSoftCap
+
+local function gmst(name, default)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    return type(value) == 'number' and value or default
+end
 
 local function displayName(obj)
     local name = combat.getName(obj)
@@ -84,13 +99,17 @@ end
 local tracked = {} -- id -> actor in an active cell
 local fighting = {} -- id -> { actor, target, fleeing, nextAttack, nextMove }
 local simTime, nextTick = 0, 0
+local wantsToFlee -- below
 local nextDetection = 0
 
 local function startCombat(actor, target)
     if not isAlive(actor) or not isAlive(target) or actor == target then return end
     local s = fighting[actor.id]
     if s and s.target == target then return end
-    s = { actor = actor, target = target, fleeing = false, nextAttack = 0, nextMove = 0 }
+    s = { actor = actor, target = target, fleeing = false, nextAttack = 0, nextMove = 0, since = simTime,
+        confidenceMod = gmst('fCombatConfidenceModifierMin', -0.25) + math.random()
+            * (gmst('fCombatConfidenceModifierMax', 1.0) - gmst('fCombatConfidenceModifierMin', -0.25)),
+        nextThreatCheck = simTime + math.random() * gmst('fCombatThreatRatioUpdateTime', 7.5) }
     if types.ESM4NPC.objectIsInstance(actor) then
         local weapon = combat.getActorWeapon(actor)
         if weapon and weapon.isGun then
@@ -128,16 +147,6 @@ local function callForHelp(actor, target)
     end
 end
 
-local function healthFraction(actor)
-    local full = stats.getPermanent(actor, 'Health')
-    if full <= 0 then return 1 end
-    return stats.get(actor, 'Health') / full
-end
-
-local function gmst(name, default)
-    local value = core.getFNVGMST and core.getFNVGMST(name)
-    return type(value) == 'number' and value or default
-end
 
 -- Detection of the player: actor id -> { score, sight }
 local detection = {}
@@ -154,6 +163,15 @@ local function wantsFight(actor, player)
     if I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(actor) then return false end
     local distance = (player.position - actor.position):length()
     if not noticesPlayer(actor) then return false end
+    -- iCombatTargetPlayerSoftCap: once 15 fight the player, only those that see it join
+    local d = detection[actor.id]
+    if d.score <= gmst('fSneakSeenMin', 0) then
+        local attackers = 0
+        for _, other in pairs(fighting) do
+            if other.target == player then attackers = attackers + 1 end
+        end
+        if attackers >= PLAYER_ATTACKER_SOFT_CAP then return false end
+    end
     local aggression = stats.get(actor, 'Aggression')
     if aggression >= 3 then return true end
     local reaction = combat.getReaction(actor)
@@ -218,6 +236,15 @@ end
 
 local function isTeammate(actor)
     return I.FNVAI ~= nil and I.FNVAI.isTeammate ~= nil and I.FNVAI.isTeammate(actor)
+end
+
+-- An object script variable (lower-case name) as published by scripts/omw/fnvdialogue, nil if unknown.
+local refVars = storage.globalSection('ObScriptRefVars')
+local function refVar(obj, name)
+    local dlg = core.obscript.dialogue
+    local ok, key = pcall(function() return dlg.getReferenceId(obj) end)
+    local locals = ok and key and refVars:get(key)
+    return locals and locals[name]
 end
 
 local function onPlayerSide(actor)
@@ -293,8 +320,11 @@ local function teammatesHelp(player)
     if I.FNVAI == nil or I.FNVAI.isTeammate == nil then return end
     for id, mate in pairs(tracked) do
         if fighting[id] == nil and mate:isValid() and isAlive(mate) and isTeammate(mate) then
+            -- FollowerSwitchAggressive 0: passive, fights only whoever attacks it
+            local passive = refVar(mate, 'followerswitchaggressive') == 0
             for otherId, other in pairs(fighting) do
-                if otherId ~= id and other.target ~= nil and onPlayerSide(other.target)
+                if otherId ~= id and other.target ~= nil and (passive and other.target == mate
+                    or not passive and onPlayerSide(other.target))
                     and not onPlayerSide(other.actor) and isAlive(other.actor)
                     and (other.actor.position - mate.position):length() <= GIVE_UP_DISTANCE then
                     startCombat(mate, other.actor)
@@ -303,6 +333,43 @@ local function teammatesHelp(player)
             end
         end
     end
+end
+
+-- Strength of one side of a fight: the health of everyone on it.
+local function sideHealth(members)
+    local total = 0
+    for _, m in ipairs(members) do
+        if isAlive(m) then total = total + math.max(stats.get(m, 'Health'), 0) end
+    end
+    return total
+end
+
+-- The threat ratio (FalloutNV.exe 0x9a1060): own side's strength over the enemy side's, 100 without data. The
+-- own side is everyone fighting the same enemies; the enemy side is the target and, for the player, its teammates.
+local function threatRatio(s)
+    local own, enemies = { s.actor }, { s.target }
+    for id, other in pairs(fighting) do
+        if other ~= s and other.target == s.target and not onPlayerSide(other.actor) then own[#own + 1] = other.actor end
+    end
+    if onPlayerSide(s.target) then
+        for id, other in pairs(tracked) do
+            if other ~= s.target and isTeammate(other) and isAlive(other) and fighting[id] ~= nil then
+                enemies[#enemies + 1] = other
+            end
+        end
+    end
+    local enemy = sideHealth(enemies)
+    if enemy <= 0 then return 100 end
+    return sideHealth(own) / enemy
+end
+
+wantsToFlee = function(s)
+    local actor = s.actor
+    if stats.get(actor, 'Aggression') >= 3 or simTime - s.since > THREAT_RATIO_STOP then return s.fleeing end
+    local confidence = math.floor(stats.get(actor, 'Confidence'))
+    local t = CONFIDENCE_FLEE[confidence] or CONFIDENCE_FLEE[2]
+    if t > 0 then t = t - s.confidenceMod end
+    return t > threatRatio(s)
 end
 
 local function fight(s)
@@ -319,10 +386,12 @@ local function fight(s)
         return
     end
 
-    local confidence = math.floor(stats.get(actor, 'Confidence'))
-    if not s.fleeing and healthFraction(actor) < (FLEE_HEALTH[confidence] or 0.25) then
-        s.fleeing = true
-        s.nextMove = 0
+    if simTime >= s.nextThreatCheck then
+        s.nextThreatCheck = simTime + gmst('fCombatThreatRatioUpdateTime', 7.5)
+        local wants = wantsToFlee(s)
+        if wants and not s.fleeing then s.nextMove = 0 end
+        if not wants and s.fleeing then ai.stop(actor) end
+        s.fleeing = wants
     end
     if s.fleeing then
         if distance >= FLEE_DISTANCE then

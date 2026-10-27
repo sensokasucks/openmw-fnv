@@ -596,141 +596,65 @@ local function sandboxDuration(npc, s, activity)
     return math.max(duration, 0) * (1 + (rand(s) * 2 - 1) * range)
 end
 
--- Meal and sleep windows (FalloutNV.exe, sandbox): each game day every actor has breakfast, lunch and dinner
--- windows starting at a random hour between fSandbox<Meal>Min and Max and lasting fSandboxMealDurationMin to Max
--- hours, and a sleep window starting between fSandboxSleepStartMin and Max (19:00 to 01:00) for
--- fSandboxSleepDurationMin to Max hours. Only one window counts at a time; while it is open the sandbox favours
--- that activity (weight 10). The hours are drawn from the actor's seed and the day, so they stay the same over
--- saves and for every player in a shared game.
+-- Meal and sleep windows (FalloutNV.exe 0x9f3e80). Each sandboxing actor keeps one upcoming window at a time:
+-- sleep (starting fSandboxSleepStartMin..Max, 19:00 to 01:00, for fSandboxSleepDurationMin..Max hours), breakfast,
+-- lunch or dinner (starting fSandbox<Meal>Min..Max, for fSandboxMealDurationMin..Max hours). When its window is
+-- over, all four are rolled again and the one in progress, else the soonest, is kept; the one that just ended is
+-- skipped unless its new roll falls on the next day. While the window is open and its bed or seat is found, the
+-- sandbox favours that activity (weight 10); otherwise it sandboxes as usual and never sleeps.
 local WINDOW_WEIGHT = 10
+local WINDOWS = {
+    { kind = SLEEP, start = { 'fSandboxSleepStartMin', 19, 'fSandboxSleepStartMax', 1 },
+        duration = { 'fSandboxSleepDurationMin', 6, 'fSandboxSleepDurationMax', 10 } },
+    { kind = EAT, start = { 'fSandboxBreakfastMin', 6, 'fSandboxBreakfastMax', 9 },
+        duration = { 'fSandboxMealDurationMin', 0.5, 'fSandboxMealDurationMax', 2 } },
+    { kind = EAT, start = { 'fSandboxLunchMin', 11, 'fSandboxLunchMax', 14 },
+        duration = { 'fSandboxMealDurationMin', 0.5, 'fSandboxMealDurationMax', 2 } },
+    { kind = EAT, start = { 'fSandboxDinnerMin', 17, 'fSandboxDinnerMax', 20 },
+        duration = { 'fSandboxMealDurationMin', 0.5, 'fSandboxMealDurationMax', 2 } },
+}
 
-local function dayRandom(seed, day, n)
-    local x = (seed + day * 7919 + n * 104729) % 2147483647
-    for _ = 1, 3 do x = (math.max(x, 1) * 16807) % 2147483647 end
-    return (x - 1) / 2147483646
+local function between(s, setting)
+    local lo, hi = gmstFloat(setting[1], setting[2]), gmstFloat(setting[3], setting[4])
+    if hi < lo then hi = hi + 24 end
+    local value = lo + rand(s) * (hi - lo)
+    return value >= 24 and value - 24 or value
 end
 
-local function windowsOf(seed, day)
-    local function between(n, lo, hi) return lo + dayRandom(seed, day, n) * (hi - lo) end
-    local mealMin, mealMax = gmstFloat('fSandboxMealDurationMin', 0.5), gmstFloat('fSandboxMealDurationMax', 2)
-    local windows = {}
-    for i, meal in ipairs({ 'Breakfast', 'Lunch', 'Dinner' }) do
-        local start = between(i * 2, gmstFloat('fSandbox' .. meal .. 'Min', 6), gmstFloat('fSandbox' .. meal .. 'Max', 9))
-        windows[#windows + 1] = { kind = EAT, start = start, finish = start + between(i * 2 + 1, mealMin, mealMax) }
+-- s.window = { id, kind, start = absolute game hour it opens, finish }
+local function chooseWindow(s, nowHours)
+    local w = s.window
+    if w ~= nil and nowHours < w.finish then return end
+    local today = math.floor(nowHours / 24) * 24
+    local hour = nowHours - today
+    local best, bestUntil = nil, math.huge
+    for id, def in ipairs(WINDOWS) do
+        local start, duration = between(s, def.start), between(s, def.duration)
+        local untilStart, tomorrow = start - hour, false
+        if start + duration <= hour then
+            untilStart, tomorrow = start + 24 - hour, true
+        end
+        if not (w ~= nil and w.id == id and not tomorrow) then
+            if untilStart <= 0 then
+                best, bestUntil = { id = id, kind = def.kind, start = today + start, finish = today + start + duration }, -1
+                break
+            elseif untilStart < bestUntil then
+                local opens = today + start + (tomorrow and 24 or 0)
+                best, bestUntil = { id = id, kind = def.kind, start = opens, finish = opens + duration }, untilStart
+            end
+        end
     end
-    local sleepMin, sleepMax = gmstFloat('fSandboxSleepStartMin', 19), gmstFloat('fSandboxSleepStartMax', 1)
-    if sleepMax < sleepMin then sleepMax = sleepMax + 24 end
-    local start = between(7, sleepMin, sleepMax)
-    windows[#windows + 1] = { kind = SLEEP, start = start, finish = start + between(8,
-        gmstFloat('fSandboxSleepDurationMin', 6), gmstFloat('fSandboxSleepDurationMax', 10)) }
-    return windows
+    s.window = best
 end
 
 -- The window open now, if any: { kind = EAT or SLEEP, left = real seconds until it closes }
 local function sandboxWindow(s)
-    local seconds = core.getGameTime()
-    local day = math.floor(seconds / 86400)
-    local hour = (seconds % 86400) / 3600
+    local nowHours = core.getGameTime() / 3600
+    chooseWindow(s, nowHours)
+    local w = s.window
+    if w == nil or nowHours < w.start or nowHours >= w.finish then return nil end
     local scale = math.max(core.getGameTimeScale and core.getGameTimeScale() or 30, 1)
-    -- today's windows, and yesterday's sleep running past midnight
-    for _, d in ipairs({ { day, hour }, { day - 1, hour + 24 } }) do
-        for _, w in ipairs(windowsOf(s.windowSeed, d[1])) do
-            if d[2] >= w.start and d[2] < w.finish then
-                return { kind = w.kind, left = (w.finish - d[2]) * 3600 / scale }
-            end
-        end
-    end
-    return nil
-end
-
--- Conversations between sandboxing NPCs: now and then (CONVERSATION_CHANCE of the picks, once the actor's 30 to
--- 60 s cooldown is over) another sandboxing NPC nearby, not talked to in the last 120 s, can be a candidate.
--- The actor walks up to it, both turn to each other, and the conversation opens on HELLO and goes on through the
--- lines' choices until a Goodbye (scripts/omw/fnvdialogue).
-local CONVERSATION_CHANCE = 0.25
-local CONVERSATION_DISTANCE = 200
-local CONVERSATION_SEARCH = 1024
-local CONVERSATION_PARTNER_BLOCK = 120
-
-local function canTalk(other, os)
-    return os ~= nil and not os.creature and os.package ~= nil and os.package.type == T.Sandbox
-        and not hasFlag(os.package.specificFlags or 0, SANDBOX_NO_CONVERSATION)
-        and (os.phase == nil or os.phase == 'wait') and not os.suspended and simTime >= (os.talkCooldown or 0)
-end
-
-local function conversationPartner(npc, s, center, radius)
-    local best, bestDistance = nil, math.huge
-    for id, other in pairs(tracked) do
-        local os = states[id]
-        if id ~= npc.id and other:isValid() and sameCell(other.cell, npc.cell) and canTalk(other, os)
-            and simTime >= ((s.talkedWith or {})[id] or 0) then
-            local distance = (other.position - npc.position):length()
-            if distance < math.min(radius, CONVERSATION_SEARCH) and distance < bestDistance
-                and (other.position - center):length() <= radius then
-                best, bestDistance = other, distance
-            end
-        end
-    end
-    return best
-end
-
-local function endConversation(npc, s)
-    s.talk = nil
-    s.phase = nil
-    s.talkCooldown = simTime + rand(s, 30, 60)
-end
-
--- One side of a sandbox conversation; the one who started it leads.
-local function tickConversation(npc, s)
-    local talk = s.talk
-    local partner = talk.partner
-    local ps = partner:isValid() and states[partner.id]
-    if ps == nil or ps.talk == nil or ps.talk.partner ~= npc or simTime > talk.giveUp then
-        if ps and ps.talk and ps.talk.partner == npc then endConversation(partner, ps) end
-        endConversation(npc, s)
-        return
-    end
-    local d = partner.position - npc.position
-    if talk.state == 'approach' then
-        if not talk.leads then
-            ai.face(npc, math.atan2(d.x, d.y))
-            return
-        end
-        if d:length() <= CONVERSATION_DISTANCE then
-            ai.stop(npc)
-            ai.face(npc, math.atan2(d.x, d.y))
-            ai.face(partner, math.atan2(-d.x, -d.y))
-            local started = I.FNVDialogue and I.FNVDialogue.converseWith
-                and I.FNVDialogue.converseWith(npc, partner, 'HELLO')
-            if not started then
-                endConversation(partner, ps)
-                endConversation(npc, s)
-                return
-            end
-            log(('%s talks with %s'):format(npc.recordId, partner.recordId))
-            talk.state, ps.talk.state = 'talking', 'talking'
-            talk.giveUp, ps.talk.giveUp = simTime + 300, simTime + 300
-        elseif s.phase ~= 'go' or moveStatus(npc, s) ~= 'moving' then
-            moveTo(npc, s, partner.position, { tolerance = CONVERSATION_DISTANCE * 0.75 })
-            s.phase = 'talk'
-        end
-    elseif talk.leads and not (I.FNVDialogue and I.FNVDialogue.isConversing and I.FNVDialogue.isConversing(npc)) then
-        endConversation(partner, ps)
-        endConversation(npc, s)
-    end
-end
-
-local function startConversation(npc, s, partner)
-    local ps = states[partner.id]
-    s.talkedWith = s.talkedWith or {}
-    ps.talkedWith = ps.talkedWith or {}
-    s.talkedWith[partner.id] = simTime + CONVERSATION_PARTNER_BLOCK
-    ps.talkedWith[npc.id] = simTime + CONVERSATION_PARTNER_BLOCK
-    s.talk = { partner = partner, leads = true, state = 'approach', giveUp = simTime + 20 }
-    ps.talk = { partner = npc, leads = false, state = 'approach', giveUp = simTime + 20 }
-    s.phase = 'talk'
-    ai.stop(partner)
-    ps.phase = 'talk'
+    return { kind = w.kind, left = (w.finish - nowHours) * 3600 / scale }
 end
 
 -- Picks the next activity like the original: every candidate (each free seat, each idle marker the actor can
@@ -739,14 +663,13 @@ end
 -- iSandBoxPreventRepeatedActionTime. The search radius is the package location's, else fSandBoxSearchRadius.
 -- Eating and sleeping happen in the actor's meal and sleep windows: eating sits down at a free seat and plays the
 -- eating idles (no food item is taken from the inventory yet), sleeping lies down in a free bed until the window
--- closes. Not done yet: conversations between sandboxing actors.
+-- closes. Conversations are not a sandbox activity: any actor may start one (see conversations below).
 local function sandboxPick(npc, s, center, radius, flags)
     local age = s.sandboxAge
     if age == nil then
         age = { [SIT] = 1, [SLEEP] = 1, [EAT] = 1, [WANDER] = 1, [IDLE_MARKER] = 1, [CONVERSATION] = 1 }
         s.sandboxAge = age
     end
-    s.windowSeed = s.windowSeed or seedOf(npc.id)
     local window = not s.creature and sandboxWindow(s) or nil
     local weights = { [SIT] = age[SIT], [SLEEP] = 0, [EAT] = 0, [WANDER] = age[WANDER],
         [IDLE_MARKER] = age[IDLE_MARKER], [CONVERSATION] = 0 }
@@ -776,14 +699,6 @@ local function sandboxPick(npc, s, center, radius, flags)
         end
     end
     if not hasFlag(flags, SANDBOX_NO_WANDERING) then add(WANDER, nil) end
-    if not s.creature and not hasFlag(flags, SANDBOX_NO_CONVERSATION) and simTime >= (s.talkCooldown or 0)
-        and rand(s) < CONVERSATION_CHANCE then
-        local partner = conversationPartner(npc, s, center, radius)
-        if partner ~= nil then
-            candidates[#candidates + 1] = { kind = CONVERSATION, partner = partner, weight = age[CONVERSATION] }
-            total = total + age[CONVERSATION]
-        end
-    end
     if total <= 0 then return nil end
     local r = rand(s) * total
     local chosen = candidates[#candidates]
@@ -807,10 +722,6 @@ local function sandboxPick(npc, s, center, radius, flags)
 end
 
 local function sandbox(npc, s, dest, pkg)
-    if s.talk ~= nil then
-        tickConversation(npc, s)
-        return
-    end
     local center = dest.position or s.anchor
     local radius = (dest.radius or 0) >= 1 and dest.radius or gmstFloat('fSandBoxSearchRadius', 6000)
     if s.phase == nil or (s.phase == 'wait' and simTime >= s.waitUntil) then
@@ -820,10 +731,6 @@ local function sandbox(npc, s, dest, pkg)
             s.phase = 'wait'
             s.waitUntil = simTime + rand(s, gmstFloat('iMinSandboxRescanSeconds', 3),
                 math.max(gmstFloat('iMaxSandboxRescanSeconds', 6), gmstFloat('iMinSandboxRescanSeconds', 3)))
-            return
-        end
-        if chosen.kind == CONVERSATION then
-            startConversation(npc, s, chosen.partner)
             return
         end
         local duration = sandboxDuration(npc, s, chosen.kind)
@@ -937,19 +844,22 @@ end
 
 local completePackage -- below
 
--- Followers per leader, for the queue: leader id -> { follower id -> last seen }
+-- Followers per leader, for the queue: leader id -> { follower id -> { seen, keep, distance } }
 local followersOf = {}
 -- Actors whose package follows the player: id -> actor (kept while they are off-screen)
 local followsPlayer = {}
 
--- Follow and Accompany (FOLLOW procedure). The follow distance D is the package target's distance, else
--- iAIDistanceRadiusMinLocation. Several followers of one leader queue up behind it, each one further back by the
--- one before plus fFollowSpaceBetweenFollowers. A follower sets off once beyond its distance, slows down over the
--- last fFollowSlowdownZoneWidth and stops at max(D - 150, D / 2). Further behind it walks up to 20% faster to
--- catch up (speed kept between x0.75 and x1.5 of its own), and runs when the leader runs or once more than
--- 128 beyond D. The path is found again once the leader has moved
--- min(0.75 D, fAIMoveDistanceToRecalcFollowPath). Accompany fails when the leader gets beyond D + 300.
-local FOLLOW_RUN_MARGIN = 128
+-- Follow and Accompany (FOLLOW procedure, FalloutNV.exe 0x8e0f80). The follow distance D is the package target's
+-- distance, else iAIDistanceRadiusMinLocation. Followers of one leader queue up in order of distance, each one
+-- further back by the one before plus both bound radii plus fFollowSpaceBetweenFollowers. The stop distance S is
+-- max(D - fFollowSlowdownZoneWidth, D x fFollowStopZoneMinMult). The follower paths to the leader (arriving within
+-- S while the leader moves, D while it stands) once the leader moves or it is more than D + 64 away, and again
+-- whenever the leader has moved min(0.75 x that radius, fAIMoveDistanceToRecalcFollowPath) or the path is done. It
+-- walks while within D of a still leader, and runs when the leader runs or once more than
+-- fFollowMatchSpeedZoneWidth beyond D. Its speed matches the leader's: inside D it ramps down towards S, beyond D
+-- it is up to fFollowExtraCatchUpSpeedMult faster, always between fFollowWalkMinSlowdownMultiplier and
+-- fFollowWalkMaxSpeedupMultiplier of its own. Accompany fails when the leader gets more than 300 beyond D.
+local FOLLOWER_RADIUS = 32 -- bound radius of a person, about
 local ACCOMPANY_FAIL_MARGIN = 300
 
 local function followQueueDistance(npc, leader, distance)
@@ -958,17 +868,27 @@ local function followQueueDistance(npc, leader, distance)
         set = {}
         followersOf[leader.id] = set
     end
-    set[npc.id] = simTime
-    local spacing = gmstFloat('fFollowSpaceBetweenFollowers', 192)
-    local ahead = 0
-    for id, seen in pairs(set) do
-        if simTime - seen > 2 then
+    set[npc.id] = { seen = simTime, keep = distance, distance = (leader.position - npc.position):length() }
+    local list = {}
+    for id, f in pairs(set) do
+        if simTime - f.seen > 2 then
             set[id] = nil
-        elseif id < npc.id then
-            ahead = ahead + 1
+        else
+            list[#list + 1] = { id = id, keep = f.keep, distance = f.distance }
         end
     end
-    return distance + ahead * (32 + spacing)
+    table.sort(list, function(x, y)
+        if x.distance ~= y.distance then return x.distance < y.distance end
+        return x.id < y.id
+    end)
+    local spacing = gmstFloat('fFollowSpaceBetweenFollowers', 192)
+    local offset = 0
+    for i, f in ipairs(list) do
+        if i > 1 then offset = offset + 2 * FOLLOWER_RADIUS + spacing end
+        offset = math.max(offset, f.keep)
+        if f.id == npc.id then return offset end
+    end
+    return distance
 end
 
 local function follow(npc, s, pkg)
@@ -984,7 +904,7 @@ local function follow(npc, s, pkg)
             return
         end
     end
-    local base = target.count and target.count > 0 and target.count
+    local base = target.count and target.count >= 1 and target.count
         or gmstFloat('iAIDistanceRadiusMinLocation', 100)
     local keep = followQueueDistance(npc, leader, base)
     local distance = (leader.position - npc.position):length()
@@ -992,67 +912,96 @@ local function follow(npc, s, pkg)
         completePackage(npc, s, 'left behind')
         return
     end
-    local stopAt = math.max(keep - 150, keep * 0.5)
-    local slowZone = gmstFloat('fFollowSlowdownZoneWidth', 150)
-    -- how fast the leader goes, from its last positions
+    local stopAt = math.max(keep - gmstFloat('fFollowSlowdownZoneWidth', 150),
+        keep * gmstFloat('fFollowStopZoneMinMult', 0.5))
+    local matchZone = gmstFloat('fFollowMatchSpeedZoneWidth', 128)
+    -- the leader's speed, from where it was at the last update
     local leaderSpeed = 0
     if s.leaderSeen ~= nil and simTime > s.leaderSeen.time then
         leaderSpeed = (leader.position - s.leaderSeen.position):length() / (simTime - s.leaderSeen.time)
     end
     s.leaderSeen = { position = leader.position, time = simTime }
-    local mySpeed = math.max(walkSpeed(npc), 1)
-    local leaderRuns = leaderSpeed > mySpeed * 1.3
-    if s.phase == 'go' then
-        if distance <= stopAt then
-            ai.stop(npc)
-            s.phase = nil
-            s.followFrom = nil
-            return
+    local walk = math.max(walkSpeed(npc), 1)
+    local leaderMoving = leaderSpeed > 10
+    local leaderRuns = leaderSpeed > walk * 1.3
+    local run = s.run or false
+    if not (distance < keep * gmstFloat('fFollowWalkZoneMult', 1) and not leaderMoving) then
+        run = run or leaderRuns or distance > keep + matchZone
+    end
+    -- speed matching, relative to the follower's own speed for its gait
+    local own = run and walk * gmstFloat('fMoveRunMult', 4) or walk
+    local speed
+    if distance < keep then
+        speed = math.max(0, distance - stopAt) / math.max(keep - stopAt, 1) * math.min(own, leaderSpeed)
+    else
+        speed = leaderSpeed * (1 + (distance - keep) / matchZone * gmstFloat('fFollowExtraCatchUpSpeedMult', 0.2))
+    end
+    speed = math.min(math.max(speed, own * gmstFloat('fFollowWalkMinSlowdownMultiplier', 0.75)),
+        own * gmstFloat('fFollowWalkMaxSpeedupMultiplier', 1.5))
+    local mult = speed / own
+    local radius = leaderMoving and stopAt or keep
+    local status = s.phase == 'go' and moveStatus(npc, s) or 'none'
+    if leaderMoving or distance > keep + matchZone * 0.5 then
+        local recalc = math.min(0.75 * radius, gmstFloat('fAIMoveDistanceToRecalcFollowPath', 300))
+        if s.followFrom == nil or status ~= 'moving' or (leader.position - s.followFrom):length() > recalc then
+            if distance > radius then
+                s.followFrom = leader.position
+                moveTo(npc, s, leader.position, { run = run, tolerance = radius, speedMult = mult })
+                return
+            end
         end
-        local mult
-        if distance < stopAt + slowZone then
-            mult = 0.75 + 0.25 * (distance - stopAt) / slowZone
-        else
-            mult = 1 + math.min(0.2, 0.2 * (distance - keep) / math.max(keep, 1))
-        end
-        mult = math.min(math.max(mult, 0.75), 1.5)
-        local run = s.run or leaderRuns or distance > keep + FOLLOW_RUN_MARGIN
-        local recalc = math.min(0.75 * keep, gmstFloat('fAIMoveDistanceToRecalcFollowPath', 300))
-        if s.followFrom == nil or (leader.position - s.followFrom):length() > recalc
-            or moveStatus(npc, s) ~= 'moving' then
-            s.followFrom = leader.position
-            moveTo(npc, s, leader.position, { run = run, tolerance = stopAt, speedMult = mult })
-        elseif ai.setPace then
-            ai.setPace(npc, mult, run)
-        end
-    elseif distance > keep then
-        s.followFrom = leader.position
-        moveTo(npc, s, leader.position, { run = s.run or leaderRuns or distance > keep + FOLLOW_RUN_MARGIN,
-            tolerance = stopAt })
-    elseif s.phase == nil and distance > 32 then
+    end
+    if status == 'moving' then
+        if ai.setPace then ai.setPace(npc, mult, run) end
+    elseif s.phase ~= 'stay' then
+        -- there: wait for the leader, facing it
+        s.phase = 'stay'
+        s.followFrom = nil
         local d = leader.position - npc.position
         ai.face(npc, math.atan2(d.x, d.y))
-        s.phase = 'stay'
     end
 end
 
--- Brings the player's followers along when the player goes through a door, as the original does (they come
--- out of the door behind the player) and on fast travel, unless told to wait (companions' Waiting variable).
+-- Brings the player's teammates and followers along when the player goes through a door or fast travels, as the
+-- original does (PlayerCharacter 0x973ee0, group move 0x8ad1c0): each comes out behind the player, one behind the
+-- other fFollowSpaceBetweenFollowers plus its radius further back, facing the way the player faces. The dead,
+-- the disabled and companions told to wait (script variable Waiting 1) stay. The original has followers that are
+-- not teammates walk to the door the player used and go through; here they are brought along the same way.
 local function bringFollowers()
     local p = player()
     if p == nil then return end
-    for id, npc in pairs(followsPlayer) do
+    local moving = {}
+    local function consider(id, npc)
+        if moving[id] then return end
         if not npc:isValid() or (combat and combat.isDead(npc)) then
             followsPlayer[id] = nil
-        elseif npc.enabled and not isWaiting(npc) and (not (npc.cell.isExterior and p.cell.isExterior)
-                and not sameCell(npc.cell, p.cell)
-                -- fast travel: far out of the loaded cells
-                or (npc.cell.isExterior and p.cell.isExterior and (npc.cell.worldSpaceId ~= p.cell.worldSpaceId
-                    or (npc.position - p.position):length() > 16384))) then
-            local yaw = p.rotation:getYaw()
-            local behind = p.position - util.vector3(math.sin(yaw), math.cos(yaw), 0) * 96
-            teleport(npc, p.cell, behind, yaw)
+            return
         end
+        local away = not (npc.cell.isExterior and p.cell.isExterior) and not sameCell(npc.cell, p.cell)
+            -- fast travel: far out of the loaded cells
+            or (npc.cell.isExterior and p.cell.isExterior and (npc.cell.worldSpaceId ~= p.cell.worldSpaceId
+                or (npc.position - p.position):length() > 16384))
+        if npc.enabled and away and not isWaiting(npc) then moving[id] = npc end
+    end
+    for id, npc in pairs(teammates) do consider(id, npc) end
+    for id, npc in pairs(followsPlayer) do consider(id, npc) end
+    local yaw = p.rotation:getYaw()
+    local back = util.vector3(math.sin(yaw), math.cos(yaw), 0) * -1
+    local offset = 0
+    local ids = {}
+    for id in pairs(moving) do ids[#ids + 1] = id end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+        local npc = moving[id]
+        if furniture.inUse(states[id] or {}) then furniture.release(states[id]) end
+        offset = offset + gmstFloat('fFollowSpaceBetweenFollowers', 192) + FOLLOWER_RADIUS
+        local position = p.position + back * offset
+        if ai.randomPoint then
+            -- onto the navmesh near that spot (the original searches the navmesh too)
+            local ok, point = pcall(ai.randomPoint, p, position, 64)
+            if ok and point ~= nil then position = point end
+        end
+        teleport(npc, p.cell, position, yaw)
     end
 end
 
@@ -1591,6 +1540,97 @@ local function tickFurniture(npc, s)
     return true
 end
 
+-- ---------------------------------------------------------------- conversations between NPCs
+
+-- NPC-to-NPC conversations (FalloutNV.exe 0x904800, checked every update): once its conversation cooldown is over
+-- (fAISocialTimerForConversationsMin..Max, 30 to 60 s from the last one it started), an NPC finds another NPC
+-- within 200 units that is free to talk and not talked to in the last fAItalktosameNPCtimer seconds, and starts
+-- one with fAISocialchanceForConversation percent chance. Followers, escorts and accompanying NPCs only talk with
+-- their package target; Sleep, Use Item At, Ambush, Guard, Dialogue and Use Weapon packages never talk, nor do
+-- sandboxes that forbid it. Both stop and turn to each other (unless seated) and the conversation runs in
+-- scripts/omw/fnvdialogue: HELLO, then each line's follow-up topics, to Goodbye or 100 lines. The package waits
+-- meanwhile.
+local CONVERSATION_DISTANCE = 200
+local NO_CONVERSATION = { [T.Sleep] = true, [T.UseItemAt] = true, [T.Ambush] = true, [T.Guard] = true,
+    [T.Dialogue] = true, [T.UseWeapon] = true }
+local PARTNER_IS_TARGET = { [T.Follow] = true, [T.Escort] = true, [T.Accompany] = true }
+
+local function conversing(npc)
+    return I.FNVDialogue ~= nil and I.FNVDialogue.isConversing ~= nil and I.FNVDialogue.isConversing(npc)
+end
+
+local function conversationCooldown(s)
+    return rand(s, gmstFloat('fAISocialTimerForConversationsMin', 30),
+        math.max(gmstFloat('fAISocialTimerForConversationsMax', 60), gmstFloat('fAISocialTimerForConversationsMin', 30)))
+end
+
+local function freeToTalk(npc, s)
+    local pkg = s and s.package
+    if pkg == nil or s.creature or s.suspended or s.talk ~= nil or NO_CONVERSATION[pkg.type] then return false end
+    if pkg.type == T.Sandbox and hasFlag(pkg.specificFlags or 0, SANDBOX_NO_CONVERSATION) then return false end
+    if I.FNVDialogue and I.FNVDialogue.isTalkingTo and I.FNVDialogue.isTalkingTo(npc) then return false end
+    return not conversing(npc)
+end
+
+local function conversationPartner(npc, s)
+    local recent = s.talkedWith or {}
+    local function fits(other)
+        local os = states[other.id]
+        return other ~= npc and other:isValid() and not types.Player.objectIsInstance(other) and os ~= nil
+            and sameCell(other.cell, npc.cell) and (other.position - npc.position):length() <= CONVERSATION_DISTANCE
+            and simTime >= (recent[other.id] or 0) and freeToTalk(other, os)
+    end
+    if PARTNER_IS_TARGET[s.package.type] then
+        local target = targetRef(s.package, npc)
+        return target ~= nil and fits(target) and target or nil
+    end
+    for _, other in pairs(tracked) do
+        if fits(other) then return other end
+    end
+    return nil
+end
+
+-- Starts or follows a conversation; true while the actor is in one (its package waits).
+local function conversation(npc, s)
+    if s.talk ~= nil then
+        local partner = s.talk.partner
+        if conversing(npc) and partner:isValid() and simTime < s.talk.giveUp then return true end
+        s.talk = nil
+        if not furniture.inUse(s) and s.phase == 'talk' then s.phase = nil end
+        return false
+    end
+    if not freeToTalk(npc, s) then return false end
+    s.talkCooldown = s.talkCooldown or (simTime + conversationCooldown(s))
+    if simTime < s.talkCooldown then return false end
+    local chance = gmstFloat(npc.cell.isExterior and 'fAISocialchanceForConversation'
+        or 'fAISocialchanceForConversationInterior', 25)
+    if rand(s) * 100 >= chance then return false end
+    local partner = conversationPartner(npc, s)
+    if partner == nil then return false end
+    local ps = states[partner.id]
+    s.talkCooldown = simTime + conversationCooldown(s)
+    local block = gmstFloat('fAItalktosameNPCtimer', 120)
+    s.talkedWith = s.talkedWith or {}
+    ps.talkedWith = ps.talkedWith or {}
+    s.talkedWith[partner.id] = simTime + block
+    ps.talkedWith[npc.id] = simTime + block
+    if not (I.FNVDialogue and I.FNVDialogue.converseWith and I.FNVDialogue.converseWith(npc, partner, 'HELLO')) then
+        return false
+    end
+    log(('%s talks with %s'):format(npc.recordId, partner.recordId))
+    local d = partner.position - npc.position
+    for _, side in ipairs({ { npc, s, d }, { partner, ps, d * -1 } }) do
+        local actor, state, toOther = side[1], side[2], side[3]
+        state.talk = { partner = actor == npc and partner or npc, giveUp = simTime + 300 }
+        if not furniture.inUse(state) then
+            if state.phase == 'go' then ai.stop(actor) end
+            state.phase = 'talk'
+            ai.face(actor, math.atan2(toOther.x, toOther.y))
+        end
+    end
+    return true
+end
+
 local function tick(npc, s)
     if tickFurniture(npc, s) then return end
     local pkg = s.package
@@ -1732,6 +1772,7 @@ local function saveState(s)
         furniture = furniture.save(s, simTime),
         useAtEnd = s.useAtEnd,
         seed = s.seed,
+        window = s.window,
     }
 end
 
@@ -1748,6 +1789,7 @@ local function restoreState(npc, s, saved)
     s.run = hasFlag(pkg.flags, FLAG_ALWAYS_RUN)
     s.noFurniture = s.creature or nil
     s.patrol = saved.patrol
+    s.window = saved.window
     s.dest = resolveLocation(npc, pkg, s)
     s.phase = nil
     if saved.furniture ~= nil and furniture.restore(npc, s, saved.furniture, simTime, getObject) then
@@ -2156,12 +2198,12 @@ return {
                     -- in conversation with the player the package waits (the world keeps
                     -- running while talking), and picks up where it was afterwards
                     local talking = I.FNVDialogue and I.FNVDialogue.isTalkingTo and I.FNVDialogue.isTalkingTo(npc)
-                    if not talking and simTime >= s.nextEvaluation then
+                    if not talking and s.talk == nil and simTime >= s.nextEvaluation then
                         s.nextEvaluation = simTime + EVALUATE_EVERY
                         evaluate(npc, s)
                     end
                     if not talking then
-                        tick(npc, s)
+                        if not conversation(npc, s) then tick(npc, s) end
                         headTrack(npc, s, simTime)
                     else
                         -- the conversation has the head; it ends looking at no one

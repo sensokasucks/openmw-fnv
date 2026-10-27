@@ -1077,6 +1077,7 @@ local conversing = {} -- npc id -> true while in a conversation with another NPC
 
 local function converse(speaker, listener, topicIdOrEditorId)
     local lines = 0
+    local used = {}
     local function over()
         conversing[speaker.id] = nil
         conversing[listener.id] = nil
@@ -1088,10 +1089,19 @@ local function converse(speaker, listener, topicIdOrEditorId)
                 or not (a:isValid() and b:isValid()) then
                 return over()
             end
+            -- the next topic is a random one of the line's choices not used yet in this conversation
+            local options = {}
             for _, choice in ipairs(info.choices) do
+                if not used[choice] then options[#options + 1] = choice end
+            end
+            local actor = dlg.getActor(b)
+            while #options > 0 and actor do
+                local i = math.random(#options)
+                local choice = options[i]
+                table.remove(options, i)
                 local topic = getTopic(choice)
-                local actor = dlg.getActor(b)
-                if topic and actor and pickInfoFor(topic, b, actor, a) then
+                if topic and pickInfoFor(topic, b, actor, a) then
+                    used[choice] = true
                     if not turn(b, a, choice) then over() end
                     return
                 end
@@ -1100,6 +1110,8 @@ local function converse(speaker, listener, topicIdOrEditorId)
         end)
     end
     local started = turn(speaker, listener, topicIdOrEditorId)
+    -- no opening line: the original falls back to GOODBYE
+    if not started and topicIdOrEditorId == 'HELLO' then started = turn(speaker, listener, 'GOODBYE') end
     if started then
         conversing[speaker.id] = true
         conversing[listener.id] = true
@@ -1172,6 +1184,36 @@ local lastHello = {} -- npc id -> simulation time of its last greeting
 local helloCheck = 0
 local simTime = 0
 
+-- Idle chatter (FalloutNV.exe 0x8eeec0): every NPC near the player says an IdleChatter line when its timer runs
+-- out, then waits fIdleChatterCommentTimer..Max seconds (15 to 60) for the next one.
+local IDLE_CHATTER_RANGE = 4096
+local nextChatter = {} -- npc id -> simulation time
+
+local function chatterDelay()
+    local lo = gmst('fIdleChatterCommentTimer', 15)
+    return lo + math.random() * math.max(gmst('fIdleChatterCommentTimerMax', 60) - lo, 0)
+end
+
+local function tickChatter(player)
+    if getTopic('IdleChatter') == nil then return end
+    for _, npc in ipairs(world.activeActors) do
+        if types.ESM4NPC.objectIsInstance(npc) and npc.cell and player.cell
+            and (npc.cell.id == player.cell.id or (npc.cell.isExterior and player.cell.isExterior))
+            and (npc.position - player.position):length() <= IDLE_CHATTER_RANGE then
+            local due = nextChatter[npc.id]
+            if due == nil then
+                nextChatter[npc.id] = simTime + chatterDelay()
+            elseif simTime >= due then
+                nextChatter[npc.id] = simTime + chatterDelay()
+                if not isSpeaking(npc) and not isDead(npc) and not conversing[npc.id]
+                    and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
+                    sayLine(npc, nil, 'IdleChatter')
+                end
+            end
+        end
+    end
+end
+
 local function tickGreetings(dt)
     simTime = simTime + dt
     helloCheck = helloCheck - dt
@@ -1179,6 +1221,7 @@ local function tickGreetings(dt)
     helloCheck = 0.5
     local player = world.players[1]
     if player == nil then return end
+    tickChatter(player)
     if core.obscript.combat and core.obscript.combat.isSneaking and core.obscript.combat.isSneaking(player) then
         return
     end
