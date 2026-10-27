@@ -161,6 +161,24 @@ local function noticesPlayer(actor)
     return d ~= nil and d.score > gmst('fSneakNoticedMin', -20)
 end
 
+-- How the actor's factions treat the player; factions the player has made enemies of by crime count as enemies.
+local function reactionOf(actor)
+    if I.FNVCrime and I.FNVCrime.isFactionEnemy(actor) then return 'enemy' end
+    return combat.getReaction(actor)
+end
+
+-- Whether the actor attacks the player now that it has seen a crime, by its Aggression and how its factions
+-- treat the player (FalloutNV.exe 0x8b06d0, without the detection and soft cap checks of wantsFight).
+local function shouldAttack(actor)
+    if I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(actor) then return false end
+    local aggression = stats.get(actor, 'Aggression')
+    if aggression >= 3 then return true end
+    local reaction = reactionOf(actor)
+    if reaction == 'ally' or reaction == 'friend' then return false end
+    if reaction == 'enemy' then return aggression >= 1 end
+    return aggression >= 2
+end
+
 local function wantsFight(actor, player)
     if I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(actor) then return false end
     local distance = (player.position - actor.position):length()
@@ -174,9 +192,11 @@ local function wantsFight(actor, player)
         end
         if attackers >= PLAYER_ATTACKER_SOFT_CAP then return false end
     end
+    -- a crime against it (scripts/omw/fnvcrime) makes it attack whatever its aggression
+    if I.FNVCrime and I.FNVCrime.isPlayerEnemy(actor) then return true end
     local aggression = stats.get(actor, 'Aggression')
     if aggression >= 3 then return true end
-    local reaction = combat.getReaction(actor)
+    local reaction = reactionOf(actor)
     if reaction == 'ally' or reaction == 'friend' then return false end
     if types.ESM4Creature.objectIsInstance(actor) then
         local aggro = combat.getAggroRadius(actor)
@@ -463,6 +483,9 @@ return {
         end,
         startCombat = startCombat,
         stopCombat = stopCombat,
+        shouldAttack = shouldAttack,
+        --- The actors in the scene the combat AI knows about (id -> object).
+        actors = function() return tracked end,
     },
     eventHandlers = {
         -- From the player script: { attacker, weapon = record id, origin = vec3, direction = vec3 }
@@ -505,6 +528,11 @@ return {
                         direction = e.direction,
                     })
                 end
+            end
+            if target ~= nil and target:isValid() and isActor(target) and I.FNVCrime then
+                -- assault and murder (scripts/omw/fnvcrime), before the target turns on the attacker
+                I.FNVCrime.attacked(target, e.attacker, e.killed == true, fighting[target.id] ~= nil
+                    and fighting[target.id].target == e.attacker)
             end
             if target ~= nil and target:isValid() and not e.killed and isActor(target) then
                 startCombat(target, e.attacker)

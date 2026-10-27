@@ -183,6 +183,18 @@ namespace MWWorld
         }
         void setOwner(const ESM::RefId& owner);
 
+        // ESM4: the global (XGLB) that, when set, lets anyone use the owned reference (rented beds)
+        ESM::FormId getOwnerGlobal() const
+        {
+            struct Visitor
+            {
+                ESM::FormId operator()(const ESM::CellRef&) { return {}; }
+                ESM::FormId operator()(const ESM4::Reference& ref) { return ref.mGlobal; }
+                ESM::FormId operator()(const ESM4::ActorCharacter& ref) { return ref.mGlobal; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Name of a global variable. If the global variable is set to '1', using the object is temporarily allowed
         // even if it has an Owner field.
         // Used by bed rent scripts to allow the player to use the bed for the duration of the rent.

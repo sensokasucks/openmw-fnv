@@ -345,6 +345,7 @@ end
 -- An NPC's rank in a faction: its record's ranks, changed by AddToFaction,
 -- RemoveFromFaction and SetFactionRank; nil when not a member.
 local function factionRank(a, factionId)
+    if a == nil then return nil end
     local changes = state.factions[a.reference]
     local changed = changes and changes[factionId]
     if changed ~= nil then
@@ -352,13 +353,19 @@ local function factionRank(a, factionId)
     end
     return a.factions[factionId]
 end
+-- the player's own faction changes (AddToFaction on the player) are kept under 'player'
+local function rankOf(obj, factionId)
+    if isPlayer(obj) then
+        local changed = state.factions.player and state.factions.player[factionId]
+        return changed or nil
+    end
+    return factionRank(actorData(obj), factionId)
+end
 functions[71] = function(cond, obj) -- GetInFaction
-    local a = actorData(obj)
-    return a ~= nil and factionRank(a, cond.param1Form) ~= nil
+    return rankOf(obj, cond.param1Form) ~= nil
 end
 functions[73] = function(cond, obj) -- GetFactionRank
-    local a = actorData(obj)
-    return a ~= nil and factionRank(a, cond.param1Form) or -1
+    return rankOf(obj, cond.param1Form) or -1
 end
 functions[50] = function(_, obj) -- GetTalkedToPC
     if obj == nil or isPlayer(obj) then return 0 end
@@ -1973,6 +1980,7 @@ end)
 -- `Ref.SetFactionRank Faction rank` (-1 removes), `GetInFaction`, `GetFactionRank`.
 local function setFactionRank(npc, faction, rank)
     local a = actorData(npc)
+    if a == nil and isPlayer(npc) then a = { reference = 'player' } end -- the player's factions (crime, trespass)
     local factionId = type(faction) == 'string' and core.obscript.resolveFactionEditorId(faction)
     if a == nil or not factionId then
         tlog('faction change: unknown NPC or faction ' .. tostring(faction))
@@ -2639,6 +2647,21 @@ return {
         end,
         --- Installs a CTDA condition function: fn(cond, object, subject, target)
         -- returns the function's value (object is the one the condition runs on).
+        --- The rank of an actor (the player too) in a faction (form id), nil when it is not a member.
+        factionRank = rankOf,
+        --- A global's value (form id or editor id), with script changes; nil if there is no such global.
+        globalValue = function(id) return globalValue(id) end,
+        --- Has the NPC say a line of the first of the topics (editor ids) that exists, to the target (default the
+        -- player), as SayTo does. @return whether it had a line
+        say = function(npc, topics, target)
+            if type(topics) == 'string' then topics = { topics } end
+            for _, topic in ipairs(topics) do
+                if getTopic(topic) ~= nil then
+                    return sayLine(npc, target, topic)
+                end
+            end
+            return false
+        end,
         setConditionFunction = function(index, fn)
             functions[index] = fn
             missingFunctions[index] = nil

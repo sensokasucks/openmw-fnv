@@ -43,8 +43,11 @@ void ESM4::Faction::load(ESM4::Reader& reader)
                 std::memcpy(&mFactionFlags, data, sizeof(mFactionFlags));
                 break;
             }
+            case ESM::fourCC("WMI1"):
+                reader.getFormId(mReputation);
+                break;
             default:
-                // Ranks, crime and reputation data
+                // Ranks and crime data
                 reader.skipSubRecordData();
                 break;
         }
