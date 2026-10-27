@@ -571,6 +571,8 @@ end
 
 -- Sandbox activity types of the original (SandBoxActorPackageData, FalloutNV.exe 0x9f4700)
 local SIT, SLEEP, EAT, WANDER, IDLE_MARKER, CONVERSATION = 0, 1, 2, 3, 4, 5
+local SANDBOX_NAMES = { [SIT] = 'sits', [SLEEP] = 'sleeps', [EAT] = 'eats', [WANDER] = 'wanders',
+    [IDLE_MARKER] = 'uses an idle marker', [CONVERSATION] = 'talks' }
 
 -- How long a sandboxing actor keeps at one activity (FalloutNV.exe 0x6435c0):
 -- fSandboxDurationBase x duration mult x (1 + Energy x fSandboxEnergyMult x energy mult), give or take
@@ -729,6 +731,11 @@ local function sandbox(npc, s, dest, pkg)
     local radius = (dest.radius or 0) >= 1 and dest.radius or gmstFloat('fSandBoxSearchRadius', 6000)
     if s.phase == nil or (s.phase == 'wait' and simTime >= s.waitUntil) then
         local chosen = sandboxPick(npc, s, center, radius, pkg.specificFlags or 0)
+        if chosen ~= nil and (chosen.kind == EAT or chosen.kind == SLEEP or chosen.window ~= nil) then
+            log(('%s (%s) sandbox: %s%s'):format(npc.recordId, tostring(npc.id), SANDBOX_NAMES[chosen.kind],
+                chosen.window and (' (in its %s window)'):format(chosen.window.kind == SLEEP and 'sleep' or 'meal')
+                or ''))
+        end
         if chosen == nil then
             -- nothing to do here: look again after iMin..iMaxSandboxRescanSeconds
             s.phase = 'wait'
@@ -2049,6 +2056,29 @@ return {
                 if npc:isValid() and not (combat and combat.isDead(npc)) then count = count + 1 end
             end
             return count
+        end,
+        --- For testing: the actor follows the player (a Follow package of distance 0, ahead of its own) until
+        -- called again with on = false. I.FNVAI.testFollow(obj, true)
+        testFollow = function(npc, on)
+            if npc == nil or not npc:isValid() then return end
+            if not on then
+                scriptPackages[npc.id] = nil
+            else
+                scriptPackages[npc.id] = { id = 'TestFollowPlayer', editorId = 'TestFollowPlayer', type = T.Follow,
+                    typeName = 'Follow', flags = 0, specificFlags = 0, conditions = {},
+                    schedule = { month = -1, dayOfWeek = -1, date = 0, hour = -1, duration = 0 },
+                    targets = { { type = 0, id = 'FormId:0x14', count = 0 } }, locations = {},
+                    onBegin = { idle = '', topic = '', script = '' }, onEnd = { idle = '', topic = '', script = '' },
+                    onChange = { idle = '', topic = '', script = '' }, idles = { flags = 0, timer = 0, list = {} } }
+            end
+            local s = states[npc.id]
+            if s then s.nextEvaluation = simTime end
+        end,
+        --- What the actor is doing, for scripts and tests: package editor id, phase, cell id.
+        describe = function(npc)
+            local s = npc and states[npc.id]
+            return { package = s and s.package and s.package.editorId, phase = s and s.phase,
+                talking = s and s.talk ~= nil, cell = npc and npc.cell and npc.cell.id }
         end,
         --- EvaluatePackage: re-picks the actor's package at its next behaviour update.
         evaluate = function(npc)
