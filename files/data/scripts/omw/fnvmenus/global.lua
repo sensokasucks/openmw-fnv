@@ -11,6 +11,7 @@
 local core = require('openmw.core')
 local types = require('openmw.types')
 local world = require('openmw.world')
+local I = require('openmw.interfaces')
 
 local obscript = core.obscript
 if obscript == nil or obscript.itemInfo == nil
@@ -79,13 +80,18 @@ return {
             if item == nil or not item:isValid() or item.count == 0 then return end
             local toContainer = item.parentContainer == e.player
             local target = toContainer and inventoryOf(e.container) or types.Actor.inventory(e.player)
-            move(item, math.max(1, math.min(e.count or 1, item.count)), target)
+            local count = math.max(1, math.min(e.count or 1, item.count))
+            if not toContainer and I.FNVCrime then I.FNVCrime.took(e.player, item, count, e.container) end
+            move(item, count, target)
         end,
         FNVContainerTakeAll = function(e)
             local playerInventory = types.Actor.inventory(e.player)
             for _, item in ipairs(inventoryOf(e.container):getAll()) do
                 local ok, info = pcall(obscript.itemInfo, item)
-                if ok and info.name ~= '' then move(item, item.count, playerInventory) end
+                if ok and info.name ~= '' then
+                    if I.FNVCrime then I.FNVCrime.took(e.player, item, item.count, e.container) end
+                    move(item, item.count, playerInventory)
+                end
             end
         end,
     },

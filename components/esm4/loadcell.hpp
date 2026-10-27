@@ -79,6 +79,7 @@ namespace ESM4
 
         ESM::FormId mOwner;
         ESM::FormId mGlobal;
+        std::int32_t mFactionRank = 0; // XRNK: the owning faction's rank needed to be there (FO3/FONV)
         ESM::FormId mClimate;
         ESM::FormId mWater;
         float mWaterHeight = sInvalidWaterLevel;

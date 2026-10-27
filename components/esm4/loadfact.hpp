@@ -37,6 +37,7 @@ namespace ESM4
         std::string mFullName;
         std::uint32_t mFactionFlags = 0; // DATA: 0x01 hidden from PC, 0x02 evil, 0x04 special combat, ...
         std::vector<Relation> mRelations;
+        ESM::FormId mReputation; // WMI1 (FONV): the reputation crimes against the faction count against
 
         void load(ESM4::Reader& reader);
 

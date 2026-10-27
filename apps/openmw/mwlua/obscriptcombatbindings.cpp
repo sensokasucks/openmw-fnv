@@ -10,6 +10,11 @@
 
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadammo.hpp>
+#include <components/esm4/loadcell.hpp>
+#include <components/esm4/loadclas.hpp>
+#include <components/esm4/loadcrea.hpp>
+#include <components/esm4/loadfact.hpp>
+#include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadflst.hpp>
 #include <components/esm4/loadweap.hpp>
 #include <components/lua/luastate.hpp>
@@ -20,6 +25,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwclass/esm4creature.hpp"
+#include "../mwclass/esm4npc.hpp"
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/esm4actors.hpp"
@@ -58,6 +64,21 @@ namespace MWLua
             if (id.isZeroOrUnset())
                 return {};
             return ESM::RefId(id).serializeText();
+        }
+
+        const ESM4::Cell* cellRecordOf(const MWWorld::Ptr& ptr)
+        {
+            if (ptr.getCell() == nullptr)
+                return nullptr;
+            const ESM::FormId* id = ptr.getCell()->getCell()->getId().getIf<ESM::FormId>();
+            if (id == nullptr)
+                return nullptr;
+            return MWBase::Environment::get().getESMStore()->get<ESM4::Cell>().search(ESM::RefId(*id));
+        }
+
+        bool isFactionForm(ESM::FormId id)
+        {
+            return MWBase::Environment::get().getESMStore()->get<ESM4::Faction>().search(ESM::RefId(id)) != nullptr;
         }
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
@@ -192,6 +213,136 @@ namespace MWLua
                 default:
                     return "neutral";
             }
+        };
+
+        // Crime (FalloutNV.exe 0x567790, 0x546da0): ownership, factions and guards.
+
+        // Factions of an NPC or creature record (template-resolved): { { id, rank }, ... }.
+        api["getFactions"] = [](const Object& actor, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            const MWWorld::Ptr& ptr = actor.ptr();
+            const std::vector<ESM4::ActorFaction>* factions = nullptr;
+            if (ptr.getType() == ESM::REC_NPC_4)
+            {
+                if (const ESM4::Npc* rec = MWClass::ESM4Npc::getFactionsRecord(ptr))
+                    factions = &rec->mFactions;
+            }
+            else if (ptr.getType() == ESM::REC_CREA4)
+            {
+                if (const ESM4::Creature* rec = MWClass::ESM4Creature::getFactionsRecord(ptr))
+                    factions = &rec->mFactions;
+            }
+            if (factions == nullptr)
+                return res;
+            for (const ESM4::ActorFaction& membership : *factions)
+            {
+                sol::table t(lua, sol::create);
+                t["id"] = formIdText(ESM::FormId::fromUint32(membership.faction));
+                t["rank"] = membership.rank;
+                res[res.size() + 1] = t;
+            }
+            return res;
+        };
+
+        // A faction (FACT) by form id: { id, editorId, name, evil (DATA 0x02), trackCrime (0x100), reputation (WMI1) },
+        // nil if none.
+        api["getFaction"] = [](std::string_view id, sol::this_state s) -> sol::object {
+            const ESM::RefId refId = ESM::RefId::deserializeText(id);
+            const ESM::FormId* formId = refId.getIf<ESM::FormId>();
+            if (formId == nullptr)
+                return sol::nil;
+            const ESM4::Faction* faction
+                = MWBase::Environment::get().getESMStore()->get<ESM4::Faction>().search(ESM::RefId(*formId));
+            if (faction == nullptr)
+                return sol::nil;
+            sol::state_view lua(s);
+            sol::table t(lua, sol::create);
+            t["id"] = formIdText(faction->mId);
+            t["editorId"] = faction->mEditorId;
+            t["name"] = faction->mFullName;
+            t["evil"] = (faction->mFactionFlags & 0x02) != 0;
+            t["trackCrime"] = (faction->mFactionFlags & 0x100) != 0;
+            if (!faction->mReputation.isZeroOrUnset())
+                t["reputation"] = formIdText(faction->mReputation);
+            return t;
+        };
+
+        // Guards: the class (CLAS) flag 0x02.
+        api["isGuard"] = [](const Object& actor) -> bool {
+            const MWWorld::Ptr& ptr = actor.ptr();
+            if (ptr.getType() != ESM::REC_NPC_4)
+                return false;
+            const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(ptr);
+            if (traits == nullptr)
+                traits = ptr.get<ESM4::Npc>()->mBase;
+            const ESM4::Class* cls
+                = MWBase::Environment::get().getESMStore()->get<ESM4::Class>().search(ESM::RefId(traits->mClass));
+            return cls != nullptr && (cls->mClassFlags & 0x02) != 0;
+        };
+
+        // Ownership of the cell an object is in: { owner, isFaction, global, rank (XRNK), public (CELL 0x20) };
+        // owner is nil when nobody owns it.
+        api["cellOwnership"] = [](const Object& object, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table t(lua, sol::create);
+            const ESM4::Cell* cell = cellRecordOf(object.ptr());
+            t["public"] = cell != nullptr && (cell->mCellFlags & ESM4::CELL_Public) != 0;
+            if (cell != nullptr && !cell->mOwner.isZeroOrUnset())
+            {
+                t["owner"] = formIdText(cell->mOwner);
+                t["isFaction"] = isFactionForm(cell->mOwner);
+                if (!cell->mGlobal.isZeroOrUnset())
+                    t["global"] = formIdText(cell->mGlobal);
+                t["rank"] = cell->mFactionRank;
+            }
+            return t;
+        };
+
+        // Who owns an object (FalloutNV.exe 0x567790): its own XOWN, else, unless it is a door or an activator,
+        // its cell's owner. { owner, isFaction, global, rank } or nil when nobody does. Items in a container are
+        // asked with the container as `holder`.
+        api["ownership"] = [](const Object& object, sol::optional<Object> holder, sol::this_state s) -> sol::object {
+            sol::state_view lua(s);
+            const MWWorld::Ptr& ptr = object.ptr();
+            auto own = [&](const MWWorld::Ptr& p) -> sol::object {
+                const ESM::RefId owner = p.getCellRef().getOwner();
+                const ESM::FormId* formId = owner.getIf<ESM::FormId>();
+                if (formId == nullptr || formId->isZeroOrUnset())
+                    return sol::nil;
+                sol::table t(lua, sol::create);
+                t["owner"] = formIdText(*formId);
+                t["isFaction"] = isFactionForm(*formId);
+                const ESM::FormId global = p.getCellRef().getOwnerGlobal();
+                if (!global.isZeroOrUnset())
+                    t["global"] = formIdText(global);
+                t["rank"] = -1;
+                return t;
+            };
+            sol::object res = own(ptr);
+            if (res != sol::nil)
+                return res;
+            MWWorld::Ptr placed = ptr;
+            if (holder)
+            {
+                placed = holder->ptr();
+                res = own(placed);
+                if (res != sol::nil)
+                    return res;
+            }
+            const unsigned int type = placed.getType();
+            if (type == ESM::REC_DOOR4 || type == ESM::REC_ACTI4 || type == ESM::REC_NPC_4 || type == ESM::REC_CREA4)
+                return sol::nil;
+            const ESM4::Cell* cell = cellRecordOf(placed);
+            if (cell == nullptr || cell->mOwner.isZeroOrUnset())
+                return sol::nil;
+            sol::table t(lua, sol::create);
+            t["owner"] = formIdText(cell->mOwner);
+            t["isFaction"] = isFactionForm(cell->mOwner);
+            if (!cell->mGlobal.isZeroOrUnset())
+                t["global"] = formIdText(cell->mGlobal);
+            t["rank"] = cell->mFactionRank;
+            return t;
         };
 
         api["canBeHit"] = [](const Object& actor) { return Combat::canBeHit(actor.ptr()); };
