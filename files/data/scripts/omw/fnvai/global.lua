@@ -1613,7 +1613,8 @@ local function conversationPartner(npc, s)
     local function fits(other)
         local os = states[other.id]
         return other ~= npc and other:isValid() and not types.Player.objectIsInstance(other) and os ~= nil
-            and sameCell(other.cell, npc.cell) and (other.position - npc.position):length() <= CONVERSATION_DISTANCE
+            and (sameCell(other.cell, npc.cell) or (other.cell.isExterior and npc.cell.isExterior))
+            and (other.position - npc.position):length() <= CONVERSATION_DISTANCE
             and simTime >= (recent[other.id] or 0) and freeToTalk(other, os)
     end
     if PARTNER_IS_TARGET[s.package.type] then
@@ -1651,6 +1652,8 @@ local function conversation(npc, s)
     s.talkedWith[partner.id] = simTime + block
     ps.talkedWith[npc.id] = simTime + block
     if not (I.FNVDialogue and I.FNVDialogue.converseWith and I.FNVDialogue.converseWith(npc, partner, 'HELLO')) then
+        log(('%s (%s) has nothing to say to %s (%s)'):format(npc.recordId, tostring(npc.id), partner.recordId,
+            tostring(partner.id)))
         return false
     end
     log(('%s talks with %s'):format(npc.recordId, partner.recordId))
