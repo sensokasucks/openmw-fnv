@@ -733,6 +733,12 @@ local function fight(s)
         local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
         noticed = los or distance <= REACH * 2 or (score ~= nil and score > gmst('fSneakNoticedMin', -20))
     end
+    if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > LOST_AFTER then
+        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, height difference %.0f, moving %s)')
+            :format(actor.recordId, tostring(actor.id), tostring(target.recordId), distance, tostring(score),
+                tostring(los), target.position.z - actor.position.z, tostring(ai.status(actor))))
+    end
     if noticed then
         if targetLost(s) then s.replanAt = 0 end
         s.lastSeenAt, s.lastSeenPos = simTime, target.position
@@ -753,6 +759,16 @@ local function fight(s)
     end
     local procedure = procedures[step.name]
     local result = procedure and procedure(s, step, distance, los) or 'failed'
+    if step.action.move and step.param ~= P.L.FLEE then
+        local state = s.stepState
+        state.startDistance = state.startDistance or distance
+        if not state.awayLogged and distance > state.startDistance + 300 then
+            state.awayLogged = true
+            print(('[combat] %s (%s) moves away from %s on %s: %.0f -> %.0f (moving %s, straight %s)'):format(
+                actor.recordId, tostring(actor.id), tostring(target.recordId), stepLabel(step), state.startDistance,
+                distance, tostring(ai.status(actor)), tostring(s.straight)))
+        end
+    end
     if result == 'running' and simTime - (s.stepStarted or simTime) > STEP_TIMEOUT
         and step.name:sub(1, 6) ~= 'ATTACK' and step.name ~= 'FLEE' then
         result = 'failed'
