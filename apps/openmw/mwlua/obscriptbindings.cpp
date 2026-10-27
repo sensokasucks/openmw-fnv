@@ -600,6 +600,14 @@ namespace MWLua
             return ESM::RefId(linked).serializeText();
         };
 
+        // Seconds a patrol waits at this reference (XPRD), nil when it is not a patrol point.
+        api["getPatrolIdleTime"] = [](const Object& object) -> sol::optional<float> {
+            const float time = object.ptr().getCellRef().getPatrolIdleTime();
+            if (time < 0.f)
+                return sol::nullopt;
+            return time;
+        };
+
         // The container a vendor NPC sells from (ACHR XMRC), as a form id; nil when the reference has none.
         api["getMerchantContainer"] = [](const Object& object) -> sol::optional<std::string> {
             const ESM4::ActorCharacter* ref

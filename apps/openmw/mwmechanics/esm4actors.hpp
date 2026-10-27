@@ -128,18 +128,22 @@ namespace MWMechanics
 
             // Actor avoidance
             float mAvoidCheck = 0.f; // seconds to the next look ahead
+            float mBlockedTime = 0.f; // how long something has been in the way
+            MWWorld::Ptr mBlocker; // what was in the way at the last look, only compared
+            osg::Vec3f mBlockerPosition;
             bool mAvoidWaiting = false; // standing until the way clears
-            float mAvoidWaited = 0.f;
-            MWWorld::Ptr mIgnored; // walked past (through) after waiting too long
-            float mIgnoreTime = 0.f;
+            float mAvoidWaitLeft = 0.f;
+            float mAvoidResume = 0.f; // clear time still needed before walking on
+            bool mWaitedOut = false; // waited the whole time for the same blocker
+            float mIgnoreTime = 0.f; // no new reaction after going around
             int mDetours = 0; // side steps added to this path
         };
 
         // Returns false when the actor is done with this state (stopped, arrived and turned).
         bool updateActor(const MWWorld::Ptr& ptr, State& state, float duration);
-        // Looks ahead along the path for other actors (and the player) in the way: steps around them when the
-        // navmesh leaves room, else waits for them to move, and after waiting long enough walks on regardless.
-        // True while the actor waits.
+        // Looks ahead along the path for other actors (and the player) in the way, as the original does: after
+        // being blocked for a moment it waits for someone standing still and goes around someone moving. True
+        // while the actor waits.
         bool avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration);
         void startUsing(const MWWorld::Ptr& ptr, State& state);
         void finishUsing(const MWWorld::Ptr& ptr, State& state);

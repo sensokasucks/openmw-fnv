@@ -122,6 +122,33 @@ function M.findFurniture(npc, center, radius, wantSleep)
     return best
 end
 
+-- Every free piece of furniture of the wanted kind within radius of center, with its marker nearest the NPC.
+-- @return list of targets as findFurniture returns them
+function M.listFurniture(npc, center, radius, wantSleep)
+    local list = {}
+    if types.ESM4Furniture == nil then return list end
+    for _, obj in ipairs(npc.cell:getAll()) do
+        if types.ESM4Furniture.objectIsInstance(obj) and obj.enabled and isFree(obj, npc)
+            and (obj.position - center):length() <= radius then
+            local record = types.ESM4Furniture.record(obj)
+            local best, bestDistance = nil, math.huge
+            for _, marker in ipairs(types.ESM4Furniture.markers(obj)) do
+                local kind = wantSleep and sleepMarkers[marker.type] or (not wantSleep and sitMarkers[marker.type])
+                if kind and markerEnabled(record, marker) and markerDelta[marker.type] ~= nil then
+                    local position, yaw = M.markerWorld(obj, marker)
+                    local distance = (position - npc.position):length()
+                    if distance < bestDistance then
+                        best = { object = obj, marker = marker, position = position, yaw = yaw, sleep = wantSleep }
+                        bestDistance = distance
+                    end
+                end
+            end
+            if best ~= nil then list[#list + 1] = best end
+        end
+    end
+    return list
+end
+
 -- The marker of one piece of furniture the NPC would use, nearest first: seats and lean spots, else beds.
 -- nil when another actor uses it or it has no usable marker.
 -- @return a target as findFurniture returns it, with sleep = true for a bed
@@ -174,6 +201,22 @@ function M.findIdleMarker(npc, center, radius)
         end
     end
     return best
+end
+
+-- Every free idle marker within radius of center with idles the NPC can play.
+function M.listIdleMarkers(npc, center, radius)
+    local list = {}
+    if types.ESM4IdleMarker == nil then return list end
+    for _, obj in ipairs(npc.cell:getAll()) do
+        if types.ESM4IdleMarker.objectIsInstance(obj) and obj.enabled and isFree(obj, npc)
+            and (obj.position - center):length() <= radius then
+            local record = types.ESM4IdleMarker.record(obj)
+            if M.hasNpcIdles(record) then
+                list[#list + 1] = { object = obj, position = obj.position, yaw = obj.rotation:getYaw(), record = record }
+            end
+        end
+    end
+    return list
 end
 
 -- ---------------------------------------------------------------- using

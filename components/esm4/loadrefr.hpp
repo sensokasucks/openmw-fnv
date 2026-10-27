@@ -121,6 +121,7 @@ namespace ESM4
 
         ESM::FormId mTargetRef;
         ESM::FormId mLinkedRef; // XLKR (FO3/FONV), GetLinkedRef
+        float mPatrolIdleTime = -1.f; // XPRD (FO3/FONV): seconds a patrol waits at this point, -1 when not a patrol point
 
         // XPRM (FO3/FNV): primitive half extents of a trigger volume, zero if none
         float mPrimitiveBounds[3] = { 0.f, 0.f, 0.f };

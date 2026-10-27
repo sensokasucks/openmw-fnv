@@ -70,6 +70,18 @@ namespace MWWorld
             return std::visit(Visitor(), mCellRef.mVariant);
         }
 
+        // Patrol idle time (ESM4 XPRD) in seconds; negative when the reference is not a patrol point.
+        float getPatrolIdleTime() const
+        {
+            struct Visitor
+            {
+                float operator()(const ESM::CellRef&) { return -1.f; }
+                float operator()(const ESM4::Reference& ref) { return ref.mPatrolIdleTime; }
+                float operator()(const ESM4::ActorCharacter&) { return -1.f; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Id of object being referenced
         ESM::RefId getRefId() const
         {

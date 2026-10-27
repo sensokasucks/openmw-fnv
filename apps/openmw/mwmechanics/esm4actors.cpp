@@ -36,13 +36,18 @@ namespace MWMechanics
         constexpr float sDefaultRunSpeed = 300.f;
         const float sTurnSpeed = static_cast<float>(osg::PI) * 1.5f; // radians per second (osg::PI is not constexpr everywhere)
 
-        // Actor avoidance (FalloutNV.exe 0x9e5690)
+        // Actor avoidance (FalloutNV.exe 0x9e5690, 0x9e5ae0, 0x9e0a00; the :Pathfinding INI defaults)
         constexpr float sAvoidCheckInterval = 0.1f; // seconds between looks ahead
-        constexpr float sAvoidLookAheadTime = 1.f; // seconds of walking looked ahead
-        constexpr float sAvoidMinLookAhead = 100.f; // units
-        constexpr float sAvoidActorRadius = 24.f; // an NPC's collision box is 40 units wide
-        constexpr float sAvoidWaitTime = 5.f; // fAvoidanceDefaultWaitTime: how long to wait before walking on
-        constexpr float sAvoidIgnoreTime = 3.f; // how long an actor walked past is not avoided again
+        constexpr float sAvoidTimeCheck = 0.75f; // fAvoidanceTimeCheck: seconds of walking looked ahead
+        constexpr float sAvoidAllRadius = 100.f; // fAvoidanceAvoidAllRadius: shortest look ahead
+        constexpr float sAvoidDetectionTime = 0.5f; // fAvoidanceDetectionTime: blocked this long before reacting
+        constexpr float sAvoidWaitTime = 5.f; // fAvoidanceDefaultWaitTime: longest wait
+        constexpr float sAvoidMinWaitTime = 0.25f; // fAvoidanceMinWaitTime: clear this long to walk on
+        constexpr float sAvoidIgnoreTime = 5.f; // fAvoidanceIgnoreTime: no new reaction after going around
+        constexpr float sAvoidIgnoreMinTime = 2.5f; // fAvoidanceIgnoreMinTime: the same, around the player
+        constexpr float sAvoidActorRadius = 20.f; // an NPC's collision box is 40 units wide
+        constexpr float sAvoidCircleMult = 1.5f; // avoid circles are 1.5 times the blocker's radius
+        constexpr float sAvoidMovingSpeed = 20.f; // units per second above which a blocker counts as moving
         constexpr int sAvoidMaxDetours = 8;
         constexpr float sAvoidEyeHeight = 64.f;
 
@@ -134,7 +139,7 @@ namespace MWMechanics
         state.mCorridorIndex = 0;
         state.mDetours = 0;
         state.mAvoidWaiting = false;
-        state.mAvoidWaited = 0.f;
+        state.mBlockedTime = 0.f;
 
         const std::optional<ESM::FormId> cell = getCellFormId(ptr);
         const osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
@@ -561,14 +566,11 @@ namespace MWMechanics
     bool ESM4Actors::avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration)
     {
         if (state.mIgnoreTime > 0.f)
-        {
             state.mIgnoreTime -= duration;
-            if (state.mIgnoreTime <= 0.f)
-                state.mIgnored = MWWorld::Ptr();
-        }
         state.mAvoidCheck -= duration;
         if (state.mAvoidCheck > 0.f)
             return state.mAvoidWaiting;
+        const float elapsed = sAvoidCheckInterval - state.mAvoidCheck;
         state.mAvoidCheck = sAvoidCheckInterval;
         if (state.mNextPoint >= state.mPath.mPoints.size())
             return false;
@@ -582,10 +584,12 @@ namespace MWMechanics
         const osg::Vec3f direction = toPoint / pointDistance;
         const osg::Vec3f right(direction.y(), -direction.x(), 0.f);
 
-        // Three rays at chest height: along the path and at either shoulder
+        // What is in the way within the look ahead: three rays at chest height, along the path and at either
+        // shoulder (the original tests a cone of fAvoidanceConeAngle 45 degrees either side against the actors
+        // within reach)
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         const MWPhysics::RayCastingInterface& rays = *world.getRayCasting();
-        const float lookAhead = std::max(speed * sAvoidLookAheadTime, sAvoidMinLookAhead);
+        const float lookAhead = std::max(speed * sAvoidTimeCheck, sAvoidAllRadius);
         const osg::Vec3f eye(0.f, 0.f, sAvoidEyeHeight);
         const std::vector<MWWorld::ConstPtr> ignore{ ptr };
         MWWorld::Ptr obstacle;
@@ -595,7 +599,7 @@ namespace MWMechanics
             const osg::Vec3f from = position + eye + right * side;
             const MWPhysics::RayCastingResult hit
                 = rays.castRay(from, from + direction * lookAhead, ignore, {}, MWPhysics::CollisionType_Actor);
-            if (!hit.mHit || hit.mHitObject.isEmpty() || hit.mHitObject == state.mIgnored)
+            if (!hit.mHit || hit.mHitObject.isEmpty())
                 continue;
             const float distance = (hit.mHitPos - from).length();
             if (distance < obstacleDistance)
@@ -604,14 +608,41 @@ namespace MWMechanics
                 obstacleDistance = distance;
             }
         }
-        if (obstacle.isEmpty())
+
+        if (state.mAvoidWaiting)
         {
+            // Waiting: walk on once the way has been clear for fAvoidanceMinWaitTime, or the wait is over
+            state.mAvoidWaitLeft -= elapsed;
+            if (obstacle.isEmpty())
+                state.mAvoidResume -= elapsed;
+            else
+                state.mAvoidResume = sAvoidMinWaitTime;
+            if (state.mAvoidResume > 0.f && state.mAvoidWaitLeft > 0.f)
+                return true;
             state.mAvoidWaiting = false;
-            state.mAvoidWaited = 0.f;
+            state.mBlockedTime = 0.f;
+            // Waited it out and still blocked: next time go around it instead of waiting again
+            state.mWaitedOut = state.mAvoidWaitLeft <= 0.f && !obstacle.isEmpty();
+            return false;
+        }
+
+        if (obstacle.isEmpty() || state.mIgnoreTime > 0.f)
+        {
+            state.mBlockedTime = std::max(0.f, state.mBlockedTime - elapsed);
+            state.mBlocker = MWWorld::Ptr();
             return false;
         }
 
         const osg::Vec3f obstaclePosition = obstacle.getRefData().getPosition().asVec3();
+        bool moving = false;
+        if (obstacle == state.mBlocker)
+            moving = (obstaclePosition - state.mBlockerPosition).length() > sAvoidMovingSpeed * elapsed;
+        else
+            state.mWaitedOut = false;
+        state.mBlocker = obstacle;
+        state.mBlockerPosition = obstaclePosition;
+        const bool player = obstacle == world.getPlayerPtr();
+
         // Someone standing at the goal: close enough counts as there
         const bool lastLeg = state.mNextPoint + 1 == state.mPath.mPoints.size();
         if (lastLeg && pointDistance <= obstacleDistance + 2 * sAvoidActorRadius + state.mOptions.mTolerance)
@@ -619,58 +650,61 @@ namespace MWMechanics
             state.mNextPoint = state.mPath.mPoints.size();
             state.mStatus = Status::Arrived;
             state.mTurnTo = state.mOptions.mFinalYaw;
-            state.mAvoidWaiting = false;
+            state.mBlockedTime = 0.f;
             setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
             return false;
         }
 
-        // Step around it on the side it leaves free, as long as the navmesh goes there and nothing is in the way
-        if (state.mDetours < sAvoidMaxDetours)
+        // Blocked time counts double for a blocker standing still
+        state.mBlockedTime += elapsed * (moving || player ? 1.f : 2.f);
+        if (state.mBlockedTime <= sAvoidDetectionTime)
+            return false;
+        state.mBlockedTime = 0.f;
+
+        if (!moving && !state.mWaitedOut)
         {
-            osg::Vec3f offset = obstaclePosition - position;
-            offset.z() = 0.f;
-            const float lateral = offset * right;
-            const float clearance = 3.f * sAvoidActorRadius;
-            const std::optional<ESM::FormId> cell = getCellFormId(ptr);
-            for (float side : { lateral > 0.f ? -1.f : 1.f, lateral > 0.f ? 1.f : -1.f })
-            {
-                osg::Vec3f detour = obstaclePosition + right * (side * clearance);
-                detour.z() = position.z();
-                if (cell)
-                {
-                    const std::optional<ESM4Navigation::Triangle> triangle = mNavigation.locate(*cell, detour);
-                    if (!triangle || !ESM4Navigation::contains2D(*triangle, detour.x(), detour.y()))
-                        continue;
-                    const float height = ESM4Navigation::heightAt(*triangle, detour.x(), detour.y());
-                    if (std::abs(height - position.z()) > 64.f)
-                        continue;
-                    detour.z() = height;
-                }
-                const MWPhysics::RayCastingResult blocked = rays.castRay(position + eye, detour + eye, ignore, {},
-                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor);
-                if (blocked.mHit)
-                    continue;
-                state.mPath.mPoints.insert(
-                    state.mPath.mPoints.begin() + static_cast<std::ptrdiff_t>(state.mNextPoint), detour);
-                ++state.mDetours;
-                state.mAvoidWaiting = false;
-                state.mAvoidWaited = 0.f;
-                return false;
-            }
+            // Someone standing in the way: wait for them to move
+            state.mAvoidWaiting = true;
+            state.mAvoidWaitLeft = sAvoidWaitTime;
+            state.mAvoidResume = sAvoidMinWaitTime;
+            return true;
         }
 
-        // No way around: wait for it to move, then walk on regardless
-        state.mAvoidWaited += sAvoidCheckInterval;
-        if (state.mAvoidWaited >= sAvoidWaitTime)
+        // Go around it: a point beside the blocker, outside its avoid circle, on the side it leaves free, where
+        // the navmesh goes and nothing is in the way
+        state.mWaitedOut = false;
+        state.mIgnoreTime = player ? std::max(sAvoidIgnoreTime, sAvoidIgnoreMinTime) : sAvoidIgnoreTime;
+        if (state.mDetours >= sAvoidMaxDetours)
+            return false;
+        osg::Vec3f offset = obstaclePosition - position;
+        offset.z() = 0.f;
+        const float lateral = offset * right;
+        const float clearance = sAvoidActorRadius * sAvoidCircleMult + sAvoidActorRadius;
+        const std::optional<ESM::FormId> cell = getCellFormId(ptr);
+        for (float side : { lateral > 0.f ? -1.f : 1.f, lateral > 0.f ? 1.f : -1.f })
         {
-            state.mIgnored = obstacle;
-            state.mIgnoreTime = sAvoidIgnoreTime;
-            state.mAvoidWaited = 0.f;
-            state.mAvoidWaiting = false;
+            osg::Vec3f detour = obstaclePosition + right * (side * clearance);
+            detour.z() = position.z();
+            if (cell)
+            {
+                const std::optional<ESM4Navigation::Triangle> triangle = mNavigation.locate(*cell, detour);
+                if (!triangle || !ESM4Navigation::contains2D(*triangle, detour.x(), detour.y()))
+                    continue;
+                const float height = ESM4Navigation::heightAt(*triangle, detour.x(), detour.y());
+                if (std::abs(height - position.z()) > 64.f)
+                    continue;
+                detour.z() = height;
+            }
+            const MWPhysics::RayCastingResult blocked = rays.castRay(position + eye, detour + eye, ignore, {},
+                MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor);
+            if (blocked.mHit)
+                continue;
+            state.mPath.mPoints.insert(
+                state.mPath.mPoints.begin() + static_cast<std::ptrdiff_t>(state.mNextPoint), detour);
+            ++state.mDetours;
             return false;
         }
-        state.mAvoidWaiting = true;
-        return true;
+        return false;
     }
 
     void ESM4Actors::lookAt(const MWWorld::Ptr& ptr, const MWWorld::Ptr& target)

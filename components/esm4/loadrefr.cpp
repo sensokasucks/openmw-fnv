@@ -351,8 +351,13 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XOCP"):
             case ESM::fourCC("XPOD"):
             case ESM::fourCC("XPTL"):
+            case ESM::fourCC("XPRD"): // patrol data: the idle time at this point
+                if (subHdr.dataSize == 4)
+                    reader.get(mPatrolIdleTime);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XPPA"):
-            case ESM::fourCC("XPRD"):
             case ESM::fourCC("XPWR"):
             case ESM::fourCC("XRMR"):
             case ESM::fourCC("XSPC"):

@@ -511,37 +511,6 @@ local function reachCell(npc, s, dest)
     return false
 end
 
--- ---------------------------------------------------------------- sandbox durations
-
--- How long a sandboxing actor keeps at one activity (sandbox duration, FalloutNV.exe 0x6435c0):
--- fSandboxDurationBase x the activity's fSandboxDurationMult*, scaled by the actor's Energy, give or take
--- fSandboxDurationRangeMult. The ESM values are what the game uses.
-local SANDBOX_ACTIVITY = {
-    furniture = { mult = 'fSandboxDurationMultFurniture', default = 3.0,
-        energy = 'fSandboxEnergyMultFurniture' },
-    idleMarker = { mult = 'fSandboxDurationMultIdleMarker', default = 1.5,
-        energy = 'fSandboxEnergyMultIdleMarker' },
-    eating = { mult = 'fSandboxDurationMultEating', default = 0.75, energy = 'fSandboxEnergyMultEating' },
-    wandering = { mult = 'fSandboxDurationMultWandering', default = 0.5,
-        energy = 'fSandboxEnergyMultWandering' },
-}
-
-local function energyOf(npc)
-    if stats == nil then return 50 end
-    local ok, value = pcall(stats.get, npc, 'Energy')
-    return ok and value or 50
-end
-
-local function sandboxDuration(npc, s, activity)
-    local a = SANDBOX_ACTIVITY[activity]
-    local duration = gmstFloat('fSandboxDurationBase', 10) * gmstFloat(a.mult, a.default)
-    -- Energy 0..100: a low-energy actor lingers longer, an energetic one moves on sooner
-    local energyMult = gmstFloat(a.energy, 0)
-    duration = duration * math.max(1 + (50 - energyOf(npc)) / 100 * energyMult, 0.1)
-    local range = gmstFloat('fSandboxDurationRangeMult', 0.25)
-    return duration * (1 + (rand(s) * 2 - 1) * range)
-end
-
 -- ---------------------------------------------------------------- walking to the package location
 
 -- Travel-like: walk to the place and stay. A Travel to a piece of furniture ends with the actor using it (Doc
@@ -593,55 +562,150 @@ local function goAndStay(npc, s, dest, pkg, arrived)
     end
 end
 
--- Sandbox/Wander: walk to random spots around the place and linger there; a sandboxing NPC also sits on
--- the chairs and uses the idle markers nearby.
-local function roam(npc, s, dest, pkg)
+-- ---------------------------------------------------------------- sandbox
+
+-- Sandbox activity types of the original (SandBoxActorPackageData, FalloutNV.exe 0x9f4700)
+local SIT, SLEEP, EAT, WANDER, IDLE_MARKER, CONVERSATION = 0, 1, 2, 3, 4, 5
+
+-- How long a sandboxing actor keeps at one activity (FalloutNV.exe 0x6435c0):
+-- fSandboxDurationBase x duration mult x (1 + Energy x fSandboxEnergyMult x energy mult), give or take
+-- fSandboxDurationRangeMult. Energy is the actor's AIDT Energy, 0 to 100: a lively actor sits and eats for less
+-- time and wanders and idles for longer. Conversations use the wandering values.
+local SANDBOX_DURATION = {
+    [SIT] = { 'fSandboxDurationMultFurniture', 3.0, 'fSandboxEnergyMultFurniture', -0.1 },
+    [SLEEP] = { 'fSandboxDurationMultFurniture', 3.0, 'fSandboxEnergyMultFurniture', -0.1 },
+    [EAT] = { 'fSandboxDurationMultEating', 0.75, 'fSandboxEnergyMultEating', -0.05 },
+    [WANDER] = { 'fSandboxDurationMultWandering', 0.5, 'fSandboxEnergyMultWandering', 0.2 },
+    [IDLE_MARKER] = { 'fSandboxDurationMultIdleMarker', 1.5, 'fSandboxEnergyMultIdleMarker', 0.05 },
+    [CONVERSATION] = { 'fSandboxDurationMultWandering', 0.5, 'fSandboxEnergyMultWandering', 0.2 },
+}
+
+local function energyOf(npc)
+    if stats == nil then return 50 end
+    local ok, value = pcall(stats.get, npc, 'Energy')
+    return ok and value or 50
+end
+
+local function sandboxDuration(npc, s, activity)
+    local a = SANDBOX_DURATION[activity]
+    local duration = gmstFloat('fSandboxDurationBase', 10) * gmstFloat(a[1], a[2])
+        * (1 + energyOf(npc) * gmstFloat('fSandboxEnergyMult', 0.05) * gmstFloat(a[3], a[4]))
+    local range = gmstFloat('fSandboxDurationRangeMult', 0.25)
+    return math.max(duration, 0) * (1 + (rand(s) * 2 - 1) * range)
+end
+
+-- Picks the next activity like the original: every candidate (each free seat, each idle marker the actor can
+-- use, one entry for wandering) weighs as much as its type's age, the number of picks since that type was last
+-- chosen, so what an actor has not done for a while gets likelier. The thing used last is left alone for
+-- iSandBoxPreventRepeatedActionTime. The search radius is the package location's, else fSandBoxSearchRadius.
+-- Not done yet: eating (food items), sleeping in the sleep window, and conversations.
+local function sandboxPick(npc, s, center, radius, flags)
+    local age = s.sandboxAge
+    if age == nil then
+        age = { [SIT] = 1, [SLEEP] = 1, [EAT] = 1, [WANDER] = 1, [IDLE_MARKER] = 1, [CONVERSATION] = 1 }
+        s.sandboxAge = age
+    end
+    local weights = { [SIT] = age[SIT], [SLEEP] = 0, [EAT] = 0, [WANDER] = age[WANDER],
+        [IDLE_MARKER] = age[IDLE_MARKER], [CONVERSATION] = 0 }
+    local blocked = s.sandboxLast ~= nil and simTime < s.sandboxLast.until_ and s.sandboxLast.id or nil
+    local candidates, total = {}, 0
+    local function add(kind, target)
+        local w = weights[kind]
+        if w <= 0 or (target ~= nil and (target.object.id == blocked or (s.avoid and s.avoid[target.object.id]))) then
+            return
+        end
+        candidates[#candidates + 1] = { kind = kind, target = target, weight = w }
+        total = total + w
+    end
+    if not s.creature then
+        if not hasFlag(flags, SANDBOX_NO_FURNITURE) then
+            for _, target in ipairs(furniture.listFurniture(npc, center, radius, false)) do add(SIT, target) end
+        end
+        if not hasFlag(flags, SANDBOX_NO_IDLE_MARKERS) then
+            for _, target in ipairs(furniture.listIdleMarkers(npc, center, radius)) do add(IDLE_MARKER, target) end
+        end
+    end
+    if not hasFlag(flags, SANDBOX_NO_WANDERING) then add(WANDER, nil) end
+    if total <= 0 then return nil end
+    local r = rand(s) * total
+    local chosen = candidates[#candidates]
+    for _, c in ipairs(candidates) do
+        r = r - c.weight
+        if r < 0 then
+            chosen = c
+            break
+        end
+    end
+    for kind, value in pairs(age) do
+        age[kind] = math.min(value + 1, 255)
+    end
+    age[chosen.kind] = 1
+    if chosen.target ~= nil then
+        s.sandboxLast = { id = chosen.target.object.id,
+            until_ = simTime + gmstFloat('iSandBoxPreventRepeatedActionTime', 30) }
+    end
+    return chosen
+end
+
+local function sandbox(npc, s, dest, pkg)
+    local center = dest.position or s.anchor
+    local radius = (dest.radius or 0) >= 1 and dest.radius or gmstFloat('fSandBoxSearchRadius', 6000)
+    if s.phase == nil or (s.phase == 'wait' and simTime >= s.waitUntil) then
+        local chosen = sandboxPick(npc, s, center, radius, pkg.specificFlags or 0)
+        if chosen == nil then
+            -- nothing to do here: look again after iMin..iMaxSandboxRescanSeconds
+            s.phase = 'wait'
+            s.waitUntil = simTime + rand(s, gmstFloat('iMinSandboxRescanSeconds', 3),
+                math.max(gmstFloat('iMaxSandboxRescanSeconds', 6), gmstFloat('iMinSandboxRescanSeconds', 3)))
+            return
+        end
+        local duration = sandboxDuration(npc, s, chosen.kind)
+        if chosen.kind == WANDER then
+            s.activityUntil = simTime + duration
+            local point = ai.randomPoint(npc, center, math.min(radius, 6000))
+            if point == nil then
+                s.phase, s.waitUntil = 'wait', s.activityUntil
+                return
+            end
+            moveTo(npc, s, point, {})
+            return
+        end
+        if chosen.kind == IDLE_MARKER and chosen.target.record.idleTimer > 0 then
+            duration = chosen.target.record.idleTimer
+        end
+        furniture.begin(npc, s, chosen.target, { package = pkg.type, duration = duration }, simTime)
+        s.phase = 'furniture'
+    elseif s.phase == 'go' then
+        if moveStatus(npc, s) ~= 'moving' then
+            -- at the wander spot: stand there for what is left of the activity
+            s.phase = 'wait'
+            s.waitUntil = math.max(s.activityUntil or simTime, simTime + 1)
+            if rand(s) < 0.5 then
+                ai.face(npc, (rand(s) * 2 - 1) * math.pi)
+            end
+        end
+    end
+end
+
+-- Wander: walk to random spots around the place and linger there.
+local function roam(npc, s, dest)
     local center = dest.position or s.anchor
     local radius = dest.radius
     if radius == nil or radius <= 0 then
         radius = dest.position and 512 or 1024
     end
-    local sandbox = pkg ~= nil and pkg.type == T.Sandbox
     if s.phase == nil or (s.phase == 'wait' and simTime >= s.waitUntil) then
-        local flags = sandbox and pkg.specificFlags or 0
-        local roll = rand(s)
-        if sandbox and not s.creature and not hasFlag(flags, SANDBOX_NO_FURNITURE) and roll < 0.45 then
-            local target = furniture.findFurniture(npc, center, radius, false)
-            if target ~= nil and not (s.avoid and s.avoid[target.object.id]) then
-                furniture.begin(npc, s, target, { package = pkg.type,
-                    duration = sandboxDuration(npc, s, 'furniture') }, simTime)
-                s.phase = 'furniture'
-                return
-            end
-        end
-        if sandbox and not s.creature and not hasFlag(flags, SANDBOX_NO_IDLE_MARKERS) and roll < 0.75 then
-            local target = furniture.findIdleMarker(npc, center, radius)
-            if target ~= nil and not (s.avoid and s.avoid[target.object.id]) then
-                local duration = target.record.idleTimer
-                if duration <= 0 then duration = sandboxDuration(npc, s, 'idleMarker') end
-                furniture.begin(npc, s, target, { package = pkg.type, duration = duration }, simTime)
-                s.phase = 'furniture'
-                return
-            end
-        end
-        local linger = sandbox and sandboxDuration(npc, s, 'wandering') or (6 + rand(s) * 14)
-        if hasFlag(flags, SANDBOX_NO_WANDERING) then
-            s.phase, s.waitUntil = 'wait', simTime + linger
-            return
-        end
         local point = ai.randomPoint(npc, center, radius)
         if point == nil then
             s.phase, s.waitUntil = 'wait', simTime + 10
             return
         end
-        s.linger = linger
         moveTo(npc, s, point, {})
     elseif s.phase == 'go' then
         local status = moveStatus(npc, s)
         if status ~= 'moving' then
             s.phase = 'wait'
-            s.waitUntil = simTime + (s.linger or (6 + rand(s) * 14))
-            s.linger = nil
+            s.waitUntil = simTime + 6 + rand(s) * 14
             if rand(s) < 0.5 then
                 ai.face(npc, (rand(s) * 2 - 1) * math.pi)
             end
@@ -840,118 +904,149 @@ end
 
 -- ---------------------------------------------------------------- patrol
 
--- Patrol: the actor walks the chain of linked references (XLKR) that starts at the package location. At an
--- idle marker it plays the marker's idles for the marker's idle timer; at any other point it waits the
--- package's idle timer (IDLT), playing the package's idles (IDLA), or goes straight on. At the end of the chain
--- (no linked reference, or back at the start) a repeatable patrol (PKPT) starts over from the first point;
--- one that is not ends there.
+-- Patrol (PATROL procedure, FalloutNV.exe 0x92acd0): the route is the chain of linked references (XLKR) from
+-- the package location, followed until a point repeats or the chain ends. At each point the actor waits that
+-- point's own patrol idle time (XPRD); an idle marker plays its idles meanwhile, a piece of furniture is used.
+-- At the end of the route a patrol that is not repeatable (PKPT) is done; a repeatable one goes on from the
+-- point the route loops back to, or, when it does not loop, walks it back the other way. A repeatable patrol
+-- starts at the point nearest the actor. It walks, unless the package has Always Run.
+local PATROL_ARRIVE_RADIUS = 32
+
 local function referenceIdOf(obj)
     local ok, id = pcall(function() return dlg.getReferenceId(obj) end)
     return ok and id or nil
 end
 
-local function patrolStart(npc, s, dest)
+local function patrolRoute(dest, pkg)
     local first = dest.ref and referenceIdOf(dest.ref)
-    s.patrol = { first = first, current = first, laps = 0 }
+    local points, seen = {}, {}
+    local loopTo = nil
+    local current = first
+    while current ~= nil and current ~= '' and #points < 256 do
+        if seen[current] ~= nil then
+            if pkg.patrolRepeatable then loopTo = seen[current] end
+            break
+        end
+        points[#points + 1] = current
+        seen[current] = #points
+        local obj = getObject(current)
+        current = obj and core.obscript.getLinkedRef and core.obscript.getLinkedRef(obj) or nil
+    end
+    return points, loopTo
 end
 
--- The point after the current one; nil at the end of the chain.
-local function patrolNext(p)
-    local current = getObject(p.current)
-    local linked = current and core.obscript.getLinkedRef and core.obscript.getLinkedRef(current)
-    if linked == nil or linked == '' then return nil end
-    return linked
+local function patrolStart(npc, s, dest, pkg)
+    local points, loopTo = patrolRoute(dest, pkg)
+    local index = 1
+    if pkg.patrolRepeatable then
+        local bestDistance = math.huge
+        for i, id in ipairs(points) do
+            local obj = getObject(id)
+            if obj ~= nil and sameCell(obj.cell, npc.cell) then
+                local distance = (obj.position - npc.position):length()
+                if distance < bestDistance then index, bestDistance = i, distance end
+            end
+        end
+    end
+    s.patrol = { points = points, loopTo = loopTo, index = index, step = 1 }
+end
+
+-- Moves on to the next point; false once a patrol that is not repeatable is at its end.
+local function patrolStep(p, pkg)
+    local count = #p.points
+    if count <= 1 then return pkg.patrolRepeatable end
+    local nextIndex = p.index + p.step
+    if nextIndex >= 1 and nextIndex <= count then
+        p.index = nextIndex
+        return true
+    end
+    if not pkg.patrolRepeatable then return false end
+    if p.loopTo ~= nil then
+        p.index = p.loopTo
+    else
+        p.step = -p.step -- back the way it came
+        p.index = p.index + p.step
+    end
+    return true
 end
 
 local function patrolAdvance(npc, s, pkg)
-    local p = s.patrol
-    local nextId = patrolNext(p)
-    if nextId == nil or nextId == p.first then
-        p.laps = p.laps + 1
-        if not pkg.patrolRepeatable then
-            completePackage(npc, s, 'patrolled')
-            s.phase = 'stay'
-            return
-        end
-        nextId = p.first
+    if not patrolStep(s.patrol, pkg) then
+        completePackage(npc, s, 'patrolled')
+        s.phase = 'stay'
+        return
     end
-    p.current = nextId
     s.phase = nil
 end
 
-local function patrolIdle(npc, s, pkg)
-    local list = pkg.idles and pkg.idles.list or {}
-    if #list == 0 or ai.isIdlePlaying(npc) then return end
-    local p = s.patrol
-    local index
-    if hasFlag(pkg.idles.flags, 1) then -- run in sequence
-        index = (p.idleIndex or 0) % #list + 1
-    else
-        index = rand(s, #list)
-    end
-    if hasFlag(pkg.idles.flags, 4) and p.idlePlayed then return end -- do once
-    p.idleIndex = index
-    p.idlePlayed = true
-    playIdleRecord(npc, list[index], pkg.type)
-end
-
 local function patrol(npc, s, dest, pkg)
-    if s.patrol == nil then patrolStart(npc, s, dest) end
+    if s.patrol == nil or s.patrol.points == nil then patrolStart(npc, s, dest, pkg) end
     local p = s.patrol
-    local point = getObject(p.current)
+    local point = getObject(p.points[p.index])
     if point == nil then
-        -- no chain to walk: stand at the location like a Guard
+        -- no route to walk: stand at the location
         goAndStay(npc, s, dest, pkg, function() end)
         return
     end
+    local wait = core.obscript.getPatrolIdleTime and core.obscript.getPatrolIdleTime(point) or 0
     if s.phase == nil then
-        p.idlePlayed = nil
-        local marker = not s.creature and types.ESM4IdleMarker ~= nil
-            and types.ESM4IdleMarker.objectIsInstance(point) and point or nil
-        if marker ~= nil then
-            local record = types.ESM4IdleMarker.record(marker)
-            if furniture.hasNpcIdles(record) and not (s.avoid and s.avoid[marker.id]) then
-                local timer = record.idleTimer > 0 and record.idleTimer or (pkg.idles and pkg.idles.timer) or 0
-                furniture.begin(npc, s, { object = marker, position = marker.position,
-                    yaw = marker.rotation:getYaw(), record = record },
-                    { package = pkg.type, duration = math.max(timer, 1), run = s.run }, simTime)
+        local isFurniture = types.ESM4Furniture ~= nil and types.ESM4Furniture.objectIsInstance(point)
+        local isMarker = types.ESM4IdleMarker ~= nil and types.ESM4IdleMarker.objectIsInstance(point)
+        if not s.creature and (isFurniture or (isMarker and wait > 0)) and not (s.avoid and s.avoid[point.id]) then
+            local target
+            if isFurniture then
+                target = furniture.markerOn(npc, point)
+            else
+                local record = types.ESM4IdleMarker.record(point)
+                if furniture.hasNpcIdles(record) then
+                    target = { object = point, position = point.position, yaw = point.rotation:getYaw(),
+                        record = record }
+                end
+            end
+            if target ~= nil then
+                furniture.begin(npc, s, target, { package = pkg.type, duration = math.max(wait, 1),
+                    sleep = target.sleep, run = s.run }, simTime)
                 s.phase = 'furniture'
                 s.afterFurniture = 'patrol'
                 return
             end
         end
-        moveTo(npc, s, point.position, { run = s.run, tolerance = 48 })
-        s.phase = 'go'
+        if nearlyAt(npc, point.position, PATROL_ARRIVE_RADIUS) then
+            s.phase = 'go'
+            s.goSince = simTime - 1
+        else
+            local run = s.run and (point.position - npc.position):length() > 64
+            local yaw = isMarker and point.rotation:getYaw() or nil
+            moveTo(npc, s, point.position, { run = run, tolerance = PATROL_ARRIVE_RADIUS, yaw = yaw })
+        end
     elseif s.phase == 'go' then
         local status = moveStatus(npc, s)
-        if status == 'arrived' or status == 'nopath' then
-            local timer = pkg.idles and pkg.idles.timer or 0
-            if timer > 0 then
+        if status ~= 'moving' then
+            if wait > 0 then
                 s.phase = 'wait'
-                s.waitUntil = simTime + timer
-                ai.face(npc, point.rotation:getYaw())
+                s.waitUntil = simTime + wait
             else
                 patrolAdvance(npc, s, pkg)
             end
         end
-    elseif s.phase == 'wait' then
-        if simTime >= s.waitUntil then
-            patrolAdvance(npc, s, pkg)
-        else
-            patrolIdle(npc, s, pkg)
-        end
+    elseif s.phase == 'wait' and simTime >= s.waitUntil then
+        patrolAdvance(npc, s, pkg)
     end
 end
 
 -- ---------------------------------------------------------------- find
 
--- Find: TRAVEL to the location, then ACQUIRE the target: walk to the nearest such item within the location's
--- radius and take it.
+-- Find (TRAVEL, ACQUIRE; FalloutNV.exe 0x8ebc60): go to the location, then take the target, the nearest match
+-- within the location's radius (fAIAcquireObjectDistance outdoors when it has none, the whole cell indoors).
+-- Not done yet: items inside containers and corpses, object type targets, and counts above one.
 local function acquire(npc, s, dest, pkg)
     if s.phase == 'acquire' then
         local item = targetRef(pkg, npc)
-        if item == nil or not item.enabled or (dest.position and dest.radius > 0
-            and (item.position - dest.position):length() > math.max(dest.radius, 64)) then
+        local center = dest.position or npc.position
+        local radius = (dest.radius or 0) > 0 and dest.radius
+            or (npc.cell.isExterior and gmstFloat('fAIAcquireObjectDistance', 4000) or math.huge)
+        if item == nil or not item.enabled or not sameCell(item.cell, npc.cell)
+            or (item.position - center):length() > radius then
             completePackage(npc, s, 'nothing to find')
             s.phase = 'stay'
             return
@@ -980,19 +1075,46 @@ end
 
 -- ---------------------------------------------------------------- use weapon
 
--- Use Weapon: TRAVEL to the location, then fire at the target the way the package data (PKW3) says: volleys of
--- shotsMin..shotsMax shots with pauseMin..pauseMax seconds between them, or one long burst (auto fire); for
--- the number of bursts, or for as long as the package runs (repeat fire).
+-- Use Weapon (TRAVEL, USE_WEAPON; FalloutNV.exe 0x8f7730): go to the location, then fire at the target (a
+-- reference or the linked reference) while the player is within fAIUseWeaponDistance. Each volley is
+-- shotsMin..shotsMax shots (volley fire) or a clip (auto fire), with pauseMin..pauseMax seconds between
+-- volleys; after the number of bursts the weapon goes away and the package is done, unless it repeats. Hold
+-- Fire When Blocked holds the shot while a friendly actor stands within 30 degrees of the line of fire.
+local HOLD_FIRE_CONE = math.cos(math.rad(30))
+
+local function friendlyInLine(npc, target)
+    local toTarget = target.position - npc.position
+    local distance = toTarget:length()
+    if distance < 1 then return false end
+    local direction = toTarget / distance
+    for id, other in pairs(tracked) do
+        if other ~= npc and other ~= target and other:isValid() and not (combat and combat.isDead(other)) then
+            local offset = other.position - npc.position
+            local d = offset:length()
+            if d > 1 and d < distance and (offset / d):dot(direction) >= HOLD_FIRE_CONE
+                and not (I.FNVCombat and I.FNVCombat.getTarget and I.FNVCombat.getTarget(other) == npc) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function useWeapon(npc, s, dest, pkg)
     if s.phase ~= 'shoot' then
         goAndStay(npc, s, dest, pkg, arrived)
         return
     end
-    local target = targetRef(pkg, npc)
+    local target = pkg.targets[1] and (pkg.targets[1].type == 0 or pkg.targets[1].type == 3) and targetRef(pkg, npc)
     local data = pkg.useWeapon or {}
     if target == nil or combat == nil then
         completePackage(npc, s, 'no target')
         s.phase = 'stay'
+        return
+    end
+    local p = player()
+    if p == nil or not sameCell(p.cell, npc.cell) and not (p.cell.isExterior and npc.cell.isExterior)
+        or (p.position - npc.position):length() > gmstFloat('fAIUseWeaponDistance', 15000) then
         return
     end
     local u = s.useWeapon
@@ -1003,38 +1125,38 @@ local function useWeapon(npc, s, dest, pkg)
             s.phase = 'stay'
             return
         end
-        u = { gun = gun, clip = math.max(1, gun.clipSize), volleys = 0, shots = 0, next = simTime + 0.5 }
+        u = { gun = gun, clip = math.max(1, gun.clipSize), bursts = 0, shots = 0, next = simTime + 0.5 }
         s.useWeapon = u
         combat.drawWeapon(npc, true)
     end
     local d = target.position - npc.position
     ai.face(npc, math.atan2(d.x, d.y))
     if simTime < u.next or combat.isActing(npc) then return end
-    if u.gun.clipSize > 0 and u.clip <= 0 then
-        combat.reload(npc)
-        u.clip = u.gun.clipSize
-        u.next = simTime + math.max(u.gun.reloadTime or 1, 0.5)
-        return
-    end
-    if data.holdFireWhenBlocked and not combat.hasLineOfFire(npc, target) then
-        u.next = simTime + 0.5
-        return
-    end
     if u.shots <= 0 then
-        -- a new volley
-        if not data.repeatFire and u.volleys >= math.max(data.bursts or 1, 1) then
+        -- a new volley; done after the number of bursts unless the package repeats
+        if not data.repeatFire and u.bursts >= math.max(data.bursts or 1, 1) then
             combat.drawWeapon(npc, false)
             s.useWeapon = nil
             completePackage(npc, s, 'fired')
             s.phase = 'stay'
             return
         end
-        u.volleys = u.volleys + 1
         if data.volley then
-            u.shots = rand(s, math.max(data.shotsMin or 1, 1), math.max(data.shotsMax or 1, data.shotsMin or 1, 1))
-        else
-            u.shots = math.max(u.gun.clipSize, 1) -- auto fire: empty the clip
+            local low = math.max(data.shotsMin or 0, 0)
+            local high = math.max(data.shotsMax or 0, low)
+            u.shots = high > 0 and rand(s, low, high) or 0
         end
+        if u.shots <= 0 then u.shots = math.max(1, u.gun.clipSize) end
+    end
+    if u.gun.clipSize > 0 and u.clip <= 0 then
+        combat.reload(npc)
+        u.clip = u.gun.clipSize
+        u.next = simTime + math.max(u.gun.reloadTime or 1, 0.5)
+        return
+    end
+    if data.holdFireWhenBlocked and friendlyInLine(npc, target) then
+        u.next = simTime + 0.25
+        return
     end
     combat.shoot(npc, target)
     u.clip = u.clip - math.max(1, u.gun.ammoUse or 1)
@@ -1042,34 +1164,82 @@ local function useWeapon(npc, s, dest, pkg)
     local rate = u.gun.shotsPerSecond or 0
     u.next = simTime + (rate > 0 and 1 / rate or 1)
     if u.shots <= 0 then
-        local pauseMin = data.pauseMin or 1
-        local pauseMax = math.max(data.pauseMax or pauseMin, pauseMin)
-        u.next = u.next + pauseMin + rand(s) * (pauseMax - pauseMin)
+        u.bursts = u.bursts + 1
+        if data.volley then
+            local pauseMin = data.pauseMin or 0
+            local pauseMax = math.max(data.pauseMax or pauseMin, pauseMin)
+            u.next = u.next + pauseMin + rand(s) * (pauseMax - pauseMin)
+        end
     end
 end
 
 -- ---------------------------------------------------------------- flee not combat
 
--- Flee Not Combat: run from the target (or from the package location when it has none) until
--- fFleeDistanceExterior / fFleeDistanceInterior away, then the package is done.
+-- Flee Not Combat (FLEE_NON_COMBAT, FalloutNV.exe 0x8ddac0): run from the package target to the package location
+-- reference. Done once within the location's radius; without a place to run to, once the target's distance
+-- (PTDT) away, or else safe beyond fFleeDoneDistanceInterior/Exterior for 5 seconds after running
+-- fFleeDistanceInterior/Exterior from it. Nothing to run from and nowhere to go: done at once.
+local FLEE_SAFE_SECONDS = 5
+local FLEE_REPATH_SECONDS = 20
+
 local function fleeNotCombat(npc, s, dest, pkg)
     local from = targetRef(pkg, npc)
-    local fromPosition = from and sameCell(from.cell, npc.cell) and from.position or dest.position or s.anchor
-    local safe = npc.cell.isExterior and gmstFloat('fFleeDistanceExterior', 5000)
-        or gmstFloat('fFleeDistanceInterior', 3000)
-    local offset = npc.position - fromPosition
-    local distance = util.vector2(offset.x, offset.y):length()
-    if distance >= safe then
+    if from ~= nil and not sameCell(from.cell, npc.cell) and not (from.cell.isExterior and npc.cell.isExterior) then
+        from = nil
+    end
+    local to = dest.ref
+    local done
+    if to ~= nil then
+        done = nearlyAt(npc, to.position, math.max(dest.radius or 0, 64)) and sameCell(to.cell, npc.cell)
+    elseif from ~= nil then
+        local distance = (npc.position - from.position):length()
+        local wanted = pkg.targets[1] and (pkg.targets[1].count or 0) or 0
+        if wanted > 0 then
+            done = distance >= wanted
+        else
+            local safe = npc.cell.isExterior and gmstFloat('fFleeDoneDistanceExterior', 2500)
+                or gmstFloat('fFleeDoneDistanceInterior', 600)
+            if distance >= safe then
+                s.safeSince = s.safeSince or simTime
+            else
+                s.safeSince = nil
+            end
+            done = s.safeSince ~= nil and simTime - s.safeSince >= FLEE_SAFE_SECONDS
+        end
+    else
+        done = true
+    end
+    if done then
         if s.phase == 'go' then ai.stop(npc) end
         completePackage(npc, s, 'fled')
         s.phase = 'stay'
         return
     end
-    if s.phase ~= 'go' or moveStatus(npc, s) ~= 'moving' or simTime - s.goSince > 3 then
-        local away = distance > 1 and util.vector3(offset.x, offset.y, 0):normalize()
+    if s.phase == 'stay' then return end
+    if to ~= nil then
+        if not reachCell(npc, s, dest) then return end
+        if s.phase ~= 'go' or moveStatus(npc, s) ~= 'moving' then
+            moveTo(npc, s, to.position, { run = true, tolerance = math.max(dest.radius or 0, 32) })
+        end
+        return
+    end
+    if s.safeSince ~= nil then
+        if s.phase == 'go' then ai.stop(npc) end
+        s.phase = 'wait'
+        return
+    end
+    if s.phase ~= 'go' or moveStatus(npc, s) ~= 'moving' or simTime - s.goSince > FLEE_REPATH_SECONDS then
+        local flee = pkg.targets[1] and (pkg.targets[1].count or 0) or 0
+        if flee <= 0 then
+            flee = npc.cell.isExterior and gmstFloat('fFleeDistanceExterior', 5000)
+                or gmstFloat('fFleeDistanceInterior', 3000)
+        end
+        local offset = npc.position - from.position
+        local away = offset:length() > 1 and util.vector3(offset.x, offset.y, 0):normalize()
             or util.vector3(math.sin(rand(s) * 2 * math.pi), math.cos(rand(s) * 2 * math.pi), 0)
-        local goal = ai.randomPoint(npc, npc.position + away * math.min(safe - distance + 256, 2048), 512)
-        moveTo(npc, s, goal or (npc.position + away * 1024), { run = true, direct = true, tolerance = 64 })
+        local goal = ai.randomPoint(npc, from.position + away * flee, 512)
+        moveTo(npc, s, goal or (npc.position + away * math.min(flee, 2048)), { run = true, direct = true,
+            tolerance = 64 })
     end
 end
 
@@ -1140,8 +1310,10 @@ local function tick(npc, s)
     end
     if pkg.type == T.Escort then
         escort(npc, s, dest, pkg)
-    elseif pkg.type == T.Sandbox or pkg.type == T.Wander then
-        roam(npc, s, dest, pkg)
+    elseif pkg.type == T.Sandbox then
+        sandbox(npc, s, dest, pkg)
+    elseif pkg.type == T.Wander then
+        roam(npc, s, dest)
     elseif pkg.type == T.Sleep and not s.creature then
         sleep(npc, s, dest)
     elseif pkg.type == T.Eat and not s.creature then
@@ -1167,6 +1339,8 @@ local function cleanUp(npc, s)
     end
     s.item = nil
     s.afterFurniture = nil
+    s.safeSince = nil
+    s.activityUntil = nil
 end
 
 startPackage = function(npc, s, pkg)
@@ -1246,7 +1420,8 @@ local function saveState(s)
         anchor = s.anchor,
         anchorCell = s.anchorCell,
         noReturn = s.noReturn,
-        patrol = s.patrol and { first = s.patrol.first, current = s.patrol.current, laps = s.patrol.laps } or nil,
+        patrol = s.patrol and { points = s.patrol.points, loopTo = s.patrol.loopTo, index = s.patrol.index,
+            step = s.patrol.step } or nil,
         furniture = furniture.save(s, simTime),
         useAtEnd = s.useAtEnd,
         seed = s.seed,
@@ -1558,7 +1733,8 @@ return {
                         .. (s and s.complete and ' (finished)' or '') .. (s and s.suspended and ' (in combat)' or '')
                         .. ', phase ' .. tostring(s and s.phase) .. ', move ' .. ai.status(npc) .. ', furniture '
                         .. tostring(s and s.furn and s.furn.phase) .. '/' .. ai.useStatus(npc)
-                        .. (s and s.patrol and (', patrol point ' .. tostring(s.patrol.current)) or ''))
+                        .. (s and s.patrol and s.patrol.points and (', patrol point ' .. tostring(s.patrol.index) .. '/'
+                            .. tostring(#s.patrol.points)) or ''))
                 end
             end
             local count = 0
