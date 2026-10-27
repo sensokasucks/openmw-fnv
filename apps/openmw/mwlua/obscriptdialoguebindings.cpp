@@ -26,6 +26,8 @@
 #include <components/esm4/loadweap.hpp>
 #include <components/esm4/dialogue.hpp>
 #include <components/esm4/loadcrea.hpp>
+#include <components/esm4/loadflst.hpp>
+#include <components/esm4/loadrace.hpp>
 #include <components/esm4/loaddial.hpp>
 #include <components/esm4/loadglob.hpp>
 #include <components/esm4/loadinfo.hpp>
@@ -354,6 +356,40 @@ namespace MWLua
             return res;
         }
 
+        // The voice type an NPC speaks with: its own (or its template's for traits), else its race's default for
+        // its sex.
+        ESM::FormId voiceTypeOf(const MWWorld::Ptr& ptr)
+        {
+            if (ptr.getType() == ESM::REC_NPC_4)
+            {
+                const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(ptr);
+                if (traits == nullptr)
+                    traits = ptr.get<ESM4::Npc>()->mBase;
+                if (!traits->mVoiceType.isZeroOrUnset())
+                    return traits->mVoiceType;
+                if (const ESM4::Race* race = MWClass::ESM4Npc::getRace(ptr))
+                    return race->mDefaultVoice[MWClass::ESM4Npc::isFemale(ptr) ? 1 : 0];
+                return {};
+            }
+            if (ptr.getType() == ESM::REC_CREA4)
+                return ptr.get<ESM4::Creature>()->mBase->mVoiceType;
+            return {};
+        }
+
+        bool formInList(ESM::FormId form, ESM::FormId listOrForm, int depth)
+        {
+            if (form == listOrForm)
+                return true;
+            const ESM4::FormIdList* list
+                = MWBase::Environment::get().getESMStore()->get<ESM4::FormIdList>().search(ESM::RefId(listOrForm));
+            if (list == nullptr || depth >= 4)
+                return false;
+            for (ESM::FormId entry : list->mObjects)
+                if (formInList(form, entry, depth + 1))
+                    return true;
+            return false;
+        }
+
         sol::table makeQuest(sol::state_view& lua, const ESM4::Quest& quest)
         {
             sol::table res(lua, sol::create);
@@ -638,12 +674,17 @@ namespace MWLua
 
         // Voice type (VTCK) of an ESM4 NPC or creature reference, "" when it has none.
         api["getVoiceType"] = [](const Object& object) -> std::string {
-            const MWWorld::Ptr& ptr = object.ptr();
-            if (ptr.getType() == ESM::REC_NPC_4)
-                return formIdText(ptr.get<ESM4::Npc>()->mBase->mVoiceType);
-            if (ptr.getType() == ESM::REC_CREA4)
-                return formIdText(ptr.get<ESM4::Creature>()->mBase->mVoiceType);
-            return {};
+            const ESM::FormId id = voiceTypeOf(object.ptr());
+            return id.isZeroOrUnset() ? std::string() : formIdText(id);
+        };
+
+        // GetIsVoiceType: the voice type is the given VTYP, or one of a form list of them (FLST, nested lists
+        // included), as GenericIdleChatter and the generic greetings ask.
+        api["isVoiceType"] = [](const Object& object, std::string_view typeOrList) -> bool {
+            const ESM::FormId voice = voiceTypeOf(object.ptr());
+            if (voice.isZeroOrUnset())
+                return false;
+            return formInList(voice, parseFormId(typeOrList), 0);
         };
 
         // Voice file of one response of an INFO said by this NPC or creature, nil when it has none:
@@ -657,12 +698,7 @@ namespace MWLua
             const ESM4::DialogInfo* info = store.get<ESM4::DialogInfo>().search(ESM::RefId(parseFormId(infoId)));
             if (info == nullptr || !info->mId.hasContentFile())
                 return sol::nullopt;
-            ESM::FormId voiceTypeId;
-            const MWWorld::Ptr& ptr = speaker.ptr();
-            if (ptr.getType() == ESM::REC_NPC_4)
-                voiceTypeId = ptr.get<ESM4::Npc>()->mBase->mVoiceType;
-            else if (ptr.getType() == ESM::REC_CREA4)
-                voiceTypeId = ptr.get<ESM4::Creature>()->mBase->mVoiceType;
+            const ESM::FormId voiceTypeId = voiceTypeOf(speaker.ptr());
             const ESM4::VoiceType* voiceType = store.get<ESM4::VoiceType>().search(ESM::RefId(voiceTypeId));
             const ESM4::Quest* quest = store.get<ESM4::Quest>().search(ESM::RefId(info->mQuest));
             const ESM4::Dialogue* topic = store.get<ESM4::Dialogue>().search(ESM::RefId(info->mTopic));

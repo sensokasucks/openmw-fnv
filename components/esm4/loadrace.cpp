@@ -222,6 +222,12 @@ void ESM4::Race::load(ESM4::Reader& reader)
 #endif
                 break;
             }
+            case ESM::fourCC("VTCK"): // FO3: default voice types, male then female
+            {
+                reader.getFormId(mDefaultVoice[0]);
+                reader.getFormId(mDefaultVoice[1]);
+                break;
+            }
             case ESM::fourCC("DNAM"):
             {
                 reader.getFormId(mDefaultHair[0]); // male
@@ -728,7 +734,6 @@ void ESM4::Race::load(ESM4::Reader& reader)
             //
             case ESM::fourCC("YNAM"): // FO3
             case ESM::fourCC("NAM2"): // FO3
-            case ESM::fourCC("VTCK"): // FO3
             case ESM::fourCC("MODD"): // FO3
             case ESM::fourCC("ONAM"): // FO3
             case ESM::fourCC("APPR"): // FO4

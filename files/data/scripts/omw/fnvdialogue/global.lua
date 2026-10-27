@@ -394,8 +394,9 @@ local function isDead(obj)
     return ok and dead == true
 end
 functions[46] = function(_, obj) return isDead(obj) end -- GetDead
-functions[427] = function(cond, obj) -- GetIsVoiceType (the race's default voice is not loaded yet)
+functions[427] = function(cond, obj) -- GetIsVoiceType: a voice type, or a form list of them
     if obj == nil or isPlayer(obj) then return false end
+    if dlg.isVoiceType then return dlg.isVoiceType(obj, cond.param1Form) end
     return dlg.getVoiceType(obj) == cond.param1Form
 end
 -- Variables of object scripts, as their local scripts publish them
