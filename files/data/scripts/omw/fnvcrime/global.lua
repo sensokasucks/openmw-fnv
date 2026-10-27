@@ -614,7 +614,7 @@ end
 
 -- World pick-ups: activating an item in the world takes it
 local ITEM_TYPES = { 'ESM4Ammunition', 'ESM4Armor', 'ESM4Book', 'ESM4Clothing', 'ESM4Ingredient', 'ESM4ItemMod',
-    'ESM4Key', 'ESM4MiscItem', 'ESM4Potion', 'ESM4Weapon', 'ESM4Note' }
+    'ESM4Key', 'ESM4Miscellaneous', 'ESM4Potion', 'ESM4Weapon', 'ESM4Note' }
 if I.Activation then
     for _, name in ipairs(ITEM_TYPES) do
         local t = types[name]

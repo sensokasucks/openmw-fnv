@@ -139,6 +139,8 @@ namespace MWMechanics::ESM4Combat
         // is scaled from the player's FNV health to the Morrowind one, so fights last as long as in FNV.
         void hurtPlayer(const MWWorld::Ptr& player, float damage)
         {
+            if (MWBase::Environment::get().getWorld()->getGodModeState())
+                return; // tgm
             MWMechanics::CreatureStats& stats = player.getClass().getCreatureStats(player);
             MWMechanics::DynamicStat<float> health = stats.getHealth();
             const float fnvHealth = Stats::getPermanent(player, Stats::Health);
