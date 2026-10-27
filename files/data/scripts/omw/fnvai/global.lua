@@ -909,13 +909,13 @@ local function follow(npc, s, pkg)
     local leader = targetRef(pkg, npc)
     if leader == nil then return end
     followsPlayer[npc.id] = types.Player.objectIsInstance(leader) and npc or nil
-    if not sameCell(leader.cell, npc.cell) then
-        -- through the door after the leader (followers of the player are brought along by bringFollowers)
-        if types.Player.objectIsInstance(leader) then return end
-        if not (leader.cell.isExterior and npc.cell.isExterior) then
+    if not sameCell(leader.cell, npc.cell) and not (leader.cell.isExterior and npc.cell.isExterior) then
+        -- through the door after the leader (followers of the player are brought along by bringFollowers);
+        -- across an exterior cell border the follower just walks on after the leader
+        if not types.Player.objectIsInstance(leader) then
             reachCell(npc, s, { cell = leader.cell, position = leader.position })
-            return
         end
+        return
     end
     local base = target.count and target.count >= 1 and target.count
         or gmstFloat('iAIDistanceRadiusMinLocation', 100)
@@ -1627,6 +1627,23 @@ local function conversationPartner(npc, s)
     return nil
 end
 
+-- Why NPCs did not start a conversation, summed up in the log once a minute
+local talkWhy = { busy = 0, cooldown = 0, roll = 0, nobody = 0 }
+local talkReport = 60
+local function noTalk(reason)
+    talkWhy[reason] = talkWhy[reason] + 1
+    if simTime >= talkReport then
+        talkReport = simTime + 60
+        if talkWhy.cooldown + talkWhy.roll + talkWhy.nobody > 0 then
+            log(('conversations not started in the last minute: %d busy, %d cooling down, %d lost the %d%% roll, %d nobody free within %d')
+                :format(talkWhy.busy, talkWhy.cooldown, talkWhy.roll, gmstFloat('fAISocialchanceForConversation', 25),
+                    talkWhy.nobody, CONVERSATION_DISTANCE))
+        end
+        talkWhy = { busy = 0, cooldown = 0, roll = 0, nobody = 0 }
+    end
+    return false
+end
+
 -- Starts or follows a conversation; true while the actor is in one (its package waits).
 local function conversation(npc, s)
     if s.talk ~= nil then
@@ -1636,14 +1653,15 @@ local function conversation(npc, s)
         if not furniture.inUse(s) and s.phase == 'talk' then s.phase = nil end
         return false
     end
-    if not freeToTalk(npc, s) then return false end
+    if s.creature then return false end
+    if not freeToTalk(npc, s) then return noTalk('busy') end
     s.talkCooldown = s.talkCooldown or (simTime + conversationCooldown(s))
-    if simTime < s.talkCooldown then return false end
+    if simTime < s.talkCooldown then return noTalk('cooldown') end
     local chance = gmstFloat(npc.cell.isExterior and 'fAISocialchanceForConversation'
         or 'fAISocialchanceForConversationInterior', 25)
-    if rand(s) * 100 >= chance then return false end
+    if rand(s) * 100 >= chance then return noTalk('roll') end
     local partner = conversationPartner(npc, s)
-    if partner == nil then return false end
+    if partner == nil then return noTalk('nobody') end
     local ps = states[partner.id]
     s.talkCooldown = simTime + conversationCooldown(s)
     local block = gmstFloat('fAItalktosameNPCtimer', 120)
