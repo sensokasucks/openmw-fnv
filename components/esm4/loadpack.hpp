@@ -178,6 +178,33 @@ namespace ESM4
         std::uint32_t mDialogueFlags = 0; // 1 no headtracking, 0x100 don't control target movement
         std::uint32_t mDialogueType = 0; // 0 conversation, 1 say to
 
+        // FO3/FONV package idle animations (IDLF, IDLC, IDLT, IDLA): played while the package waits, such as at the
+        // points of a patrol that are not idle markers
+        std::uint8_t mIdleFlags = 0; // 1 run in sequence, 4 do once
+        float mIdleTimer = 0.f; // seconds (IDLT)
+        std::vector<ESM::FormId> mIdles; // IDLE records (IDLA)
+
+        bool mPatrolRepeatable = false; // PKPT
+        std::uint32_t mEscortDistance = 0; // PKE2
+        float mFollowTriggerRadius = 0.f; // PKFD
+        ESM::FormId mCombatStyle; // CNAM
+
+        // FO3/FONV Use Weapon data (PKW3)
+        struct UseWeaponData
+        {
+            std::uint32_t flags = 0; // 1 always hit, 0x100 do no damage, 0x10000 crouch to reload, 0x1000000 hold
+                                     // fire when blocked
+            std::uint8_t fireRate = 0; // 0 auto fire, 1 volley fire
+            std::uint8_t fireCount = 0; // 0 number of bursts, 1 repeat fire
+            std::uint16_t bursts = 0;
+            std::uint16_t shotsPerVolleyMin = 0;
+            std::uint16_t shotsPerVolleyMax = 0;
+            float pauseMin = 0.f;
+            float pauseMax = 0.f;
+        };
+        UseWeaponData mUseWeapon;
+        bool mHasUseWeapon = false;
+
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;
 

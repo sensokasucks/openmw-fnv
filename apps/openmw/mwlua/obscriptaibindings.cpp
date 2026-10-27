@@ -8,6 +8,7 @@
 #include <sol/table.hpp>
 
 #include <components/esm/refid.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loadidle.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadpack.hpp>
@@ -17,6 +18,7 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwclass/esm4creature.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwmechanics/esm4actors.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
@@ -163,6 +165,39 @@ namespace MWLua
             dialogue["flags"] = package.mDialogueFlags;
             dialogue["type"] = package.mDialogueType;
             res["dialogue"] = dialogue;
+
+            // Idle animations the package plays while it waits: { flags (1 run in sequence, 4 do once), timer
+            // (seconds), list of IDLE form ids }
+            sol::table idles(lua, sol::create);
+            idles["flags"] = package.mIdleFlags;
+            idles["timer"] = package.mIdleTimer;
+            sol::table idleList(lua, sol::create);
+            for (std::size_t i = 0; i < package.mIdles.size(); ++i)
+                idleList[LuaUtil::toLuaIndex(i)] = formIdText(package.mIdles[i]);
+            idles["list"] = idleList;
+            res["idles"] = idles;
+
+            res["patrolRepeatable"] = package.mPatrolRepeatable;
+            res["escortDistance"] = package.mEscortDistance;
+            res["followTriggerRadius"] = package.mFollowTriggerRadius;
+            res["combatStyle"] = formIdText(package.mCombatStyle);
+            if (package.mHasUseWeapon)
+            {
+                const ESM4::AIPackage::UseWeaponData& data = package.mUseWeapon;
+                sol::table useWeapon(lua, sol::create);
+                useWeapon["alwaysHit"] = (data.flags & 0x1) != 0;
+                useWeapon["noDamage"] = (data.flags & 0x100) != 0;
+                useWeapon["crouchToReload"] = (data.flags & 0x10000) != 0;
+                useWeapon["holdFireWhenBlocked"] = (data.flags & 0x1000000) != 0;
+                useWeapon["volley"] = data.fireRate == 1;
+                useWeapon["repeatFire"] = data.fireCount == 1;
+                useWeapon["bursts"] = data.bursts;
+                useWeapon["shotsMin"] = data.shotsPerVolleyMin;
+                useWeapon["shotsMax"] = data.shotsPerVolleyMax;
+                useWeapon["pauseMin"] = data.pauseMin;
+                useWeapon["pauseMax"] = data.pauseMax;
+                res["useWeapon"] = useWeapon;
+            }
             return res;
         }
 
@@ -223,21 +258,33 @@ namespace MWLua
             return makePackage(lua, *package);
         };
 
-        // Packages of an ESM4 NPC reference in priority order (highest first), templates resolved; nil for
-        // anything else.
+        // Packages of an ESM4 NPC or creature reference in priority order (highest first), templates resolved; nil
+        // for anything else.
         api["getPackages"] = [](const Object& object, sol::this_state s) -> sol::object {
             sol::state_view lua(s);
             const MWWorld::Ptr& ptr = object.ptr();
-            if (ptr.getType() != ESM::REC_NPC_4)
+            const std::vector<ESM::FormId>* packages = nullptr;
+            if (ptr.getType() == ESM::REC_NPC_4)
+            {
+                const ESM4::Npc* npc = MWClass::ESM4Npc::getAIPackagesRecord(ptr);
+                if (npc == nullptr)
+                    npc = ptr.get<ESM4::Npc>()->mBase;
+                packages = &npc->mAIPackages;
+            }
+            else if (ptr.getType() == ESM::REC_CREA4)
+            {
+                const ESM4::Creature* creature = MWClass::ESM4Creature::getAIPackagesRecord(ptr);
+                if (creature == nullptr)
+                    creature = ptr.get<ESM4::Creature>()->mBase;
+                packages = &creature->mAIPackages;
+            }
+            if (packages == nullptr)
                 return sol::nil;
-            const ESM4::Npc* npc = MWClass::ESM4Npc::getAIPackagesRecord(ptr);
-            if (npc == nullptr)
-                npc = ptr.get<ESM4::Npc>()->mBase;
             const MWWorld::Store<ESM4::AIPackage>& store
                 = MWBase::Environment::get().getESMStore()->get<ESM4::AIPackage>();
             sol::table res(lua, sol::create);
             int index = 1;
-            for (ESM::FormId id : npc->mAIPackages)
+            for (ESM::FormId id : *packages)
                 if (const ESM4::AIPackage* package = store.search(id))
                     res[index++] = makePackage(lua, *package);
             return res;
@@ -303,6 +350,11 @@ namespace MWLua
             return !ptr.isEmpty() && ptr.getRefData().getBaseNode() != nullptr;
         };
 
+        // Walk speed in units per second (fMoveBaseSpeed scaled by SpeedMult, armor, crippled legs).
+        api["getWalkSpeed"] = [](const Object& object) -> float {
+            return MWMechanics::ESM4Actors::getWalkSpeed(object.ptr());
+        };
+
         // "none", "moving", "arrived" or "nopath"
         api["status"] = [](const Object& object) -> std::string_view {
             return statusName(MWMechanics::ESM4Actors::get().getStatus(object.ptr()));
@@ -336,7 +388,8 @@ namespace MWLua
         // Sits down on, lies in or leans on furniture. options: position (world position of the furniture marker),
         // yaw (radians the actor faces there), offset (vector3: seat relative to the marker, x right, y forward),
         // headingDelta (radians turned once seated), enter/loop/exit (KF models under meshes/, as IDLE records
-        // name them; enter and exit may be nil). useStatus() follows the entry, use and exit.
+        // name them; enter and exit may be nil), seated (true: sit down at once, without the entry sequence, as when
+        // a game saved with the actor seated is loaded). useStatus() follows the entry, use and exit.
         api["useFurniture"] = [context](const Object& object, const sol::table& options) {
             MWMechanics::ESM4Actors::FurnitureUse use;
             use.mMarker = options.get<osg::Vec3f>("position");
@@ -347,6 +400,7 @@ namespace MWLua
             use.mEnter = options.get_or("enter", std::string());
             use.mLoop = options.get_or("loop", std::string());
             use.mExit = options.get_or("exit", std::string());
+            use.mSeated = options.get_or("seated", false);
             context.mLuaManager->addAction(
                 [object = Object(object), use] { MWMechanics::ESM4Actors::get().useFurniture(object.ptr(), use); },
                 "obscriptAIUseFurnitureAction");

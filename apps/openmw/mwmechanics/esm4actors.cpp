@@ -36,6 +36,16 @@ namespace MWMechanics
         constexpr float sDefaultRunSpeed = 300.f;
         const float sTurnSpeed = static_cast<float>(osg::PI) * 1.5f; // radians per second (osg::PI is not constexpr everywhere)
 
+        // Actor avoidance (FalloutNV.exe 0x9e5690)
+        constexpr float sAvoidCheckInterval = 0.1f; // seconds between looks ahead
+        constexpr float sAvoidLookAheadTime = 1.f; // seconds of walking looked ahead
+        constexpr float sAvoidMinLookAhead = 100.f; // units
+        constexpr float sAvoidActorRadius = 24.f; // an NPC's collision box is 40 units wide
+        constexpr float sAvoidWaitTime = 5.f; // fAvoidanceDefaultWaitTime: how long to wait before walking on
+        constexpr float sAvoidIgnoreTime = 3.f; // how long an actor walked past is not avoided again
+        constexpr int sAvoidMaxDetours = 8;
+        constexpr float sAvoidEyeHeight = 64.f;
+
         std::optional<ESM::FormId> getCellFormId(const MWWorld::Ptr& ptr)
         {
             if (ptr.getCell() == nullptr)
@@ -122,6 +132,9 @@ namespace MWMechanics
         state.mStuckTime = 0.f;
         state.mNextPoint = 0;
         state.mCorridorIndex = 0;
+        state.mDetours = 0;
+        state.mAvoidWaiting = false;
+        state.mAvoidWaited = 0.f;
 
         const std::optional<ESM::FormId> cell = getCellFormId(ptr);
         const osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
@@ -188,7 +201,7 @@ namespace MWMechanics
 
         MWRender::ESM4NpcAnimation* animation = getAnimation(moved);
         float length = 0.f;
-        if (animation != nullptr && !use.mEnter.empty())
+        if (animation != nullptr && !use.mEnter.empty() && !use.mSeated)
             length = animation->playIdleFONV(use.mEnter, true, true);
         Log(Debug::Verbose) << "ESM4 AI: " << moved.getCellRef().getRefNum().toString() << " uses furniture at "
                             << use.mMarker << " (" << use.mEnter << ", " << length << "s)";
@@ -207,7 +220,8 @@ namespace MWMechanics
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         osg::Vec3f offset = use.mOffset;
         // Prefer where the entry sequence actually left the root over the nominal marker offset
-        if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr); animation != nullptr && !use.mEnter.empty())
+        if (MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+            animation != nullptr && !use.mEnter.empty() && !use.mSeated)
         {
             const osg::Vec3f motion = animation->getRootMotion();
             if (motion.length2() > 1.f)
@@ -450,6 +464,17 @@ namespace MWMechanics
 
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        {
+            const float lookSpeed = state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr);
+            if (avoidActors(ptr, state, lookSpeed > 1.f ? lookSpeed : sDefaultWalkSpeed, duration))
+            {
+                if (animation != nullptr)
+                    animation->setLocomotion(MWRender::ESM4NpcAnimation::Locomotion::Idle);
+                return true;
+            }
+            if (state.mStatus != Status::Moving)
+                return true;
+        }
         const auto locomotion = state.mOptions.mRun ? MWRender::ESM4NpcAnimation::Locomotion::Run
                                                     : MWRender::ESM4NpcAnimation::Locomotion::Walk;
         float speed = state.mOptions.mRun ? sDefaultRunSpeed : sDefaultWalkSpeed;
@@ -530,6 +555,121 @@ namespace MWMechanics
             state.mTurnTo = state.mOptions.mFinalYaw;
             setLocomotion(moved, MWRender::ESM4NpcAnimation::Locomotion::Idle);
         }
+        return true;
+    }
+
+    bool ESM4Actors::avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration)
+    {
+        if (state.mIgnoreTime > 0.f)
+        {
+            state.mIgnoreTime -= duration;
+            if (state.mIgnoreTime <= 0.f)
+                state.mIgnored = MWWorld::Ptr();
+        }
+        state.mAvoidCheck -= duration;
+        if (state.mAvoidCheck > 0.f)
+            return state.mAvoidWaiting;
+        state.mAvoidCheck = sAvoidCheckInterval;
+        if (state.mNextPoint >= state.mPath.mPoints.size())
+            return false;
+
+        const osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
+        osg::Vec3f toPoint = state.mPath.mPoints[state.mNextPoint] - position;
+        toPoint.z() = 0.f;
+        const float pointDistance = toPoint.length();
+        if (pointDistance < 1.f)
+            return false;
+        const osg::Vec3f direction = toPoint / pointDistance;
+        const osg::Vec3f right(direction.y(), -direction.x(), 0.f);
+
+        // Three rays at chest height: along the path and at either shoulder
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        const MWPhysics::RayCastingInterface& rays = *world.getRayCasting();
+        const float lookAhead = std::max(speed * sAvoidLookAheadTime, sAvoidMinLookAhead);
+        const osg::Vec3f eye(0.f, 0.f, sAvoidEyeHeight);
+        const std::vector<MWWorld::ConstPtr> ignore{ ptr };
+        MWWorld::Ptr obstacle;
+        float obstacleDistance = lookAhead;
+        for (float side : { 0.f, -sAvoidActorRadius, sAvoidActorRadius })
+        {
+            const osg::Vec3f from = position + eye + right * side;
+            const MWPhysics::RayCastingResult hit
+                = rays.castRay(from, from + direction * lookAhead, ignore, {}, MWPhysics::CollisionType_Actor);
+            if (!hit.mHit || hit.mHitObject.isEmpty() || hit.mHitObject == state.mIgnored)
+                continue;
+            const float distance = (hit.mHitPos - from).length();
+            if (distance < obstacleDistance)
+            {
+                obstacle = hit.mHitObject;
+                obstacleDistance = distance;
+            }
+        }
+        if (obstacle.isEmpty())
+        {
+            state.mAvoidWaiting = false;
+            state.mAvoidWaited = 0.f;
+            return false;
+        }
+
+        const osg::Vec3f obstaclePosition = obstacle.getRefData().getPosition().asVec3();
+        // Someone standing at the goal: close enough counts as there
+        const bool lastLeg = state.mNextPoint + 1 == state.mPath.mPoints.size();
+        if (lastLeg && pointDistance <= obstacleDistance + 2 * sAvoidActorRadius + state.mOptions.mTolerance)
+        {
+            state.mNextPoint = state.mPath.mPoints.size();
+            state.mStatus = Status::Arrived;
+            state.mTurnTo = state.mOptions.mFinalYaw;
+            state.mAvoidWaiting = false;
+            setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
+            return false;
+        }
+
+        // Step around it on the side it leaves free, as long as the navmesh goes there and nothing is in the way
+        if (state.mDetours < sAvoidMaxDetours)
+        {
+            osg::Vec3f offset = obstaclePosition - position;
+            offset.z() = 0.f;
+            const float lateral = offset * right;
+            const float clearance = 3.f * sAvoidActorRadius;
+            const std::optional<ESM::FormId> cell = getCellFormId(ptr);
+            for (float side : { lateral > 0.f ? -1.f : 1.f, lateral > 0.f ? 1.f : -1.f })
+            {
+                osg::Vec3f detour = obstaclePosition + right * (side * clearance);
+                detour.z() = position.z();
+                if (cell)
+                {
+                    const std::optional<ESM4Navigation::Triangle> triangle = mNavigation.locate(*cell, detour);
+                    if (!triangle || !ESM4Navigation::contains2D(*triangle, detour.x(), detour.y()))
+                        continue;
+                    const float height = ESM4Navigation::heightAt(*triangle, detour.x(), detour.y());
+                    if (std::abs(height - position.z()) > 64.f)
+                        continue;
+                    detour.z() = height;
+                }
+                const MWPhysics::RayCastingResult blocked = rays.castRay(position + eye, detour + eye, ignore, {},
+                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor);
+                if (blocked.mHit)
+                    continue;
+                state.mPath.mPoints.insert(
+                    state.mPath.mPoints.begin() + static_cast<std::ptrdiff_t>(state.mNextPoint), detour);
+                ++state.mDetours;
+                state.mAvoidWaiting = false;
+                state.mAvoidWaited = 0.f;
+                return false;
+            }
+        }
+
+        // No way around: wait for it to move, then walk on regardless
+        state.mAvoidWaited += sAvoidCheckInterval;
+        if (state.mAvoidWaited >= sAvoidWaitTime)
+        {
+            state.mIgnored = obstacle;
+            state.mIgnoreTime = sAvoidIgnoreTime;
+            state.mAvoidWaited = 0.f;
+            state.mAvoidWaiting = false;
+            return false;
+        }
+        state.mAvoidWaiting = true;
         return true;
     }
 

@@ -11,6 +11,8 @@
 
 #include <components/esm3/refnum.hpp>
 
+#include "../mwworld/ptr.hpp"
+
 #include "esm4navigation.hpp"
 
 namespace MWWorld
@@ -55,6 +57,7 @@ namespace MWMechanics
             std::string mEnter; // KF models under meshes/, empty for none
             std::string mLoop;
             std::string mExit;
+            bool mSeated = false; // already seated (a loaded game): skip the entry sequence
         };
 
         enum class UsePhase
@@ -122,10 +125,22 @@ namespace MWMechanics
             FurnitureUse mFurniture;
             float mPhaseTimer = 0.f; // seconds left in the entry or exit sequence
             float mIdleTimer = 0.f; // seconds left in a one-shot idle, 0 when none plays
+
+            // Actor avoidance
+            float mAvoidCheck = 0.f; // seconds to the next look ahead
+            bool mAvoidWaiting = false; // standing until the way clears
+            float mAvoidWaited = 0.f;
+            MWWorld::Ptr mIgnored; // walked past (through) after waiting too long
+            float mIgnoreTime = 0.f;
+            int mDetours = 0; // side steps added to this path
         };
 
         // Returns false when the actor is done with this state (stopped, arrived and turned).
         bool updateActor(const MWWorld::Ptr& ptr, State& state, float duration);
+        // Looks ahead along the path for other actors (and the player) in the way: steps around them when the
+        // navmesh leaves room, else waits for them to move, and after waiting long enough walks on regardless.
+        // True while the actor waits.
+        bool avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration);
         void startUsing(const MWWorld::Ptr& ptr, State& state);
         void finishUsing(const MWWorld::Ptr& ptr, State& state);
         // Resumes the loop an idle interrupted: the seated loop or the standing idle.

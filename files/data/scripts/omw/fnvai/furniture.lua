@@ -198,6 +198,8 @@ local function modelOf(idle)
     return idle and idles.modelPath(idle) or nil
 end
 
+local arrive -- below
+
 --- Starts using furniture or an idle marker: the NPC walks to the marker first.
 -- target: from findFurniture or findIdleMarker
 -- opts: { sleep = bool, procedure = GetCurrentAIProcedure value, usedItem = form id of the food in hand,
@@ -220,7 +222,54 @@ function M.begin(npc, s, target, opts, now)
         nextIdle = now,
         idleIndex = 0,
     }
-    ai.moveTo(npc, target.position, { yaw = target.yaw, tolerance = 24 })
+    if opts.resume then
+        -- a loaded game: the actor is already there
+        arrive(npc, s.furn, now, true)
+        if s.furn.phase == 'failed' then M.release(s) end
+        return
+    end
+    ai.moveTo(npc, target.position, { yaw = target.yaw, tolerance = 24, run = opts.run })
+end
+
+--- What to save of the use, nil when there is nothing to come back to (still walking there, getting up).
+function M.save(s, now)
+    local f = s.furn
+    if f == nil or f.phase ~= 'use' then return nil end
+    local ok, refId = pcall(function() return core.obscript.dialogue.getReferenceId(f.target.object) end)
+    if not ok or refId == nil or refId == '' then return nil end
+    return {
+        object = refId,
+        marker = f.target.marker and f.target.marker.index or nil,
+        sleep = f.sleep,
+        procedure = f.procedure,
+        usedItem = f.usedItem,
+        package = f.package,
+        leaveIn = f.leaveAt and math.max(f.leaveAt - now, 0) or nil,
+    }
+end
+
+--- Takes a saved use up again, seated at once. False when the furniture or marker is gone or taken.
+function M.restore(npc, s, saved, now, getObject)
+    local obj = getObject(saved.object)
+    if obj == nil or not isFree(obj, npc) then return false end
+    local target
+    if saved.marker == nil then
+        if types.ESM4IdleMarker == nil or not types.ESM4IdleMarker.objectIsInstance(obj) then return false end
+        target = { object = obj, position = obj.position, yaw = obj.rotation:getYaw(),
+            record = types.ESM4IdleMarker.record(obj) }
+    else
+        if types.ESM4Furniture == nil or not types.ESM4Furniture.objectIsInstance(obj) then return false end
+        for _, marker in ipairs(types.ESM4Furniture.markers(obj)) do
+            if marker.index == saved.marker then
+                local position, yaw = M.markerWorld(obj, marker)
+                target = { object = obj, marker = marker, position = position, yaw = yaw }
+            end
+        end
+        if target == nil then return false end
+    end
+    M.begin(npc, s, target, { sleep = saved.sleep, procedure = saved.procedure, usedItem = saved.usedItem,
+        package = saved.package, duration = saved.leaveIn, resume = true }, now)
+    return s.furn ~= nil
 end
 
 function M.inUse(s)
@@ -252,7 +301,7 @@ local function markerIdle(npc, f)
     return leaf
 end
 
-local function arrive(npc, f, now)
+arrive = function(npc, f, now, seated)
     local target = f.target
     if f.idleMarker then
         ai.face(npc, target.yaw)
@@ -277,6 +326,7 @@ local function arrive(npc, f, now)
         enter = modelOf(enter),
         loop = modelOf(loop),
         exit = modelOf(exit),
+        seated = seated == true,
     })
     log(('%s uses %s marker %d: %s / %s / %s'):format(npc.recordId, target.object.recordId, target.marker.type,
         enter and enter.editorId or '-', loop.editorId, exit and exit.editorId or '-'))
