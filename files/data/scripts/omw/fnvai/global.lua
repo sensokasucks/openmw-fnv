@@ -231,12 +231,16 @@ local function flagsAllow(npc, pkg, s)
     return not hasFlag(pkg.flags, FLAG_SKIPPED)
 end
 
+local simTime = 0 -- seconds of simulation since the script started
+
 local function pickPackage(npc, s)
     local forced = scriptPackages[npc.id]
     if forced then return forced end
     local t = now()
+    local failed = s and s.failedUntil or {}
     for _, pkg in ipairs(getPackages(npc)) do
-        if flagsAllow(npc, pkg, s) and scheduleMatches(pkg.schedule, t) and conditionsPass(pkg, npc) then
+        if simTime >= (failed[pkg.id] or 0) and flagsAllow(npc, pkg, s) and scheduleMatches(pkg.schedule, t)
+            and conditionsPass(pkg, npc) then
             return pkg
         end
     end
@@ -340,7 +344,6 @@ end
 
 local states = {} -- npc id -> state
 local tracked = {} -- npc id -> npc
-local simTime = 0
 
 -- Head tracking outside conversations: an NPC near the player turns its head to
 -- them (FalloutNV.exe: fAIMaxHeadTrackDistance 400; the choice is looked at again
@@ -1163,6 +1166,7 @@ end
 -- point the route loops back to, or, when it does not loop, walks it back the other way. A repeatable patrol
 -- starts at the point nearest the actor. It walks, unless the package has Always Run.
 local PATROL_ARRIVE_RADIUS = 32
+local PATROL_FAIL_RETRY = 60 -- seconds before a patrol without a route is tried again
 
 local function referenceIdOf(obj)
     local ok, id = pcall(function() return dlg.getReferenceId(obj) end)
@@ -1235,13 +1239,19 @@ local function patrol(npc, s, dest, pkg)
     if s.patrol == nil or s.patrol.points == nil then patrolStart(npc, s, dest, pkg) end
     local p = s.patrol
     local point = getObject(p.points[p.index])
+    if #p.points == 0 then
+        -- no chain of linked references: the original's patrol fails to start (0x92adb0) and the package is
+        -- picked again; it is left out of the picks for a while so the next package in the list can run
+        log(('%s (%s): %s has no patrol route, picks another package'):format(npc.recordId, tostring(npc.id),
+            pkg.editorId))
+        s.failedUntil = s.failedUntil or {}
+        s.failedUntil[pkg.id] = simTime + PATROL_FAIL_RETRY
+        s.patrol = nil
+        s.nextEvaluation = simTime
+        return
+    end
     if point == nil then
-        -- no route to walk: stand at the location
-        if not s.patrolReported then
-            s.patrolReported = true
-            log(('%s (%s): %s has no patrol route (location %s), stays there'):format(npc.recordId,
-                tostring(npc.id), pkg.editorId, tostring(dest.ref and dest.ref.recordId or dest.position)))
-        end
+        -- the point isn't loaded: stand at the location
         goAndStay(npc, s, dest, pkg, function() end)
         return
     end

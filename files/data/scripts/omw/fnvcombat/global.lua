@@ -125,9 +125,10 @@ local function startCombat(actor, target)
     scriptEvent(actor, 'OnStartCombat', target)
 end
 
-local function stopCombat(actor)
+local function stopCombat(actor, why)
     local s = fighting[actor.id]
     if s then
+        print(('[combat] %s (%s) stops fighting (%s)'):format(actor.recordId, tostring(actor.id), why or 'told to'))
         fighting[actor.id] = nil
         scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
@@ -377,13 +378,13 @@ local function fight(s)
     selectTarget(s, world.players[1])
     local actor, target = s.actor, s.target
     if not isAlive(target) then
-        stopCombat(actor)
+        stopCombat(actor, 'target dead or gone')
         return
     end
     local offset = target.position - actor.position
     local distance = util.vector2(offset.x, offset.y):length()
     if distance > GIVE_UP_DISTANCE or actor.cell.worldSpaceId ~= target.cell.worldSpaceId then
-        stopCombat(actor)
+        stopCombat(actor, 'target too far')
         return
     end
 

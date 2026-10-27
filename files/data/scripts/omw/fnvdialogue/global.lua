@@ -388,6 +388,12 @@ functions[53] = function(cond) -- GetScriptVariable ref index
     return name and vars.locals[name:lower()] or 0
 end
 
+functions[226] = function() -- GetSandman: no Sandman perk kills
+    return 0
+end
+functions[610] = function() -- GetCasinoWinningStage: no casino winnings yet
+    return 0
+end
 functions[454] = function(cond, obj) -- GetPlayerTeammate
     return obj ~= nil and I.FNVAI and I.FNVAI.isTeammate and I.FNVAI.isTeammate(obj) and 1 or 0
 end
