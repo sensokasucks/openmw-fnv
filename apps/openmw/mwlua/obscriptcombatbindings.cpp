@@ -148,6 +148,8 @@ namespace MWLua
             {
                 const ESM4::Weapon::DataFO3& d = weapon.mFO3Data;
                 t["animType"] = d.animType;
+                t["reach"] = d.reach;
+                t["animMult"] = d.animMult;
                 t["automatic"] = (d.flags1 & ESM4::Weapon::FO3_Automatic) != 0;
                 t["ammoUse"] = d.ammoUse;
                 t["projectiles"] = d.projectileCount;
@@ -407,7 +409,33 @@ namespace MWLua
             sol::state_view lua(s);
             sol::table t = makeWeapon(lua, *weapon);
             t["isGun"] = Combat::isGun(*weapon);
+            t["type"] = Combat::getWeaponType(*weapon);
             return t;
+        };
+
+        // Every weapon the NPC carries: weapon tables as getWeapon, plus isGun and the combat planner's type
+        // (0 explosive, 1 ranged, 2 melee, 3 grenade, 4 mine, 6 hand to hand).
+        api["getActorWeapons"] = [](const Object& actor, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            sol::table res(lua, sol::create);
+            for (const ESM4::Weapon* weapon : Combat::getActorWeapons(actor.ptr()))
+            {
+                sol::table t = makeWeapon(lua, *weapon);
+                t["isGun"] = Combat::isGun(*weapon);
+                t["type"] = Combat::getWeaponType(*weapon);
+                res[res.size() + 1] = t;
+            }
+            return res;
+        };
+
+        // Puts one of the NPC's weapons (record id) in its hands, holstered; drawWeapon shows it.
+        api["equipWeapon"] = [context](const Object& actor, std::string_view weaponId) {
+            const ESM4::Weapon* weapon = findWeapon(weaponId);
+            if (weapon == nullptr)
+                return;
+            context.mLuaManager->addAction(
+                [actor = Object(actor), weapon] { Combat::equipWeapon(actor.ptr(), weapon); },
+                "obscriptCombatEquipWeaponAction");
         };
 
         // Shows the NPC's weapon in its hand and aims it (true), or puts it away.

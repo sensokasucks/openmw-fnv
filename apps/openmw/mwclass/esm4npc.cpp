@@ -1,5 +1,7 @@
 #include "esm4npc.hpp"
 
+#include <algorithm>
+
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadlvli.hpp>
@@ -72,6 +74,7 @@ namespace MWClass
         std::vector<const ESM4::Armor*> mEquippedArmor;
         std::vector<const ESM4::Clothing*> mEquippedClothing;
         const ESM4::Weapon* mEquippedWeapon = nullptr; // FO3/FONV: what the NPC fights with
+        std::vector<const ESM4::Weapon*> mWeapons; // FO3/FONV: every weapon it carries (the combat planner switches)
 
         ESM4NpcCustomData& asESM4NpcCustomData() override { return *this; }
         const ESM4NpcCustomData& asESM4NpcCustomData() const override { return *this; }
@@ -148,6 +151,8 @@ namespace MWClass
                     };
                     if (data->mEquippedWeapon == nullptr || (isGun(weapon) && !isGun(data->mEquippedWeapon)))
                         data->mEquippedWeapon = weapon;
+                    if (std::find(data->mWeapons.begin(), data->mWeapons.end(), weapon) == data->mWeapons.end())
+                        data->mWeapons.push_back(weapon);
                 }
                 else if (data->mTraits != nullptr && data->mTraits->mIsTES4)
                 {
@@ -178,6 +183,16 @@ namespace MWClass
     const ESM4::Weapon* ESM4Npc::getEquippedWeapon(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mEquippedWeapon;
+    }
+
+    const std::vector<const ESM4::Weapon*>& ESM4Npc::getWeapons(const MWWorld::Ptr& ptr)
+    {
+        return getCustomData(ptr).mWeapons;
+    }
+
+    void ESM4Npc::setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)
+    {
+        getCustomData(ptr).mEquippedWeapon = weapon;
     }
 
     const std::vector<const ESM4::Armor*>& ESM4Npc::getEquippedArmor(const MWWorld::Ptr& ptr)
