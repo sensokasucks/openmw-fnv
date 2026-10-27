@@ -394,13 +394,23 @@ local function isDead(obj)
     return ok and dead == true
 end
 functions[46] = function(_, obj) return isDead(obj) end -- GetDead
-local voiceTypeExplained = 0
+local voiceTypeExplained = {} -- 'voice type|npc' -> true, logged once each
+local function explainVoiceType(key)
+    if voiceTypeExplained[key] then return false end
+    voiceTypeExplained[key] = true
+    return true
+end
 functions[427] = function(cond, obj) -- GetIsVoiceType: a voice type, or a form list of them
-    if obj == nil or isPlayer(obj) then return false end
+    if obj == nil or isPlayer(obj) then
+        if explainVoiceType(cond.param1Form .. '|' .. tostring(cond.runOn)) then
+            log(('GetIsVoiceType %s runs on %s (runOn %s, reference %s): false'):format(cond.param1Form,
+                obj == nil and 'nothing' or 'the player', tostring(cond.runOn), tostring(cond.reference)))
+        end
+        return false
+    end
     if dlg.isVoiceType then
         local yes = dlg.isVoiceType(obj, cond.param1Form)
-        if not yes and dlg.describeVoiceType and voiceTypeExplained < 3 then
-            voiceTypeExplained = voiceTypeExplained + 1
+        if not yes and dlg.describeVoiceType and explainVoiceType(cond.param1Form .. '|' .. tostring(obj.recordId)) then
             log(('GetIsVoiceType %s is false for %s: %s'):format(cond.param1Form, tostring(obj.recordId),
                 dlg.describeVoiceType(obj, cond.param1Form)))
         end
@@ -549,7 +559,7 @@ functions[474] = function(cond, obj) -- GetIsAlignment 0 good, 1 neutral, 2 evil
     return characterRules.alignmentOf(stats.get(obj, 'Karma'), character.gmst) == cond.param1
 end
 -- states the engine does not track for ESM4 actors yet: always "no"
-for _, f in ipairs({ 36, 45, 49, 61, 63, 91, 98, 101, 125, 159, 182, 224, 242, 286, 309, 354, 365, 382, 435, 436, 454, 455,
+for _, f in ipairs({ 36, 45, 49, 61, 63, 91, 98, 101, 125, 159, 182, 224, 242, 286, 309, 354, 365, 382, 435, 436,
     523, 586, 619 }) do
     functions[f] = function() return 0 end
 end
