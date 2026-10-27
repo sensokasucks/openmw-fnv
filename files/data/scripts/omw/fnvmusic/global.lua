@@ -19,6 +19,8 @@ local nextCheck = 0
 local function foughtBy(player)
     local combat = I.FNVCombat
     if combat == nil or combat.getTarget == nil then return false end
+    -- ESM4 actors aren't in world.activeActors; the combat script knows who fights whom
+    if combat.isTargeted ~= nil then return combat.isTargeted(player) end
     for _, actor in ipairs(world.activeActors) do
         if actor ~= player and combat.getTarget(actor) == player then
             return true

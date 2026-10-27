@@ -450,6 +450,13 @@ return {
         --- Whether the actor's detection score of the player is above fSneakNoticedMin (checked every
         -- fDetectionTimerSetting seconds).
         noticesPlayer = function(actor) return noticesPlayer(actor) end,
+        --- Whether anyone fights the target (battle music).
+        isTargeted = function(target)
+            for _, s in pairs(fighting) do
+                if s.target == target and not s.fleeing then return true end
+            end
+            return false
+        end,
         getTarget = function(actor)
             local s = fighting[actor.id]
             return s and s.target
