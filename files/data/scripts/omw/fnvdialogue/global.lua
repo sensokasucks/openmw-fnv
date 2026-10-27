@@ -1223,8 +1223,21 @@ local function chatterDelay()
     return lo + math.random() * math.max(gmst('fIdleChatterCommentTimerMax', 60) - lo, 0)
 end
 
+local chatterTries, chatterSaid, chatterReport = 0, 0, 60
 local function tickChatter(player)
-    if getTopic('IdleChatter') == nil then return end
+    if getTopic('IdleChatter') == nil then
+        if chatterReport ~= nil then
+            log('no IdleChatter topic: idle chatter is off')
+            chatterReport = nil
+        end
+        return
+    end
+    if chatterReport ~= nil and simTime >= chatterReport then
+        if chatterTries > 0 then
+            log(('idle chatter: %d NPCs had their turn, %d had a line'):format(chatterTries, chatterSaid))
+        end
+        chatterReport = simTime + 60
+    end
     for _, npc in ipairs(activeEsm4Actors()) do
         if types.ESM4NPC.objectIsInstance(npc) and sameSpace(npc.cell, player.cell)
             and (npc.position - player.position):length() <= IDLE_CHATTER_RANGE then
@@ -1235,7 +1248,9 @@ local function tickChatter(player)
                 nextChatter[npc.id] = simTime + chatterDelay()
                 if not isSpeaking(npc) and not isDead(npc) and not conversing[npc.id]
                     and not (I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc)) then
+                    chatterTries = chatterTries + 1
                     if sayLine(npc, nil, 'IdleChatter') then
+                        chatterSaid = chatterSaid + 1
                         log(('%s (%s) says an IdleChatter line'):format(npc.recordId, tostring(npc.id)))
                     end
                 end
