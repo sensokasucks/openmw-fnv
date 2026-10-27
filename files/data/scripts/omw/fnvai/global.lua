@@ -870,6 +870,7 @@ local followsPlayer = {}
 -- it is up to fFollowExtraCatchUpSpeedMult faster, always between fFollowWalkMinSlowdownMultiplier and
 -- fFollowWalkMaxSpeedupMultiplier of its own. Accompany fails when the leader gets more than 300 beyond D.
 local FOLLOWER_RADIUS = 32 -- bound radius of a person, about
+local FAST_TRAVEL_DISTANCE = 16384 -- a follower this far from the player outside was left behind by fast travel
 local ACCOMPANY_FAIL_MARGIN = 300
 
 local function followQueueDistance(npc, leader, distance)
@@ -953,10 +954,13 @@ local function follow(npc, s, pkg)
     local status = s.phase == 'go' and moveStatus(npc, s) or 'none'
     if leaderMoving or distance > keep + matchZone * 0.5 then
         local recalc = math.min(0.75 * radius, gmstFloat('fAIMoveDistanceToRecalcFollowPath', 300))
-        if s.followFrom == nil or status ~= 'moving' or (leader.position - s.followFrom):length() > recalc then
+        -- (a new path at most twice a second while the old one is still being walked)
+        if s.followFrom == nil or status ~= 'moving'
+            or ((leader.position - s.followFrom):length() > recalc and simTime - (s.goSince or 0) >= 0.5) then
             if distance > radius then
                 s.followFrom = leader.position
-                moveTo(npc, s, leader.position, { run = run, tolerance = radius, speedMult = mult })
+                -- straight at the leader where the navmesh has no route (across exterior cell borders)
+                moveTo(npc, s, leader.position, { run = run, tolerance = radius, speedMult = mult, direct = true })
                 return
             end
         end
@@ -987,10 +991,12 @@ local function bringFollowers()
             followsPlayer[id] = nil
             return
         end
-        local away = not (npc.cell.isExterior and p.cell.isExterior) and not sameCell(npc.cell, p.cell)
+        local bothOutside = npc.cell.isExterior and p.cell.isExterior
+        local otherWorld = bothOutside and npc.cell.worldSpaceId ~= nil and p.cell.worldSpaceId ~= nil
+            and npc.cell.worldSpaceId ~= p.cell.worldSpaceId
+        local away = (not bothOutside and not sameCell(npc.cell, p.cell)) or otherWorld
             -- fast travel: far out of the loaded cells
-            or (npc.cell.isExterior and p.cell.isExterior and (npc.cell.worldSpaceId ~= p.cell.worldSpaceId
-                or (npc.position - p.position):length() > 16384))
+            or (bothOutside and (npc.position - p.position):length() > FAST_TRAVEL_DISTANCE)
         if npc.enabled and away and not isWaiting(npc) then moving[id] = npc end
     end
     for id, npc in pairs(teammates) do consider(id, npc) end
@@ -1005,13 +1011,13 @@ local function bringFollowers()
         local npc = moving[id]
         if furniture.inUse(states[id] or {}) then furniture.release(states[id]) end
         offset = offset + gmstFloat('fFollowSpaceBetweenFollowers', 192) + FOLLOWER_RADIUS
-        local position = p.position + back * offset
-        if ai.randomPoint then
-            -- onto the navmesh near that spot (the original searches the navmesh too)
-            local ok, point = pcall(ai.randomPoint, p, position, 64)
-            if ok and point ~= nil then position = point end
+        teleport(npc, p.cell, p.position + back * offset, yaw)
+        local s = states[id]
+        if s ~= nil then
+            s.phase = nil
+            s.followFrom = nil
+            s.leaderSeen = nil
         end
-        teleport(npc, p.cell, position, yaw)
     end
 end
 
