@@ -1224,6 +1224,44 @@ local function chatterDelay()
 end
 
 local chatterTries, chatterSaid, chatterReport = 0, 0, 60
+local chatterExplained = 0
+
+-- Why a speaker has no line for a topic: how many of its INFOs a stopped quest, Say Once
+-- or a condition holds back, with the first failing condition of a few of them.
+local function explainNoLine(npc, topicEditorId)
+    local actor = dlg.getActor(npc)
+    local topic = getTopic(topicEditorId)
+    if actor == nil or topic == nil then return end
+    local ctx = makeContext(npc, world.players[1])
+    local infos = getTopicInfos(topic.id, actor.recordId)
+    local byQuest, bySaid, byCondition, shown = 0, 0, 0, 0
+    local stopped = {}
+    for _, info in ipairs(infos) do
+        if not questAllows(info, ctx) then
+            byQuest = byQuest + 1
+            stopped[info.quest] = true
+        elseif not available(info) then
+            bySaid = bySaid + 1
+        else
+            local passed, failed, value = conditions.evaluate(info.conditions, ctx)
+            if not passed then
+                byCondition = byCondition + 1
+                if shown < 4 then
+                    shown = shown + 1
+                    log(('  %s INFO %s fails %s'):format(topicEditorId, info.id, conditions.describe(failed, value)))
+                end
+            end
+        end
+    end
+    local quests = {}
+    for q in pairs(stopped) do
+        local quest = getQuest(q)
+        quests[#quests + 1] = quest and quest.editorId or q
+        if #quests >= 6 then break end
+    end
+    log(('%s has no %s line: %d INFOs, %d held back by a stopped quest (%s), %d said already, %d by conditions')
+        :format(actor.editorId, topicEditorId, #infos, byQuest, table.concat(quests, ' '), bySaid, byCondition))
+end
 local function tickChatter(player)
     if getTopic('IdleChatter') == nil then
         if chatterReport ~= nil then
@@ -1252,6 +1290,9 @@ local function tickChatter(player)
                     if sayLine(npc, nil, 'IdleChatter') then
                         chatterSaid = chatterSaid + 1
                         log(('%s (%s) says an IdleChatter line'):format(npc.recordId, tostring(npc.id)))
+                    elseif chatterExplained < 3 then
+                        chatterExplained = chatterExplained + 1
+                        explainNoLine(npc, 'IdleChatter')
                     end
                 end
             end
