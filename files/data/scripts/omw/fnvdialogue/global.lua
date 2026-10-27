@@ -1247,10 +1247,23 @@ local function explainNoLine(npc, topicEditorId)
     local infos = getTopicInfos(topic.id, actor.recordId)
     local byQuest, bySaid, byCondition, shown = 0, 0, 0, 0
     local stopped = {}
+    local questFails = {}
     for _, info in ipairs(infos) do
         if not questAllows(info, ctx) then
             byQuest = byQuest + 1
             stopped[info.quest] = true
+            local quest = info.quest ~= '' and getQuest(info.quest)
+            if quest and questFails[info.quest] == nil then
+                local qs = questState(quest)
+                local why = qs.running and 'running' or ('not running' .. (qs.completed and ', completed' or '')
+                    .. (qs.failed and ', failed' or '') .. (qs.stopped and ', stopped' or '') .. ', stage ' .. tostring(qs.stage))
+                if qs.running and quest.conditions and #quest.conditions > 0 then
+                    local _, failed, value = conditions.evaluate(quest.conditions, ctx)
+                    why = why .. ', its dialogue conditions fail: ' .. conditions.describe(failed, value)
+                end
+                questFails[info.quest] = why
+                log(('  quest %s: %s'):format(quest.editorId, why))
+            end
         elseif not available(info) then
             bySaid = bySaid + 1
         else
@@ -1270,7 +1283,7 @@ local function explainNoLine(npc, topicEditorId)
         quests[#quests + 1] = (quest and quest.editorId or q) .. (isStartEnabled(q) and '[start-enabled]' or '')
         if #quests >= 6 then break end
     end
-    log(('%s has no %s line: %d INFOs, %d held back by a stopped quest (%s), %d said already, %d by conditions')
+    log(('%s has no %s line: %d INFOs, %d held back by their quest (%s), %d said already, %d by conditions')
         :format(actor.editorId, topicEditorId, #infos, byQuest, table.concat(quests, ' '), bySaid, byCondition))
 end
 local function tickChatter(player)
