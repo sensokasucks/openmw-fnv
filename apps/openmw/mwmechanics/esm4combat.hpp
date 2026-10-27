@@ -84,6 +84,15 @@ namespace MWMechanics::ESM4Combat
     // Whether nothing solid stands between the attacker's eyes and the target's upper body.
     bool hasLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
 
+    // The ray hasLineOfFire casts and what stops it (for diagnostics).
+    struct LineOfFire
+    {
+        osg::Vec3f mFrom, mTo, mHitPosition;
+        bool mHit = false;
+        MWWorld::Ptr mHitObject; // empty for terrain, or when nothing was hit
+    };
+    LineOfFire getLineOfFire(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
+
     // How well the observer detects the target (CalcDetectionScore, FalloutNV.exe 0x642ed0): sound and sight fall
     // off with distance (fSneakMaxDistance, doubled outdoors), sight needs a line of sight inside the observer's
     // view cone (fDetectionViewCone) and scales with the light, and the observer's Perception counts against the

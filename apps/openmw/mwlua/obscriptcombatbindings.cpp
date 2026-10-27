@@ -471,6 +471,21 @@ namespace MWLua
             return Combat::hasLineOfFire(actor.ptr(), target.ptr());
         };
 
+        // The ray hasLineOfFire casts: { from, to, hit, hitPosition, hitObject (record id, nil for terrain) }.
+        api["getLineOfFire"] = [](const Object& actor, const Object& target, sol::this_state s) -> sol::table {
+            sol::state_view lua(s);
+            const Combat::LineOfFire line = Combat::getLineOfFire(actor.ptr(), target.ptr());
+            sol::table t(lua, sol::create);
+            t["from"] = line.mFrom;
+            t["to"] = line.mTo;
+            t["hit"] = line.mHit;
+            if (line.mHit)
+                t["hitPosition"] = line.mHitPosition;
+            if (!line.mHitObject.isEmpty())
+                t["hitObject"] = line.mHitObject.getCellRef().getRefId().toDebugString();
+            return t;
+        };
+
         // Plays the NPC's reload sequence.
         // Whether the actor (the player too) is sneaking.
         api["isSneaking"] = [](const Object& actor) -> bool {
