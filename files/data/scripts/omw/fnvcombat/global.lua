@@ -518,6 +518,111 @@ local function combatItem(s)
     return s.restoreItem
 end
 
+-- Weapons to pick up (ghidra-findings-6): every fCombatFindBetterWeaponTime 5 s (2.5 s while unarmed) the loose
+-- weapons and the weapons on corpses around the actor are scored by damage a second; one beats the bar when it does
+-- more than fPickupWeaponMinDPSImprovementPercent (1.5 x) the actor's best, melee weapons at half. The reach is a
+-- band set by what the actor holds (ranged 512-2048, melee 256-1024, fists 256-2048), doubled while unarmed,
+-- stretching with score over bar up to fPickupWeaponDistanceMinMaxDPSMult 5 [band formula inferred]. Candidates
+-- rank by dps x 10000 / max(distance, 64). Containers and ammo on hand are not modelled yet (NPC ammo is endless).
+local PICKUP_IDLE = 'characters/_male/idleanims/pickupgroundobject_0.3.kf'
+local PICKUP_TAKE_AT = 0.3
+local PICKUP_REACH = 32 + ACTOR_RADIUS + 16 -- fPickupItemDistanceFudge + the two radii
+local pickupBlocked = {} -- ref id -> until (unreachable or gone)
+
+local function weaponDps(actor, weapon)
+    if weapon == nil then return 0 end
+    local skill = weapon.skill and weapon.skill >= 0 and stats.get(actor, weapon.skill) or 50
+    local damage = (weapon.damage or 0) * (gmst('fDamageSkillBase', 0.5) + gmst('fDamageSkillMult', 0.5) * skill / 100)
+    local rate = weapon.shotsPerSecond and weapon.shotsPerSecond > 0 and weapon.shotsPerSecond or 1
+    local dps = damage * math.max(weapon.projectiles or 1, 1) * rate
+    if weapon.type == PW.GRENADE then dps = dps / 10 end
+    if weapon.type == PW.MINE then dps = 0 end
+    if weapon.type == PW.MELEE then dps = dps * gmst('fPickupWeaponMeleeWeaponDPSMult', 0.5) end
+    return dps
+end
+
+local function ownDps(s)
+    local best = math.max(stats.get(s.actor, 'MeleeDamage') or 1, 1) -- fists, once a second
+    for _, weapon in ipairs(s.weapons or {}) do
+        if weapon.type ~= PW.GRENADE and weapon.type ~= PW.MINE then
+            best = math.max(best, weaponDps(s.actor, weapon))
+        end
+    end
+    return best
+end
+
+local function pickupBand(s)
+    local held = s.inHand and s.inHand.type
+    if held == PW.RANGED or held == PW.EXPLOSIVE then return 512, 2048 end
+    if held == PW.MELEE then return 256, 1024 end
+    return 256, 2048
+end
+
+local function scanPickups(s)
+    local unarmed = s.inHand == nil or s.inHand.type == PW.HAND_TO_HAND
+    local every = unarmed and gmst('fCombatFindBetterWeaponTime', 5) / 2 or gmst('fCombatFindBetterWeaponTime', 5)
+    if simTime < (s.nextPickupScan or 0) then return end
+    s.nextPickupScan = simTime + every
+    s.pickup = nil
+    local actor = s.actor
+    if actor.cell == nil or not types.ESM4NPC.objectIsInstance(actor) or types.ESM4Weapon == nil then return end
+    local bar = ownDps(s) * (1 + gmst('fPickupWeaponMinDPSImprovementPercent', 0.5))
+    local minDist, maxDist = pickupBand(s)
+    if unarmed then minDist, maxDist = minDist * gmst('fDisarmedPickupWeaponDistanceMult', 2),
+        maxDist * gmst('fDisarmedPickupWeaponDistanceMult', 2) end
+    local best, bestRank = nil, 0
+    local function consider(obj, holder)
+        if not obj:isValid() or obj.count <= 0 then return end
+        local rec = combat.getWeapon(obj.recordId)
+        if rec == nil then return end
+        local dps = weaponDps(actor, rec)
+        if dps <= bar then return end
+        local where = holder and holder.position or obj.position
+        local distance = (where - actor.position):length()
+        local reach = minDist + (maxDist - minDist) * math.min(dps / bar / gmst('fPickupWeaponDistanceMinMaxDPSMult', 5), 1)
+        if distance > reach then return end
+        if simTime < (pickupBlocked[obj.id] or 0) then return end
+        if s.threat and (where - s.threat):length() <= 128 then return end
+        local rank = dps * 10000 / math.max(distance, 64)
+        if rank > bestRank then
+            bestRank = rank
+            best = { obj = obj, holder = holder, position = where, key = 'pickup:' .. tostring(obj.id),
+                editorId = rec.editorId, dps = dps }
+        end
+    end
+    local cells = { actor.cell }
+    if actor.cell.isExterior then
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                if dx ~= 0 or dy ~= 0 then
+                    local ok, cell = pcall(world.getExteriorCell, actor.cell.gridX + dx, actor.cell.gridY + dy, actor.cell)
+                    if ok and cell then cells[#cells + 1] = cell end
+                end
+            end
+        end
+    end
+    for _, cell in ipairs(cells) do
+        local ok, loose = pcall(cell.getAll, cell, types.ESM4Weapon)
+        for _, obj in ipairs(ok and loose or {}) do consider(obj, nil) end
+        local okNpcs, npcs = pcall(cell.getAll, cell, types.ESM4NPC)
+        for _, npc in ipairs(okNpcs and npcs or {}) do
+            if npc ~= actor and combat.isDead(npc) and (npc.position - actor.position):length() <= maxDist then
+                local okItems, items = pcall(function() return types.Actor.inventory(npc):getAll() end)
+                for _, item in ipairs(okItems and items or {}) do
+                    if types.ESM4Weapon.objectIsInstance(item) then consider(item, npc) end
+                end
+            end
+        end
+    end
+    if best and (s.pickupLogged ~= best.key) then
+        s.pickupLogged = best.key
+        print(('[combat] %s (%s) wants to pick up %s (%.1f dps over %.1f) %.0f away%s'):format(actor.recordId,
+            tostring(actor.id), tostring(best.editorId), best.dps, bar, (best.position - actor.position):length(),
+            best.holder and (' from ' .. tostring(best.holder.recordId)) or ''))
+    end
+    s.pickup = best
+end
+
 local function bestWeapons(s, distance)
     local best = {}
     for _, weapon in ipairs(s.weapons or {}) do
@@ -647,6 +752,9 @@ local function worldState(s, distance, los)
             return s.searchPos ~= nil and (s.actor.position - s.searchPos):length() <= 128
         end
         if kind == L.AVOID_THREAT then return s.threat == nil end
+        if s.pickup and kind == s.pickup.key then
+            return (s.actor.position - s.pickup.position):length() <= PICKUP_REACH
+        end
         if kind == L.COVER then
             local c = s.cover
             return c ~= nil and (s.inCoverLoop or (s.actor.position - c.cover):length() <= 40
@@ -683,7 +791,8 @@ local function worldState(s, distance, los)
         if fact == P_F.WANTS_TO_FLEE then return s.fleeing and 1 or 0 end
         -- the original never writes USED_COMBAT_ITEM; the goal stops once the cooldown re-arms
         if fact == P_F.HAS_COMBAT_ITEM then return (param ~= nil and param == s.restoreItem) and 1 or 0 end
-        if fact == P_F.USED_COMBAT_ITEM then return 0 end
+        -- a weapon to pick up is never "used": the USE goal passes it by, ACTIVATE fetches it
+        if fact == P_F.USED_COMBAT_ITEM then return (s.pickup and param == s.pickup.key) and 1 or 0 end
         if fact == P_F.EXECUTION_FLAGS then
             if param == P.X.COVER then return coverWanted(s) and 1 or 0 end
             return (param == P.X.SEARCH or param == P.X.MOVE or param == P.X.MELEE) and 1 or 0
@@ -724,7 +833,13 @@ local function replan(s, distance, los)
     local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT }
     if coverWanted(s) then locations[#locations + 1] = P.L.COVER end
     scanCombatItems(s)
-    local ctx = { actorType = actorType, locations = locations, item = combatItem(s),
+    scanPickups(s)
+    local item = combatItem(s)
+    if item == nil and s.pickup and not s.fleeing then
+        item = s.pickup.key
+        locations[#locations + 1] = s.pickup.key
+    end
+    local ctx = { actorType = actorType, locations = locations, item = item,
         weaponTypes = weaponTypes, cost = planCost(s) }
     local goal, plan = P.plan(worldState(s, distance, los), ctx)
     s.replanAt = simTime + REPLAN_EVERY
@@ -798,6 +913,26 @@ local function moveTowards(s, kind, distance, los)
         elseif ai.status(actor) == 'nopath' then
             s.failedCovers[s.cover.key] = simTime
             releaseCover(s)
+            return 'failed'
+        end
+        return 'running'
+    end
+    if s.pickup and kind == s.pickup.key then
+        local obj = s.pickup.obj
+        if not obj:isValid() or obj.count <= 0 then
+            s.pickup, s.nextPickupScan = nil, 0
+            return 'failed'
+        end
+        if (actor.position - s.pickup.position):length() <= PICKUP_REACH then
+            holdStill(actor)
+            return 'done'
+        end
+        if not state.sent or ai.status(actor) == 'idle' then
+            state.sent = true
+            ai.moveTo(actor, s.pickup.position, { run = true, direct = true, tolerance = 24 })
+        elseif ai.status(actor) == 'nopath' then
+            pickupBlocked[obj.id] = simTime + 30
+            s.pickup, s.nextPickupScan = nil, 0
             return 'failed'
         end
         return 'running'
@@ -1109,8 +1244,75 @@ local function useCombatItem(s, step)
     return 'done'
 end
 
+-- A dying NPC drops the weapon in its hands beside it with iDeathDropWeaponChance (100 in the ESM), where the
+-- living can pick it up; the weapon's visible copy on the body goes with it.
+local function dropWeaponOnDeath(target)
+    if not types.ESM4NPC.objectIsInstance(target) or target.cell == nil then return end
+    if math.random(0, 99) >= gmst('iDeathDropWeaponChance', 0) then return end
+    local weapon = combat.getActorWeapon(target)
+    if weapon == nil or weapon.type == PW.HAND_TO_HAND then return end
+    local ok, item = pcall(function() return types.Actor.inventory(target):find(weapon.id) end)
+    if not ok or item == nil then return end
+    local angle = math.random() * 2 * math.pi
+    local at = target.position + util.vector3(math.cos(angle) * 40, math.sin(angle) * 40, 8)
+    local okDrop = pcall(function()
+        local one = item.count > 1 and item:split(1) or item
+        one:teleport(target.cell, at, { rotation = util.transform.rotateZ(math.random() * 2 * math.pi) })
+    end)
+    if okDrop then
+        pcall(combat.equipWeapon, target, nil)
+        print(('[combat] %s (%s) drops %s'):format(target.recordId, tostring(target.id), tostring(weapon.editorId)))
+    end
+end
+
+-- CombatProcedureActivateObject (FalloutNV.exe 0x9ca760): the pickup idle (PickUpGroundObject_0.3) and the item
+-- taken at its 0.3 s mark; from a corpse the whole stack, with its ammo [the original takes every slotted item].
+-- Nothing equips it here: once it is the best of its type, the next plan switches to it (SWITCH_WEAPON).
+local function activateCombatItem(s, step)
+    local actor, st = s.actor, s.stepState
+    local pickup = s.pickup
+    if pickup == nil or step.param ~= pickup.key then return 'failed' end
+    local obj = pickup.obj
+    if not obj:isValid() or obj.count <= 0 then
+        s.pickup, s.nextPickupScan = nil, 0
+        return 'failed'
+    end
+    holdStill(actor)
+    if not st.started then
+        st.started = true
+        st.takeAt = simTime
+        if pickup.holder == nil and ai.playIdle then
+            ai.playIdle(actor, PICKUP_IDLE)
+            st.takeAt = simTime + PICKUP_TAKE_AT
+        end
+    end
+    if simTime < st.takeAt then return 'running' end
+    local inventory = types.Actor.inventory(actor)
+    local okMove = pcall(function() obj:moveInto(inventory) end)
+    if okMove and pickup.holder ~= nil then
+        -- the ammo that goes with it
+        local rec = combat.getWeapon(obj.recordId)
+        local okItems, items = pcall(function() return types.Actor.inventory(pickup.holder):getAll() end)
+        for _, item in ipairs(okItems and items or {}) do
+            if rec and rec.ammoTypes then
+                for _, ammo in ipairs(rec.ammoTypes) do
+                    if ammo.id == item.recordId then pcall(function() item:moveInto(inventory) end) end
+                end
+            end
+        end
+    end
+    print(('[combat] %s (%s) picks up %s%s'):format(actor.recordId, tostring(actor.id), tostring(pickup.editorId),
+        pickup.holder and (' from ' .. tostring(pickup.holder.recordId)) or ' from the ground'))
+    pickupBlocked[obj.id] = simTime + 5
+    s.pickup, s.nextPickupScan = nil, 0
+    s.weapons = combat.getActorWeapons(actor)
+    s.replanAt = 0
+    return okMove and 'done' or 'failed'
+end
+
 local procedures = {
     USE_COMBAT_ITEM = function(s, step) return useCombatItem(s, step) end,
+    ACTIVATE_COMBAT_ITEM = function(s, step) return activateCombatItem(s, step) end,
     MOVE = function(s, step, distance, los) return moveTowards(s, step.param, distance, los) end,
     MOVE_AND_SWITCH_TO_MELEE = function(s, step, distance, los)
         if s.equippedType ~= PW.MELEE or s.drawnType ~= PW.MELEE then equipType(s, PW.MELEE) end
@@ -1363,6 +1565,7 @@ return {
                 scriptEvent(target, 'OnHit', e.attacker)
                 if e.killed then
                     scriptEvent(target, 'OnDeath', e.attacker)
+                    dropWeaponOnDeath(target)
                     -- Limbs may come off (scripts/omw/fnvgore)
                     core.sendGlobalEvent('FNVGore_Killed', {
                         target = target,

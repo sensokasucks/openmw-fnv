@@ -245,16 +245,45 @@ namespace MWClass
         return getCustomData(ptr).mEquippedWeapon;
     }
 
+    // The weapon list follows the inventory, so a gun picked up in a fight (or taken by a script) counts
     const std::vector<const ESM4::Weapon*>& ESM4Npc::getWeapons(const MWWorld::Ptr& ptr)
     {
-        return getCustomData(ptr).mWeapons;
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        std::vector<const ESM4::Weapon*> weapons;
+        std::vector<int> counts;
+        for (MWWorld::ConstContainerStoreIterator it = data.mStore.cbegin(MWWorld::ContainerStore::Type_ESM4Weapon);
+             it != data.mStore.cend(); ++it)
+        {
+            if (it->getCellRef().getCount() <= 0)
+                continue;
+            const ESM4::Weapon* weapon = it->get<ESM4::Weapon>()->mBase;
+            const auto found = std::find(weapons.begin(), weapons.end(), weapon);
+            if (found == weapons.end())
+            {
+                weapons.push_back(weapon);
+                counts.push_back(it->getCellRef().getCount());
+            }
+            else
+                counts[found - weapons.begin()] += it->getCellRef().getCount();
+        }
+        // a weapon given by a script without the inventory (setEquippedWeapon) stays usable
+        if (data.mEquippedWeapon != nullptr
+            && std::find(weapons.begin(), weapons.end(), data.mEquippedWeapon) == weapons.end())
+        {
+            weapons.push_back(data.mEquippedWeapon);
+            counts.push_back(1);
+        }
+        data.mWeapons = std::move(weapons);
+        data.mWeaponCounts = std::move(counts);
+        return data.mWeapons;
     }
 
     int ESM4Npc::getWeaponCount(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)
     {
+        const std::vector<const ESM4::Weapon*>& weapons = getWeapons(ptr);
         const ESM4NpcCustomData& data = getCustomData(ptr);
-        const auto found = std::find(data.mWeapons.begin(), data.mWeapons.end(), weapon);
-        return found == data.mWeapons.end() ? 0 : data.mWeaponCounts[found - data.mWeapons.begin()];
+        const auto found = std::find(weapons.begin(), weapons.end(), weapon);
+        return found == weapons.end() ? 0 : data.mWeaponCounts[found - weapons.begin()];
     }
 
     void ESM4Npc::setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)

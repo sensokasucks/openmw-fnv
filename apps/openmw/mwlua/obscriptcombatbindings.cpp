@@ -551,9 +551,10 @@ namespace MWLua
         };
 
         // Puts one of the NPC's weapons (record id) in its hands, holstered; drawWeapon shows it.
-        api["equipWeapon"] = [context](const Object& actor, std::string_view weaponId) {
-            const ESM4::Weapon* weapon = findWeapon(weaponId);
-            if (weapon == nullptr)
+        api["equipWeapon"] = [context](const Object& actor, sol::optional<std::string_view> weaponId) {
+            // nil leaves the NPC empty-handed (a dropped weapon)
+            const ESM4::Weapon* weapon = weaponId ? findWeapon(*weaponId) : nullptr;
+            if (weapon == nullptr && weaponId)
                 return;
             context.mLuaManager->addAction(
                 [actor = Object(actor), weapon] { Combat::equipWeapon(actor.ptr(), weapon); },
