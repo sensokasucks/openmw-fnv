@@ -7,7 +7,6 @@
 #include <random>
 #include <string>
 
-#include <osg/ComputeBoundsVisitor>
 #include <osg/MatrixTransform>
 
 #include <components/sceneutil/positionattitudetransform.hpp>
@@ -365,21 +364,12 @@ namespace MWMechanics::ESM4Combat
         {
             if (candidate == attacker || isDead(candidate))
                 continue;
-            osg::BoundingBox box;
-            if (candidate == player)
-            {
-                // The player's model may be the first person one; use its collision box
-                const osg::Vec3f half = world->getHalfExtents(candidate);
-                const osg::Vec3f position = candidate.getRefData().getPosition().asVec3();
-                box = osg::BoundingBox(position - osg::Vec3f(half.x(), half.y(), 0.f),
-                    position + osg::Vec3f(half.x(), half.y(), half.z() * 2.f));
-            }
-            else
-            {
-                osg::ComputeBoundsVisitor bounds;
-                candidate.getRefData().getBaseNode()->accept(bounds);
-                box = bounds.getBoundingBox();
-            }
+            // The collision box: the render bounds can take in far-off nodes, and the player's model may be the
+            // first person one
+            const osg::Vec3f half = world->getHalfExtents(candidate);
+            const osg::Vec3f position = candidate.getRefData().getPosition().asVec3();
+            const osg::BoundingBox box(position - osg::Vec3f(half.x(), half.y(), 0.f),
+                position + osg::Vec3f(half.x(), half.y(), half.z() * 2.f));
             if (!box.valid())
                 continue;
             if (const std::optional<float> distance = intersect(box, origin, dir, range))
@@ -439,14 +429,6 @@ namespace MWMechanics::ESM4Combat
             else if (anim == 74)
                 suffix = "attackloop";
             return std::string(animPrefix(weapon)) + suffix + ".kf";
-        }
-
-        osg::BoundingBox worldBounds(const MWWorld::Ptr& ptr)
-        {
-            osg::ComputeBoundsVisitor bounds;
-            if (osg::Node* node = ptr.getRefData().getBaseNode())
-                node->accept(bounds);
-            return bounds.getBoundingBox();
         }
 
         // Two-handed weapons by DNAM animation type (FUN_00646cb0)
@@ -575,26 +557,20 @@ namespace MWMechanics::ESM4Combat
 
     namespace
     {
-        // Where an actor's shots start: about eye height
+        // Where an actor's shots start: about eye height. Uses the collision size, not the render bounds, which
+        // can take in far-off nodes and put the muzzle thousands of units up.
         osg::Vec3f muzzle(const MWWorld::Ptr& actor)
         {
-            const osg::BoundingBox box = worldBounds(actor);
-            const osg::Vec3f position = actor.getRefData().getPosition().asVec3();
-            return osg::Vec3f(position.x(), position.y(),
-                box.valid() ? box.zMin() + (box.zMax() - box.zMin()) * 0.85f : position.z() + 110.f);
+            const float half = MWBase::Environment::get().getWorld()->getHalfExtents(actor).z();
+            return actor.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, half > 0.f ? half * 1.7f : 110.f);
         }
 
         // Where shots at an actor go: the upper body
         osg::Vec3f aimPoint(const MWWorld::Ptr& target)
         {
-            const osg::Vec3f position = target.getRefData().getPosition().asVec3();
-            if (target == getPlayer())
-                return position
-                    + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 1.4f);
-            const osg::BoundingBox box = worldBounds(target);
-            if (!box.valid())
-                return position + osg::Vec3f(0, 0, 60);
-            return osg::Vec3f(position.x(), position.y(), box.zMin() + (box.zMax() - box.zMin()) * 0.65f);
+            const float half = MWBase::Environment::get().getWorld()->getHalfExtents(target).z();
+            const float scale = target == getPlayer() ? 1.4f : 1.3f;
+            return target.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, half > 0.f ? half * scale : 60.f);
         }
     }
 
