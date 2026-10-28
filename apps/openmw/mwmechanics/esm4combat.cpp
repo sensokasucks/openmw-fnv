@@ -151,6 +151,7 @@ namespace MWMechanics::ESM4Combat
             float mAge = 0.f;
             float mTravelled = 0.f;
             bool mResting = false;
+            int mBounces = 0;
         };
         std::vector<FlyingProjectile> sProjectiles;
 
@@ -951,9 +952,17 @@ namespace MWMechanics::ESM4Combat
                 if (!timed)
                     return true;
                 // Grenades bounce and roll until their fuse runs out
-                const float bounce = data.bouncyMult > 0.f ? data.bouncyMult : 0.3f;
+                const float bounce = data.bouncyMult > 0.f ? std::min(data.bouncyMult, 1.f) : 0.3f;
                 const osg::Vec3f normal = hit.mHitNormal;
                 projectile.mVelocity = (projectile.mVelocity - normal * (2.f * (projectile.mVelocity * normal))) * bounce;
+                if (++projectile.mBounces <= 4)
+                    Log(Debug::Info) << "ESM4 bounce at " << hit.mHitPos.x() << " " << hit.mHitPos.y() << " "
+                                     << hit.mHitPos.z() << ", normal " << normal.x() << " " << normal.y() << " "
+                                     << normal.z() << ", off "
+                                     << (hit.mHitObject.isEmpty() ? std::string("terrain")
+                                                                  : hit.mHitObject.getCellRef().getRefId().toDebugString())
+                                     << ", now " << projectile.mVelocity.x() << " " << projectile.mVelocity.y() << " "
+                                     << projectile.mVelocity.z();
                 if (projectile.mVelocity.length() < 40.f)
                     projectile.mResting = true;
             }
