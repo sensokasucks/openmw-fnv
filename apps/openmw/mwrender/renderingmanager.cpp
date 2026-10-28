@@ -1372,10 +1372,11 @@ namespace MWRender
         if (mPlayerBody == nullptr)
             return;
         const bool firstPerson = mCamera->getMode() == Camera::Mode::FirstPerson;
-        const bool arms = mPlayerArms != nullptr && firstPerson;
+        const bool hasArms = mPlayerArms != nullptr && firstPerson;
+        const bool arms = hasArms && !mPlayerArmsHidden;
         mPlayerBodyNode->setNodeMask(firstPerson ? 0 : ~0u);
         auto* hide = static_cast<HideCallback*>(mHideMorrowindBody.get());
-        hide->mHidden = !firstPerson || arms;
+        hide->mHidden = !firstPerson || hasArms;
         hide->mDrawBody = !firstPerson;
         if (mPlayerArmsNode != nullptr)
         {

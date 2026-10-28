@@ -98,6 +98,13 @@ local function anglesTo(p)
     return math.atan2(d.x, d.y), -math.atan2(d.z, horizontal), d:length()
 end
 
+-- The first-person arms and the weapon in them are out of view while talking, as in
+-- the original's dialogue camera
+local function hideArms(hidden)
+    local ai = core.obscript and core.obscript.ai
+    if ai and ai.setPlayerArmsHidden then ai.setPlayerArmsHidden(hidden) end
+end
+
 local function apply()
     camera.setFieldOfView(state.fov)
     camera.setExtraYaw(wrap(state.yaw - self.rotation:getYaw()))
@@ -120,6 +127,7 @@ function M.start(speaker)
         return
     end
     local mode = camera.getMode()
+    hideArms(true)
     state = {
         speaker = speaker,
         phase = 'in',
@@ -192,6 +200,7 @@ function M.update(dt)
             if state.previousMode ~= MODE.FirstPerson and camera.getMode() == MODE.FirstPerson then
                 camera.setMode(state.previousMode, true)
             end
+            hideArms(false)
             state = nil
         end
         return

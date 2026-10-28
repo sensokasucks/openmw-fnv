@@ -501,6 +501,12 @@ namespace MWLua
             MWRender::RenderingManager* rendering = MWBase::Environment::get().getWorld()->getRenderingManager();
             return rendering != nullptr && rendering->hasPlayerBody();
         };
+        // setPlayerArmsHidden(hidden): keeps the first-person arms and their weapon out of view (conversations).
+        api["setPlayerArmsHidden"] = [context](bool hidden) {
+            context.mLuaManager->addAction(
+                [hidden] { MWBase::Environment::get().getWorld()->getRenderingManager()->setPlayerArmsHidden(hidden); },
+                "obscriptAISetPlayerArmsHiddenAction");
+        };
         api["setPlayerBodyIdle"] = [context](sol::optional<std::string> model) {
             context.mLuaManager->addAction(
                 [model = model.value_or(std::string())] {

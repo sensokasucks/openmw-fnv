@@ -235,6 +235,8 @@ namespace MWRender
         void setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel);
         // Loops an idle KF (e.g. a furniture sit) on the body; empty goes back to standing and walking.
         void setPlayerBodyIdle(std::string_view model);
+        // FO3/FNV: keeps the first-person arms (and the weapon in them) out of view, as in conversations
+        void setPlayerArmsHidden(bool hidden) { mPlayerArmsHidden = hidden; }
         // The weapon in the body's hand (a WEAP model) and the aim idle of its animation type; empty puts it away.
         void setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle);
 
@@ -362,6 +364,7 @@ namespace MWRender
         osg::ref_ptr<osg::MatrixTransform> mPlayerArmsNode;
         osg::ref_ptr<ESM4NpcAnimation> mPlayerArms;
         osg::Matrixf mPlayerArmsCamera; // Camera1st in the arms skeleton, at rest
+        bool mPlayerArmsHidden = false;
         osg::ref_ptr<osg::Callback> mHideMorrowindBody;
         std::vector<ESM::FormId> mPlayerBodyApparel;
         std::string mPlayerBodyIdle;
