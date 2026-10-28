@@ -4,12 +4,25 @@
 
 #include <components/esm4/loadlvlc.hpp>
 
+#include <limits>
+
+#include <components/esm3/containerstate.hpp>
+
+#include "../mwbase/environment.hpp"
+#include "../mwbase/windowmanager.hpp"
+#include "../mwbase/world.hpp"
+#include "../mwgui/mode.hpp"
 #include "../mwgui/tooltips.hpp"
+#include "../mwmechanics/esm4combat.hpp"
 #include "../mwrender/objects.hpp"
 #include "../mwrender/renderinginterface.hpp"
+#include "../mwworld/actionopen.hpp"
 #include "../mwworld/cellstore.hpp"
+#include "../mwworld/containerstore.hpp"
 #include "../mwworld/customdata.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/nullaction.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "esm4base.hpp"
 
@@ -22,6 +35,7 @@ namespace MWClass
         {
             UseStats = 0x0002,
             UseFactions = 0x0004,
+            UseInventory = 0x0008,
             UseAIData = 0x0010,
             UseAIPackages = 0x0020,
             UseModel = 0x0040,
@@ -37,6 +51,7 @@ namespace MWClass
             const ESM4::Creature* mAIPackages = nullptr;
             const ESM4::Creature* mBaseData = nullptr;
             const ESM4::Creature* mFactions = nullptr;
+            MWWorld::ContainerStore mStore; // what it carries (looted when dead)
         };
 
         // The record itself followed by the records its template chain resolves to.
@@ -89,6 +104,8 @@ namespace MWClass
             data->mFactions = choose(chain, UseFactions);
             if (data->mBaseData->mFullName.empty())
                 data->mBaseData = data->mModel;
+            data->mStore.fillESM4(
+                choose(chain, UseInventory)->mInventory, MWBase::Environment::get().getWorld()->getPrng());
 
             const ESM4CreatureCustomData& res = *data;
             refData.setCustomData(std::move(data));
@@ -140,6 +157,60 @@ namespace MWClass
     {
         const ESM4::Creature* rec = getCustomData(ptr).mBaseData;
         return rec != nullptr ? std::string_view(rec->mFullName) : std::string_view();
+    }
+
+    std::unique_ptr<MWWorld::Action> ESM4Creature::activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const
+    {
+        if (!MWMechanics::ESM4Combat::isDead(ptr))
+            return std::make_unique<MWWorld::NullAction>();
+        if (!MWBase::Environment::get().getWindowManager()->isAllowed(MWGui::GW_Inventory))
+            return std::make_unique<MWWorld::NullAction>();
+        getContainerStore(ptr);
+        return std::make_unique<MWWorld::ActionOpen>(ptr);
+    }
+
+    MWWorld::ContainerStore& ESM4Creature::getContainerStore(const MWWorld::Ptr& ptr) const
+    {
+        auto& data = const_cast<ESM4CreatureCustomData&>(getCustomData(ptr));
+        if (data.mStore.getPtr().isEmpty())
+        {
+            MWBase::Environment::get().getWorldModel()->registerPtr(ptr);
+            data.mStore.setPtr(ptr);
+        }
+        return data.mStore;
+    }
+
+    float ESM4Creature::getCapacity(const MWWorld::Ptr& ptr) const
+    {
+        return std::numeric_limits<float>::max();
+    }
+
+    float ESM4Creature::getEncumbrance(const MWWorld::Ptr& ptr) const
+    {
+        return getContainerStore(ptr).getWeight();
+    }
+
+    void ESM4Creature::readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const
+    {
+        if (!state.mHasCustomState)
+            return;
+        const ESM::ContainerState& containerState = state.asContainerState();
+        // Saves from before creatures had inventories carry none: keep the freshly rolled one
+        if (containerState.mInventory.mItems.empty())
+            return;
+        getContainerStore(ptr).readState(containerState.mInventory);
+    }
+
+    void ESM4Creature::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
+    {
+        if (!ptr.getRefData().getCustomData())
+        {
+            state.mHasCustomState = false;
+            return;
+        }
+        ESM::ContainerState& containerState = state.asContainerState();
+        getCustomData(ptr).mStore.writeState(containerState.mInventory);
+        state.mHasCustomState = true;
     }
 
     const ESM4::Creature* ESM4Creature::getModelRecord(const MWWorld::ConstPtr& ptr)

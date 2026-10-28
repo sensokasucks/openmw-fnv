@@ -33,6 +33,7 @@ MENU: scripts/omw/input/settings.lua
 PLAYER: scripts/omw/input/playercontrols.lua
 PLAYER: scripts/omw/furniture_player.lua
 PLAYER: scripts/omw/fnvuitrace.lua
+GLOBAL: scripts/omw/fnvaitrace.lua
 PLAYER: scripts/omw/fnvcombat/player.lua
 GLOBAL: scripts/omw/fnvhud/global.lua
 PLAYER: scripts/omw/fnvhud/player.lua

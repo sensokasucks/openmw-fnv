@@ -16,7 +16,15 @@ local function ESM4DoorActivation(door, actor)
         return -- C++ (MWClass::ESM4Door) plays the open/close animation and sound
     end
     core.sound.playSound3d(Door4.record(door).openSound, actor)
-    actor:teleport(Door4.destCell(door), Door4.destPosition(door), Door4.destRotation(door))
+    local ok, err = pcall(function()
+        actor:teleport(Door4.destCell(door), Door4.destPosition(door), Door4.destRotation(door))
+    end)
+    if not ok then
+        -- a door whose destination can't be found (say, an exterior cell the engine has no record of) would
+        -- otherwise fail silently, leaving the player shut in
+        print(('[door] %s (%s) in %s: teleport failed: %s'):format(door.recordId, tostring(door.id),
+            tostring(door.cell and (door.cell.name ~= '' and door.cell.name or door.cell.id)), tostring(err)))
+    end
     return false -- disable activation handling in C++ mwmechanics code
 end
 

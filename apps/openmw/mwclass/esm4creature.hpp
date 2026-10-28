@@ -33,6 +33,15 @@ namespace MWClass
         VFS::Path::NormalizedView getModel(const MWWorld::ConstPtr& ptr) const override;
         std::string_view getName(const MWWorld::ConstPtr& ptr) const override;
 
+        // A dead creature opens as a container (looting); a live one does nothing.
+        std::unique_ptr<MWWorld::Action> activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const override;
+        // What the creature carries (its inventory list rolled once). Saved with the reference.
+        MWWorld::ContainerStore& getContainerStore(const MWWorld::Ptr& ptr) const override;
+        float getCapacity(const MWWorld::Ptr& ptr) const override;
+        float getEncumbrance(const MWWorld::Ptr& ptr) const override;
+        void readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const override;
+        void writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const override;
+
         // The record that provides the skeleton, body parts and animations
         static const ESM4::Creature* getModelRecord(const MWWorld::ConstPtr& ptr);
         // The record that holds health, damage, skills and SPECIAL

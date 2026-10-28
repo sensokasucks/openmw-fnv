@@ -138,6 +138,11 @@ namespace
         using StateType = ESM::ContainerState;
     };
     template <>
+    struct RecordToState<ESM4::Creature>
+    {
+        using StateType = ESM::ContainerState;
+    };
+    template <>
     struct RecordToState<ESM4::Door>
     {
         using StateType = ESM::DoorState;
