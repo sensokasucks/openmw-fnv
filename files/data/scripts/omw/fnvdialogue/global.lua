@@ -2609,7 +2609,7 @@ return {
             local first = line.responses[1]
             -- without the {emotion} and <action> notes the subtitles leave out
             local text = first and first.text or ''
-            text = text:gsub('%b{}', ''):gsub('%b<>', ''):gsub('^%s+', ''):gsub('%s+$', '')
+            text = text:gsub('%b{}', ''):gsub('%b<>', ''):gsub('%s%s+', ' '):gsub('^%s+', ''):gsub('%s+$', '')
             return text
         end,
         --- Sets an object script variable on `obj` and in the copy dialogue conditions read
