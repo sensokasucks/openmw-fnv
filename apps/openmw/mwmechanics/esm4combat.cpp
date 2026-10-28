@@ -815,6 +815,17 @@ namespace MWMechanics::ESM4Combat
             return true;
         }
         result = fire(attacker, *weapon, origin, direction);
+        const osg::Vec3f aim = aimPoint(target);
+        const osg::Vec3f half = MWBase::Environment::get().getWorld()->getHalfExtents(target);
+        Log(Debug::Verbose) << "ESM4 shot by " << attacker.getCellRef().getRefId() << " from " << origin.x() << " "
+                            << origin.y() << " " << origin.z() << " at " << aim.x() << " " << aim.y() << " "
+                            << aim.z() << " (target half " << half.x() << " " << half.y() << " " << half.z()
+                            << "), error " << aimErrorDegrees(attacker, *weapon) << " deg, yaw "
+                            << osg::RadiansToDegrees(yaw) << " pitch " << osg::RadiansToDegrees(pitch) << ", hit "
+                            << (result.mTarget.isEmpty() ? std::string("-")
+                                                         : result.mTarget.getCellRef().getRefId().toDebugString())
+                            << " at " << result.mPosition.x() << " " << result.mPosition.y() << " "
+                            << result.mPosition.z();
         return true;
     }
 
