@@ -1820,6 +1820,26 @@ namespace MWWorld
             mDistanceToFocusObject = (rayToObject.mRatio * maxDistance) - camDist;
         else
             mDistanceToFocusObject = -1;
+
+        // FO3/FNV effect statics without collision (light beams, dust sheets) hang in front of doors and
+        // containers and the visible ray stops at them. The game activates what the collision ray reaches,
+        // so when the visible hit can't be activated the physics ray decides.
+        if (!focusObject.isEmpty() && !focusObject.getClass().hasToolTip(focusObject)
+            && !MWBase::Environment::get().getWindowManager()->isGuiMode())
+        {
+            const MWRender::Camera& camera = *mRendering->getCamera();
+            const osg::Vec3f from = camera.getPosition();
+            const osg::Vec3f forward = camera.getOrient() * osg::Vec3d(0, 1, 0);
+            const MWPhysics::RayCastingResult result = mPhysics->castRay(from, from + forward * maxDistance,
+                { ignorePlayer ? getPlayerPtr() : MWWorld::Ptr() }, std::vector<MWWorld::Ptr>(),
+                MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor
+                    | MWPhysics::CollisionType_HeightMap);
+            if (result.mHit && !result.mHitObject.isEmpty() && result.mHitObject.getClass().hasToolTip(result.mHitObject))
+            {
+                focusObject = result.mHitObject;
+                mDistanceToFocusObject = (result.mHitPos - from).length() - camDist;
+            }
+        }
         return focusObject;
     }
 
