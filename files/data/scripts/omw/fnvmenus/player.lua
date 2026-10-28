@@ -550,6 +550,7 @@ return {
             if core.getRealTime() - lastClosed < 0.25 or I.UI.getMode() ~= nil or current ~= nil then return end
             -- the engine has already dropped the Pip-Boy's mode for this Escape; it only closes the Pip-Boy
             if I.FNVPipBoy and I.FNVPipBoy.isOpen() then return end
+            if I.FNVCompanionWheel and I.FNVCompanionWheel.isOpen() then return end
             if id == input.ACTION.GameMenu then
                 open('pause')
             elseif not core.isWorldPaused() and types.Player.getControlSwitch(self,

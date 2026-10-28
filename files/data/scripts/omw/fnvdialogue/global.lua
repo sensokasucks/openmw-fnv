@@ -2605,7 +2605,16 @@ return {
             runScript(info.scriptEnd, label .. ' end', npc)
             local line = startSpeech(npc, info, false, nil)
             local first = line.responses[1]
-            return first and first.text or ''
+            -- without the {emotion} and <action> notes the subtitles leave out
+            local text = first and first.text or ''
+            text = text:gsub('%b{}', ''):gsub('%b<>', ''):gsub('^%s+', ''):gsub('%s+$', '')
+            return text
+        end,
+        --- Sets an object script variable on `obj` and in the copy dialogue conditions read
+        -- (GetScriptVariable), which its script only republishes a frame later.
+        setScriptVariable = function(obj, name, value)
+            local ok, key = pcall(dlg.getReferenceId, obj)
+            if ok and key then setRefVar(key, name, value) else obj:sendEvent('ObScriptSetVar', { name = name, value = value }) end
         end,
         --- Declares that a player script shows the menu a command opens
         -- (`ShowRaceMenu`, `GetPlayerName`, `ShowSPECIALMenu`, `SetTagSkills`,
