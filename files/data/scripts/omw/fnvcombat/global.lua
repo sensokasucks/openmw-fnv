@@ -574,8 +574,9 @@ local function findCover(s)
         releaseCover(s)
         coverTaken[found.key] = s.actor.id
         s.cover = found
-        print(('[combat] %s (%s) takes cover %s, %.0f from %s'):format(s.actor.recordId, tostring(s.actor.id),
-            found.key, (found.cover - s.target.position):length(), tostring(s.target.recordId)))
+        print(('[combat] %s (%s) takes cover %s, %.0f from %s (cover %s, fire %s)'):format(s.actor.recordId,
+            tostring(s.actor.id), found.key, (found.cover - s.target.position):length(), tostring(s.target.recordId),
+            tostring(found.cover), tostring(found.fire)))
     end
     return found
 end
@@ -930,8 +931,9 @@ local function beInCover(s, distance, los, grenade)
     end
     if st.phase ~= st.loggedPhase then
         st.loggedPhase = st.phase
-        print(('[combat] %s (%s) cover: %s (%.0f from %s, line of fire %s)'):format(actor.recordId,
-            tostring(actor.id), st.phase, distance, tostring(target.recordId), tostring(los)))
+        print(('[combat] %s (%s) cover: %s (%.0f from %s, line of fire %s; %s)'):format(actor.recordId,
+            tostring(actor.id), st.phase, distance, tostring(target.recordId), tostring(los),
+            describeLine(actor, target)))
     end
     local function near(point) return (actor.position - point):length() <= 40 end
     local function go(point)
