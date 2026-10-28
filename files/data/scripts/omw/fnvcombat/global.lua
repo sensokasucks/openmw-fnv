@@ -1684,6 +1684,21 @@ return {
             if struck ~= nil and struck:isValid() then
                 scriptEvent(struck, 'OnHitWith', e.attacker)
             end
+            if e.corpse then
+                -- A corpse still comes apart (scripts/omw/fnvgore), nothing else happens
+                if target ~= nil and target:isValid() then
+                    core.sendGlobalEvent('FNVGore_Killed', {
+                        target = target,
+                        attacker = e.attacker,
+                        weapon = e.weapon,
+                        limb = e.limb,
+                        direction = e.direction,
+                        explosion = e.explosion,
+                        corpse = true,
+                    })
+                end
+                return
+            end
             if target ~= nil and target:isValid() and isActor(target) then
                 if fighting[target.id] then fighting[target.id].lastHitAt = simTime end
                 scriptEvent(target, 'OnHit', e.attacker)
@@ -1697,6 +1712,7 @@ return {
                         weapon = e.weapon,
                         limb = e.limb,
                         direction = e.direction,
+                        explosion = e.explosion,
                     })
                 end
             end

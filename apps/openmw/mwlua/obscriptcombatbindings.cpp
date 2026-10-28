@@ -83,7 +83,8 @@ namespace MWLua
         }
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
-        // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB) }
+        // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB), corpse (the target
+        // was already dead), explosion (a blast) }
         // Melee, unarmed and creature blows send it too, with melee = true (weapon nil when unarmed).
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon,
             const Combat::HitResult& hit, bool melee = false)
@@ -105,6 +106,10 @@ namespace MWLua
                 data["direction"] = hit.mDirection;
                 if (hit.mLimb >= 0)
                     data["limb"] = hit.mLimb;
+                if (hit.mCorpse)
+                    data["corpse"] = true;
+                if (hit.mExplosion)
+                    data["explosion"] = true;
                 context.mLuaEvents->addGlobalEvent(
                     { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
             });
@@ -665,6 +670,7 @@ namespace MWLua
             Gore::KillingBlow killingBlow;
             killingBlow.mLimb = blow.get_or("limb", -1);
             killingBlow.mBloodyMess = blow.get_or("bloodyMess", false);
+            killingBlow.mExplosion = blow.get_or("explosion", false);
             killingBlow.mSeed = static_cast<std::uint32_t>(blow.get_or<double>("seed", 0));
             if (sol::optional<std::string_view> weapon = blow.get<sol::optional<std::string_view>>("weapon"))
                 killingBlow.mWeapon = findWeapon(*weapon);

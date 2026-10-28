@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 
+#include <osg/ComputeBoundsVisitor>
 #include <osg/MatrixTransform>
 
 #include <components/sceneutil/positionattitudetransform.hpp>
@@ -369,14 +370,26 @@ namespace MWMechanics::ESM4Combat
             candidates.push_back(player);
         for (const MWWorld::Ptr& candidate : candidates)
         {
-            if (candidate == attacker || isDead(candidate))
+            if (candidate == attacker || !ESM4Gore::canTakeHits(candidate))
                 continue;
             // The collision box: the render bounds can take in far-off nodes, and the player's model may be the
-            // first person one
-            const osg::Vec3f half = world->getHalfExtents(candidate);
-            const osg::Vec3f position = candidate.getRefData().getPosition().asVec3();
-            const osg::BoundingBox box(position - osg::Vec3f(half.x(), half.y(), 0.f),
-                position + osg::Vec3f(half.x(), half.y(), half.z() * 2.f));
+            // first person one. Corpses lie down, so for them the render bounds it is.
+            osg::BoundingBox box;
+            if (isDead(candidate))
+            {
+                if (candidate.getRefData().getBaseNode() == nullptr)
+                    continue;
+                osg::ComputeBoundsVisitor bounds;
+                candidate.getRefData().getBaseNode()->accept(bounds);
+                box = bounds.getBoundingBox();
+            }
+            else
+            {
+                const osg::Vec3f half = world->getHalfExtents(candidate);
+                const osg::Vec3f position = candidate.getRefData().getPosition().asVec3();
+                box = osg::BoundingBox(position - osg::Vec3f(half.x(), half.y(), 0.f),
+                    position + osg::Vec3f(half.x(), half.y(), half.z() * 2.f));
+            }
             if (!box.valid())
                 continue;
             if (const std::optional<float> distance = intersect(box, origin, dir, range))
@@ -405,7 +418,10 @@ namespace MWMechanics::ESM4Combat
         result.mLimb = ESM4Gore::getHitLimb(result.mTarget, origin, dir);
         if (result.mLimb >= 0)
             damage *= ESM4Gore::getDamageMult(result.mTarget, result.mLimb);
-        result.mDamage = hit(result.mTarget, attacker, damage);
+        // A corpse takes no more health, but its limbs still give way (scripts/omw/fnvgore)
+        result.mCorpse = isDead(result.mTarget);
+        if (!result.mCorpse)
+            result.mDamage = hit(result.mTarget, attacker, damage);
         if (result.mLimb >= 0)
             ESM4Gore::damageLimb(result.mTarget, result.mLimb, damage,
                 weapon.mHasFO3Data && weapon.mFO3Data.limbDamageMult > 0.f ? weapon.mFO3Data.limbDamageMult : 1.f);
@@ -946,9 +962,13 @@ namespace MWMechanics::ESM4Combat
                              << at.z() << ", radius " << radius << ", damage " << baseDamage;
             for (const MWWorld::Ptr& candidate : candidates)
             {
-                if (candidate != player && isDead(candidate))
+                if (candidate != player && !ESM4Gore::canTakeHits(candidate))
                     continue;
-                const osg::Vec3f centre = bodyCentre(candidate);
+                const bool corpse = candidate != player && isDead(candidate);
+                // A corpse lies on the ground
+                const osg::Vec3f centre = corpse
+                    ? candidate.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, 16)
+                    : bodyCentre(candidate);
                 const float distance = (centre - at).length();
                 if (distance > radius)
                     continue;
@@ -975,7 +995,11 @@ namespace MWMechanics::ESM4Combat
                 result.mPosition = centre;
                 result.mDirection = centre - at;
                 result.mDirection.normalize();
-                if (candidate == player)
+                result.mExplosion = true;
+                result.mCorpse = corpse;
+                if (corpse)
+                    ESM4Gore::damageAllLimbs(candidate, damage);
+                else if (candidate == player)
                 {
                     hurtPlayer(candidate, damage);
                     result.mDamage = damage;
@@ -984,6 +1008,7 @@ namespace MWMechanics::ESM4Combat
                 else
                 {
                     result.mDamage = hit(candidate, attacker, damage);
+                    ESM4Gore::damageAllLimbs(candidate, damage);
                     result.mKilled = isDead(candidate);
                 }
                 if (sBlowListener && !attacker.isEmpty())

@@ -56,8 +56,15 @@ namespace MWMechanics::ESM4Gore
         int mLimb = -1; // the limb the blow hit
         const ESM4::Weapon* mWeapon = nullptr; // its "On Hit" setting can rule out severing or exploding
         bool mBloodyMess = false; // the killer has the Bloody Mess perk
+        bool mExplosion = false; // an explosion's blast: every crippled limb may go
         std::uint32_t mSeed = 0;
     };
+
+    // Whether shots and blasts still land on the actor: alive, or a corpse with a body left to take apart.
+    bool canTakeHits(const MWWorld::Ptr& actor);
+
+    // An explosion's blast takes every limb's condition down by its damage.
+    void damageAllLimbs(const MWWorld::Ptr& actor, float damage);
 
     // What the blow that killed the actor tears off: the hit limb if it was crippled (or it always explodes),
     // severed (iCombatDismemberPartChance) or exploded (its BPND explode chance x iCombatExplodePartChance). Bloody

@@ -210,8 +210,12 @@ namespace MWMechanics::ESM4Gore
             return -1;
         int best = -1;
         float bestDistance = std::numeric_limits<float>::max();
+        const LimbMask lost = getLostLimbs(actor);
         for (const BodyPart& part : data->mBodyParts)
         {
+            // A limb that is gone can't be hit
+            if ((lost & limbBit(part.mData.partType)) != 0)
+                continue;
             const osg::Node* start = animation->getNode(part.mNodeName);
             if (start == nullptr)
                 continue;
@@ -258,6 +262,30 @@ namespace MWMechanics::ESM4Gore
             Stats::damage(actor, av, conditionLoss);
     }
 
+    bool canTakeHits(const MWWorld::Ptr& actor)
+    {
+        if (!Stats::hasActorValues(actor))
+            return false;
+        if (actor == getPlayer())
+            return true;
+        const bool dead = Stats::getPermanent(actor, Stats::Health) > 0 && Stats::getCurrent(actor, Stats::Health) <= 0;
+        if (!dead)
+            return true;
+        // A body blown apart (its torso gone) has nothing left to hit
+        const ESM4::BodyPartData* data = getBodyPartData(actor);
+        return data != nullptr
+            && (getLostLimbs(actor) & limbBit(ESM4::BodyPartData::Part_Torso)) == 0;
+    }
+
+    void damageAllLimbs(const MWWorld::Ptr& actor, float damage)
+    {
+        const ESM4::BodyPartData* data = getBodyPartData(actor);
+        if (data == nullptr)
+            return;
+        for (const BodyPart& part : data->mBodyParts)
+            damageLimb(actor, part.mData.partType, damage, 1.f);
+    }
+
     std::vector<Dismemberment> rollDismemberment(const MWWorld::Ptr& actor, const KillingBlow& blow)
     {
         std::vector<Dismemberment> result;
@@ -271,7 +299,20 @@ namespace MWMechanics::ESM4Gore
         std::vector<Candidate> candidates;
         bool torsoExplodes = false;
         int torsoLimb = -1;
-        if (!blow.mBloodyMess)
+        if (!blow.mBloodyMess && blow.mExplosion)
+        {
+            // FUN_008b43a0 for a blast: every crippled limb the blast reached, each with its own roll
+            for (const BodyPart& part : data->mBodyParts)
+            {
+                const int limb = part.mData.partType;
+                if ((limb != ESM4::BodyPartData::Part_Torso || alwaysExplodes(part))
+                    && isCrippled(actor, part.mData.actorValue)
+                    && std::none_of(candidates.begin(), candidates.end(),
+                        [&](const Candidate& c) { return c.mActorValue == part.mData.actorValue; }))
+                    candidates.push_back({ part.mData.actorValue, limb });
+            }
+        }
+        else if (!blow.mBloodyMess)
         {
             // Only a crippled limb comes off, and the torso only if it always explodes
             if (hitPart != nullptr && (alwaysExplodes(*hitPart) || blow.mLimb != ESM4::BodyPartData::Part_Torso)

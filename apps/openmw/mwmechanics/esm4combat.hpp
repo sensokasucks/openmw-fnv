@@ -40,6 +40,8 @@ namespace MWMechanics::ESM4Combat
         float mDamage = 0.f; // health taken
         bool mKilled = false;
         int mLimb = -1; // body part hit (ESM4::BodyPartData::PartType), see ESM4Gore
+        bool mCorpse = false; // the target was already dead: no health is taken, its limbs can still come off
+        bool mExplosion = false; // the hit is an explosion's blast
     };
 
     // Damages the target's health; kills it when health runs out. Returns the health taken.
