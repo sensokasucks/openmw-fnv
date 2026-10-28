@@ -26,7 +26,9 @@
 #include <components/esm3/loadstat.hpp>
 #include <components/esm4/loadachr.hpp>
 #include <components/esm4/loadcell.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddoor.hpp>
+#include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadwrld.hpp>
@@ -3666,7 +3668,18 @@ namespace MWWorld
     osg::Vec3f World::getHalfExtents(const ConstPtr& object, bool rendering) const
     {
         if (!object.getClass().isActor())
+        {
+            // FO3/FNV actors have a box body (PhysicsSystem::addActorBody) rather than a physics actor; their render
+            // bounds can take in far-off nodes
+            if (object.getType() == ESM4::Npc::sRecordId || object.getType() == ESM4::Creature::sRecordId)
+            {
+                const osg::BoundingBox box = mPhysics->getBoundingBox(object);
+                if (box.valid())
+                    return osg::Vec3f(box.xMax() - box.xMin(), box.yMax() - box.yMin(), box.zMax() - box.zMin())
+                        * 0.5f;
+            }
             return mRendering->getHalfExtents(object);
+        }
 
         // Handle actors separately because of bodyparts
         if (rendering)
