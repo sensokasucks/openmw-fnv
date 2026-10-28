@@ -539,6 +539,10 @@ releaseCover = function(s)
     local c = s.cover
     if c and coverTaken[c.key] == s.actor.id then coverTaken[c.key] = nil end
     s.cover, s.inCoverLoop = nil, false
+    if s.crouched then
+        s.crouched = false
+        if combat.setCrouched and s.actor:isValid() then combat.setCrouched(s.actor, false) end
+    end
 end
 
 -- The range band cover is searched in (FalloutNV.exe 0x9a9180): the gun's range, else 512-1024
@@ -950,6 +954,8 @@ local function beInCover(s, distance, los, grenade)
     if st.phase == 'movingIn' then
         if near(c.cover) then
             holdStill(actor)
+            -- crouch behind it (low cover hides a crouched actor only)
+            s.crouched = combat.setCrouched ~= nil and combat.setCrouched(actor, true)
             st.phase, st.sent = 'waiting', false
             st.untilT = simTime + styleTimer(s, 'waitTimer', 1, 3)
         else
@@ -963,7 +969,13 @@ local function beInCover(s, distance, los, grenade)
             s.clip = s.gun.clipSize
             st.reloaded = true
         end
-        if simTime >= st.untilT then st.phase, st.sent = 'movingOut', false end
+        if simTime >= st.untilT then
+            if s.crouched then
+                s.crouched = false
+                combat.setCrouched(actor, false)
+            end
+            st.phase, st.sent = 'movingOut', false
+        end
     elseif st.phase == 'movingOut' then
         if near(c.fire) then
             holdStill(actor)
@@ -1151,7 +1163,13 @@ local function fight(s)
         holdStill(actor)
         return
     end
-    if step.name:sub(-10) ~= 'FROM_COVER' then s.inCoverLoop = false end
+    if step.name:sub(-10) ~= 'FROM_COVER' then
+        s.inCoverLoop = false
+        if s.crouched then
+            s.crouched = false
+            combat.setCrouched(actor, false)
+        end
+    end
     local procedure = procedures[step.name]
     local result = procedure and procedure(s, step, distance, los) or 'failed'
     if step.action.move and step.param ~= P.L.FLEE then

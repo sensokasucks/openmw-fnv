@@ -493,6 +493,10 @@ namespace MWLua
             return t;
         };
         // Whether the target can see the point at the actor's crouched head height (cover lost).
+        // Crouches behind cover or stands up; false when the actor has no crouch loop.
+        api["setCrouched"] = [](const Object& actor, bool crouched) {
+            return Combat::setCrouched(actor.ptr(), crouched);
+        };
         api["canTargetSee"] = [](const Object& actor, const Object& target, const osg::Vec3f& point) {
             return Combat::canTargetSee(actor.ptr(), target.ptr(), point);
         };

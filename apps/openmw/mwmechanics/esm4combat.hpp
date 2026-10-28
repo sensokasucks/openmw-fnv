@@ -82,8 +82,13 @@ namespace MWMechanics::ESM4Combat
     std::optional<Cover> findCover(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
         const osg::Vec3f& targetPosition, float searchRadius, float minDistance, float maxDistance, bool needFire,
         const std::vector<std::uint64_t>& excluded);
-    // Whether the target could see the point (at the actor's crouched head height).
+    // Whether the target could see the point at the actor's head height: crouched if the actor has a crouch
+    // loop (see setCrouched), else standing.
     bool canTargetSee(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, const osg::Vec3f& point);
+
+    // Crouches behind cover (the sneak idle with the drawn weapon) or stands up again. False when the actor has no
+    // crouch loop. A crouched actor's shots start lower.
+    bool setCrouched(const MWWorld::Ptr& actor, bool crouched);
 
     // Fires one shot of a gun along a ray: the first FO3/FONV actor in front of any wall takes the weapon's damage.
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
