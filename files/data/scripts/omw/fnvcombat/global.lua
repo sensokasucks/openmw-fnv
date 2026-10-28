@@ -944,7 +944,7 @@ local function beInCover(s, distance, los, grenade)
     end
     if st.phase == 'waiting' and simTime >= (st.nextCheck or 0) then
         st.nextCheck = simTime + 1
-        if combat.canTargetSee(actor, target, c.cover) then
+        if combat.canTargetSee(actor, target, actor.position) then
             st.holdUntil = st.holdUntil or simTime + 2
         else
             st.holdUntil = nil
