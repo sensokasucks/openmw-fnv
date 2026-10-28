@@ -242,7 +242,22 @@ local function approach(s, actor, target, reach, aroundObstacles)
     -- The navmesh ends where the target may not (rocks, furniture): when the route runs out short of the
     -- target, or it is close, go straight for it. Getting around something in the way needs the navmesh.
     local status = ai.status(actor)
-    local close = (target.position - actor.position):length() < STRAIGHT_DISTANCE
+    local toTarget = target.position - actor.position
+    local close = toTarget:length() < STRAIGHT_DISTANCE
+    if aroundObstacles and (status == 'arrived' or status == 'nopath') then
+        -- The route ended short of a clear shot: side-step around whatever is in the way instead of pushing
+        -- straight at the target [inferred; run 19 had a gunman jittering against a rock 108 units from the
+        -- player for 35 s, re-sending a straight move every tick]
+        if simTime >= (s.sideStepUntil or 0) then
+            s.sideStepUntil = simTime + 2
+            s.sideStepSign = -(s.sideStepSign or 1)
+            local flat = util.vector3(toTarget.x, toTarget.y, 0):normalize()
+            local side = util.vector3(-flat.y, flat.x, 0) * (256 * s.sideStepSign)
+            s.goal = nil
+            ai.moveTo(actor, actor.position + side + flat * 96, { run = true, direct = false, tolerance = 32 })
+        end
+        return
+    end
     if status == 'arrived' or status == 'nopath' or (close and not aroundObstacles) then
         s.straight = true
     end
