@@ -129,6 +129,9 @@ namespace MWRender
         void setLookTarget(const std::optional<osg::Vec3f>& target) { mLookTarget = target; }
         // World position of "Bip01 Head", if the skeleton has one.
         std::optional<osg::Vec3f> getHeadPosition() const;
+        // Where the eyes of an animation's skeleton are: "Bip01 Head" (or "Head") sits at the top of the neck,
+        // and the eyes a little above it. Used to look from and at, so gazes meet eyes rather than foreheads.
+        static std::optional<osg::Vec3f> getEyePosition(const Animation& animation);
         // Turns the head bone for the frame, after the sequence and any blend have posed it. Called by the head's
         // update callback.
         void updateLook(osg::MatrixTransform& head, float duration);

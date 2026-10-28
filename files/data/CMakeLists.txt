@@ -176,6 +176,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/obscript.lua
     scripts/omw/obscript_player.lua
     scripts/omw/furniture_player.lua
+    scripts/omw/fnvuitrace.lua
     scripts/omw/esm4terminal.lua
     scripts/omw/fnvdialogue/camera.lua
     scripts/omw/fnvdialogue/conditions.lua

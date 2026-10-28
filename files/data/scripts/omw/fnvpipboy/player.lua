@@ -96,6 +96,8 @@ local element = nil
 local open = false
 local radioPageTime = 0
 local closingByScript = false
+-- Opened, and the UiModeChanged for its Interface mode not seen yet (see UiModeChanged)
+local openPending = false
 local pauseWhileOpen = true
 local tabIndex = 1
 local subIndex = { 1, 1, 1 }
@@ -109,6 +111,8 @@ local messageTime = 0
 -- (scripts/omw/camera) is also on Tab and switches the view when the Pip-Boy closes.
 local viewMode = nil
 local viewRestoreFrames = 0
+-- The view toggle is off from a Tab press until Tab is up again (see onKeyPress).
+local tabBlocksView = false
 
 -- ------------------------------------------------------------ helpers
 
@@ -1114,6 +1118,7 @@ local function show(tab, sub)
     end
     if not open then
         open = true
+        openPending = I.UI.getMode() ~= 'Interface'
         localRerender = true
         if not pauseWhileOpen then I.UI.setPauseOnMode('Interface', false) end
         closingByScript = true
@@ -1226,6 +1231,12 @@ return {
                 local mode = camera.getMode()
                 if mode == camera.MODE.FirstPerson or mode == camera.MODE.ThirdPerson then viewMode = mode end
                 viewRestoreFrames = 0
+                -- Held in third person, the view toggle goes to the orbiting preview view at once, and its
+                -- release can be lost to the Pip-Boy or another menu, leaving the view stuck there.
+                if not tabBlocksView then
+                    tabBlocksView = true
+                    I.Camera.disableModeControl('pipboy-tab')
+                end
                 if open then
                     close()
                 elseif I.UI.getMode() == nil and not core.isWorldPaused() then
@@ -1265,8 +1276,15 @@ return {
         end,
         onFrame = function(dt)
             if not windowsReplaced then replaceWindows() end
+            if openPending and I.UI.getMode() == 'Interface' then openPending = false end
             -- the local map's tiles arrive a frame after they are asked for
             if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
+            -- the view toggle comes back once Tab is up, out of every menu
+            if tabBlocksView and I.UI.getMode() == nil and not input.isKeyPressed(input.KEY.Tab) then
+                tabBlocksView = false
+                I.Camera.enableModeControl('pipboy-tab')
+                if camera.getMode() == camera.MODE.Preview and viewMode then camera.setMode(viewMode) end
+            end
             if viewRestoreFrames > 0 and I.UI.getMode() == nil then
                 viewRestoreFrames = viewRestoreFrames - 1
                 local mode = camera.getMode()
@@ -1303,7 +1321,15 @@ return {
     eventHandlers = {
         UiModeChanged = function(e)
             if open then
-                if not closingByScript and e.newMode ~= 'Interface' then closed() end
+                -- UiModeChanged comes a frame or two late: a close that was still on its way when the
+                -- Pip-Boy opened again must not close it, or Interface mode stays on with nothing shown and
+                -- the controls dead. So it closes only if Interface mode is really gone and the opening has
+                -- reached I.UI (it has once I.UI.getMode() says Interface; see onFrame).
+                if e.newMode == 'Interface' then
+                    openPending = false
+                elseif not closingByScript and not openPending and I.UI.getMode() ~= 'Interface' then
+                    closed()
+                end
                 return
             end
             -- Something opened the Morrowind windows: show the Pip-Boy instead. Windows of FNV scripts
