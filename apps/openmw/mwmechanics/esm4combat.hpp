@@ -55,12 +55,35 @@ namespace MWMechanics::ESM4Combat
     // radius that it can reach; each one hurt is reported to the blow listener. False if the weapon has no such
     // projectile.
     bool isExplosiveProjectile(const ESM4::Weapon& weapon);
+    // Where the weapon's explosion still does fDangerousProjectileExplosionDamage 5: R x sqrt(1 - 5/D); 0 when it
+    // is not dangerous (FalloutNV.exe 0x992720).
+    float getBlastDangerRadius(const ESM4::Weapon& weapon);
+    // How far a grenade can be thrown (v^2/g) or a shell fired; 0 for other weapons.
+    float getThrowRange(const ESM4::Weapon& weapon);
     bool launch(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
         const osg::Vec3f& targetPosition);
     // An NPC throws or fires its grenade or launcher at the target (attack sequence and sound, then launch).
-    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
-    // The nearest grenade or shell still flying or waiting to go off within the radius of the position, if any.
+    // at: where to aim instead of the target's position (a hiding target's last-seen position)
+    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, std::optional<osg::Vec3f> at = {});
+    // The nearest grenade or shell that threatens the position (within its dangerous radius plus radius), if any.
     std::optional<osg::Vec3f> findProjectileNear(const osg::Vec3f& position, float radius);
+
+    // Cover from a target (FalloutNV.exe cover search, ghidra-findings-4 §1): navmesh cover edges are tried
+    // nearest first along the navmesh within searchRadius of the actor; the first one passing the checks wins:
+    // its cover point is out of the target's sight, it lies minDistance..maxDistance from the target, no grenade
+    // threatens it, the target is not within 256 of it, and (when needFire) the step-out point past one of its
+    // open ends sees the target. Edges whose keys are in excluded (reserved or recently failed) are skipped.
+    struct Cover
+    {
+        osg::Vec3f mCoverPoint;
+        osg::Vec3f mFirePoint;
+        std::uint64_t mKey = 0;
+    };
+    std::optional<Cover> findCover(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+        const osg::Vec3f& targetPosition, float searchRadius, float minDistance, float maxDistance, bool needFire,
+        const std::vector<std::uint64_t>& excluded);
+    // Whether the target could see the point (at the actor's crouched head height).
+    bool canTargetSee(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, const osg::Vec3f& point);
 
     // Fires one shot of a gun along a ray: the first FO3/FONV actor in front of any wall takes the weapon's damage.
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,

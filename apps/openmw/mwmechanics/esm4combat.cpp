@@ -47,6 +47,7 @@
 #include "creaturestats.hpp"
 #include "esm4actors.hpp"
 #include "esm4gore.hpp"
+#include "esm4navigation.hpp"
 #include "movement.hpp"
 
 namespace MWMechanics::ESM4Combat
@@ -281,6 +282,19 @@ namespace MWMechanics::ESM4Combat
             return false;
         // Records without health (e.g. creatures missing DATA) are never "dead"
         return Stats::getPermanent(actor, Stats::Health) > 0 && Stats::getCurrent(actor, Stats::Health) <= 0;
+    }
+
+    namespace
+    {
+        // fDamageSkillBase + fDamageSkillMult x the attacker's skill with the weapon
+        float skillFactor(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon)
+        {
+            int skill = weapon.mHasFO3Data ? weapon.mFO3Data.skill : -1;
+            if (skill < 0 || skill >= Stats::Count)
+                skill = skillForAnimType(weapon.mHasFO3Data ? weapon.mFO3Data.animType : 3);
+            const float skillValue = canBeHit(attacker) ? Stats::getCurrent(attacker, skill) : 100.f;
+            return gmst("fDamageSkillBase") + gmst("fDamageSkillMult") * std::clamp(skillValue, 0.f, 100.f) / 100.f;
+        }
     }
 
     float getWeaponDamage(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, float condition)
@@ -867,10 +881,13 @@ namespace MWMechanics::ESM4Combat
             const float radius = explosion->mData.radius;
             if (radius <= 0.f)
                 return;
-            // Grenades carry their damage on the weapon, some explosions on the EXPL record [inferred: the larger]
-            const float baseDamage
-                = std::max(explosion->mData.damage, projectile.mWeapon != nullptr ? projectile.mWeapon->mData.damage : 0.f);
+            // The EXPL damage, times the thrower's skill while it still holds the weapon (FalloutNV.exe 0x9b0f80);
+            // the weapon's own damage is not used
             const MWWorld::Ptr attacker = MWBase::Environment::get().getWorldModel()->getPtr(projectile.mAttacker);
+            float baseDamage = explosion->mData.damage;
+            if (!attacker.isEmpty() && projectile.mWeapon != nullptr && getActorWeapon(attacker) == projectile.mWeapon)
+                baseDamage *= skillFactor(attacker, *projectile.mWeapon);
+            const bool ignoreLOS = (explosion->mData.flags & 0x10) != 0;
 
             std::vector<MWWorld::Ptr> candidates;
             for (MWWorld::CellStore* cell : MWBase::Environment::get().getWorldScene()->getActiveCells())
@@ -890,13 +907,19 @@ namespace MWMechanics::ESM4Combat
                 const float distance = (centre - at).length();
                 if (distance > radius)
                     continue;
-                // Walls and terrain shield from the blast
-                const MWPhysics::RayCastingResult wall = world->getRayCasting()->castRay(from, centre, { candidate },
-                    {}, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
-                if (wall.mHit)
-                    continue;
-                // [inferred until the explosion code is read: full damage at the centre, half at the edge]
-                const float falloff = 1.f - 0.5f * distance / radius;
+                // Walls and terrain shield from the blast, unless the explosion ignores LOS (EXPL flag 0x10); the
+                // original tries seven rays per actor, this one to its middle
+                if (!ignoreLOS)
+                {
+                    const MWPhysics::RayCastingResult wall = world->getRayCasting()->castRay(from, centre,
+                        { candidate }, {},
+                        MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
+                            | MWPhysics::CollisionType_Door);
+                    if (wall.mHit)
+                        continue;
+                }
+                // 1 - (d/R)^2: no full-damage core (FalloutNV.exe 0x647920)
+                const float falloff = 1.f - (distance / radius) * (distance / radius);
                 const float damage = applyArmor(candidate, baseDamage * falloff);
                 HitResult result;
                 result.mTarget = candidate;
@@ -980,6 +1003,103 @@ namespace MWMechanics::ESM4Combat
         }
     }
 
+    namespace
+    {
+        float projectileSpeed(const ESM4::Projectile& projectile)
+        {
+            return projectile.mData.speed > 0.f ? projectile.mData.speed : 1000.f;
+        }
+
+        // Whether an arc is clear: iBallisticProjectilePathPickSegments 4 straight pieces, accepted when nothing
+        // is hit or the first hit comes after fGrenadeThrowHitFractionThreshold 0.8 of the way
+        bool arcClear(const MWWorld::Ptr& attacker, const osg::Vec3f& origin, const osg::Vec3f& velocity,
+            float gravity, float time)
+        {
+            constexpr int segments = 4;
+            const float total = velocity.length() * time;
+            float travelled = 0.f;
+            osg::Vec3f from = origin;
+            for (int i = 1; i <= segments; ++i)
+            {
+                const float t = time * i / segments;
+                const osg::Vec3f to = origin + velocity * t - osg::Vec3f(0, 0, 0.5f * gravity * t * t);
+                const MWPhysics::RayCastingResult hit
+                    = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(from, to, { attacker }, {},
+                        MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
+                            | MWPhysics::CollisionType_Door);
+                if (hit.mHit)
+                    return total <= 0.f || (travelled + (hit.mHitPos - from).length()) / total >= 0.8f;
+                travelled += (to - from).length();
+                from = to;
+            }
+            return true;
+        }
+
+        // Launch velocity at the target (FalloutNV.exe 0x9a7670): the low arc at the projectile's speed if it
+        // is clear, else the high arc at fGrenadeHighArcSpeedPercentage 0.67 of it; 45 degrees when neither
+        // reaches. Without gravity: straight at it.
+        osg::Vec3f throwVelocity(const MWWorld::Ptr& attacker, const ESM4::Projectile& projectile,
+            const osg::Vec3f& origin, const osg::Vec3f& target)
+        {
+            const float speed = projectileSpeed(projectile);
+            const float gravity = sGravity * projectile.mData.gravity;
+            osg::Vec3f delta = target - origin;
+            osg::Vec3f flat(delta.x(), delta.y(), 0.f);
+            const float d = flat.normalize();
+            const float h = delta.z();
+            if (gravity <= 0.f || d < 1.f)
+            {
+                delta.normalize();
+                return delta * speed;
+            }
+            std::optional<osg::Vec3f> fallback;
+            for (const auto& [v, high] : { std::pair{ speed, false }, std::pair{ speed * 0.67f, true } })
+            {
+                const float v2 = v * v;
+                const float root = v2 * v2 - gravity * (gravity * d * d + 2.f * h * v2);
+                if (root < 0.f)
+                    continue;
+                const float angle = std::atan((v2 + (high ? 1.f : -1.f) * std::sqrt(root)) / (gravity * d));
+                const osg::Vec3f velocity = (flat * std::cos(angle) + osg::Vec3f(0, 0, std::sin(angle))) * v;
+                if (!fallback)
+                    fallback = velocity;
+                const float time = d / (v * std::cos(angle));
+                if (arcClear(attacker, origin, velocity, gravity, time))
+                    return velocity;
+            }
+            if (fallback)
+                return *fallback;
+            const float angle = osg::DegreesToRadians(45.f);
+            return (flat * std::cos(angle) + osg::Vec3f(0, 0, std::sin(angle))) * speed;
+        }
+    }
+
+    float getBlastDangerRadius(const ESM4::Weapon& weapon)
+    {
+        const ESM4::Projectile* projectile = projectileOf(weapon);
+        if (projectile == nullptr)
+            return 0.f;
+        const ESM4::Explosion* explosion = MWBase::Environment::get().getESMStore()->get<ESM4::Explosion>().search(
+            ESM::RefId(projectile->mData.explosion));
+        if (explosion == nullptr || explosion->mData.damage < 5.f)
+            return 0.f;
+        const float radius = explosion->mData.radius * std::sqrt(1.f - 5.f / explosion->mData.damage);
+        return radius >= 30.f ? radius : 0.f;
+    }
+
+    float getThrowRange(const ESM4::Weapon& weapon)
+    {
+        const ESM4::Projectile* projectile = projectileOf(weapon);
+        if (projectile == nullptr)
+            return 0.f;
+        const float gravity = sGravity * projectile->mData.gravity;
+        const float speed = projectileSpeed(*projectile);
+        // the 45 degree range v^2/g; shells without gravity go as far as the projectile flies
+        if (gravity <= 0.f)
+            return projectile->mData.range > 0.f ? projectile->mData.range : 4096.f;
+        return speed * speed / gravity;
+    }
+
     bool isExplosiveProjectile(const ESM4::Weapon& weapon)
     {
         const ESM4::Projectile* projectile = projectileOf(weapon);
@@ -998,26 +1118,7 @@ namespace MWMechanics::ESM4Combat
         projectile.mWeapon = &weapon;
         projectile.mProjectile = data;
         projectile.mPosition = origin;
-        const float speed = data->mData.speed > 0.f ? data->mData.speed : 1000.f;
-        const float gravity = sGravity * data->mData.gravity;
-        osg::Vec3f delta = targetPosition - origin;
-        osg::Vec3f flat(delta.x(), delta.y(), 0.f);
-        const float d = flat.normalize();
-        const float h = delta.z();
-        if (gravity > 0.f && d > 1.f)
-        {
-            // The low arc that lands on the target at this speed; 45 degrees when it is out of reach
-            const float v2 = speed * speed;
-            const float root = v2 * v2 - gravity * (gravity * d * d + 2.f * h * v2);
-            const float angle
-                = root >= 0.f ? std::atan((v2 - std::sqrt(root)) / (gravity * d)) : osg::DegreesToRadians(45.f);
-            projectile.mVelocity = (flat * std::cos(angle) + osg::Vec3f(0, 0, std::sin(angle))) * speed;
-        }
-        else
-        {
-            delta.normalize();
-            projectile.mVelocity = delta * speed;
-        }
+        projectile.mVelocity = throwVelocity(attacker, *data, origin, targetPosition);
         if (!data->mModel.empty())
         {
             osg::ref_ptr<osg::Node> model = MWBase::Environment::get().getResourceSystem()->getSceneManager()->getInstance(
@@ -1031,7 +1132,7 @@ namespace MWMechanics::ESM4Combat
         return true;
     }
 
-    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target)
+    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, std::optional<osg::Vec3f> at)
     {
         const ESM4::Weapon* weapon = getActorWeapon(attacker);
         if (weapon == nullptr || !isExplosiveProjectile(*weapon) || isDead(attacker)
@@ -1042,18 +1143,128 @@ namespace MWMechanics::ESM4Combat
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
                 attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
-        // Aim at the feet: a lobbed grenade lands there, a shell bursts there
-        return launch(attacker, *weapon, muzzle(attacker), target.getRefData().getPosition().asVec3());
+        // Aim point (FalloutNV.exe 0x9a8bf0): 0.75 of the target's height for a lobbed projectile, its feet for a
+        // slow shell with a big blast (speed <= fCombatSplashDamageMaxSpeed 3000, radius > 50, damage > 20),
+        // otherwise its middle
+        const ESM4::Projectile* projectile = projectileOf(*weapon);
+        const osg::Vec3f feet = at.value_or(target.getRefData().getPosition().asVec3());
+        const float height = MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 2.f;
+        float fraction = 0.5f;
+        const ESM4::Explosion* explosion = MWBase::Environment::get().getESMStore()->get<ESM4::Explosion>().search(
+            ESM::RefId(projectile->mData.explosion));
+        if (projectile->mData.gravity > 0.f)
+            fraction = 0.75f;
+        else if (projectileSpeed(*projectile) <= 3000.f && explosion != nullptr && explosion->mData.radius > 50.f
+            && explosion->mData.damage > 20.f)
+            fraction = 0.f;
+        return launch(attacker, *weapon, muzzle(attacker), feet + osg::Vec3f(0, 0, height * fraction));
+    }
+
+    namespace
+    {
+        bool clearRay(const osg::Vec3f& from, const osg::Vec3f& to, const MWWorld::Ptr& a, const MWWorld::Ptr& b)
+        {
+            const MWPhysics::RayCastingResult wall
+                = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(from, to, { a, b }, {},
+                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
+                        | MWPhysics::CollisionType_Door);
+            return !wall.mHit;
+        }
+
+        // The target's eyes
+        osg::Vec3f eyesOf(const MWWorld::Ptr& target)
+        {
+            const osg::Vec3f position = target.getRefData().getPosition().asVec3();
+            return position + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 1.8f);
+        }
+    }
+
+    bool canTargetSee(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, const osg::Vec3f& point)
+    {
+        // a crouched actor's head [inferred: the original tests the cover point against the target's LOS]
+        const float head = MWBase::Environment::get().getWorld()->getHalfExtents(actor).z() * 1.2f;
+        return clearRay(eyesOf(target), point + osg::Vec3f(0, 0, head), actor, target);
+    }
+
+    std::optional<Cover> findCover(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+        const osg::Vec3f& targetPosition, float searchRadius, float minDistance, float maxDistance, bool needFire,
+        const std::vector<std::uint64_t>& excluded)
+    {
+        const osg::Vec3f position = actor.getRefData().getPosition().asVec3();
+        const osg::Vec3f half = MWBase::Environment::get().getWorld()->getHalfExtents(actor);
+        const float radius = std::max(half.x(), half.y());
+        const osg::Vec3f aim = targetPosition
+            + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 1.3f);
+        for (const ESM4Navigation::CoverEdge& edge :
+            ESM4Actors::get().findCoverEdges(actor, position, searchRadius, 64))
+        {
+            if (std::find(excluded.begin(), excluded.end(), edge.mKey) != excluded.end())
+                continue;
+            if (needFire && !edge.mOpenA && !edge.mOpenB)
+                continue; // No edges are open
+            const osg::Vec3f mid = (edge.mA + edge.mB) * 0.5f;
+            const osg::Vec3f coverPoint = mid + edge.mInward * (radius + 8.f);
+            const float toTarget = (coverPoint - targetPosition).length();
+            if (toTarget < minDistance || toTarget > maxDistance)
+                continue; // Too close / Too far
+            if ((coverPoint - targetPosition).length() < 256.f)
+                continue; // Hostiles near
+            if (findProjectileNear(coverPoint, 0.f))
+                continue; // Cover threatened
+            if (canTargetSee(actor, target, coverPoint))
+                continue; // Target has Cover LOS
+            Cover cover{ coverPoint, coverPoint, edge.mKey };
+            if (needFire)
+            {
+                // Step out past an open end, far enough to clear the edge [inferred: the original's fire point]
+                osg::Vec3f along = edge.mB - edge.mA;
+                along.z() = 0.f;
+                along.normalize();
+                bool found = false;
+                for (int end = 0; end < 2 && !found; ++end)
+                {
+                    if ((end == 0 && !edge.mOpenA) || (end == 1 && !edge.mOpenB))
+                        continue;
+                    const osg::Vec3f corner = end == 0 ? edge.mA : edge.mB;
+                    const osg::Vec3f out = end == 0 ? -along : along;
+                    const osg::Vec3f firePoint = corner + out * (radius + 24.f) + edge.mInward * (radius + 8.f);
+                    if (findProjectileNear(firePoint, 0.f))
+                        continue; // Fire threatened
+                    if (!clearRay(firePoint + osg::Vec3f(0, 0, half.z() * 1.7f), aim, actor, target))
+                        continue; // No LOS from Fire position
+                    cover.mFirePoint = firePoint;
+                    found = true;
+                }
+                if (!found)
+                    continue;
+            }
+            return cover;
+        }
+        return std::nullopt;
     }
 
     std::optional<osg::Vec3f> findProjectileNear(const osg::Vec3f& position, float radius)
     {
+        // Threats as the original's threat map has them (FalloutNV.exe 0x9a52f0): explosions doing more than
+        // fDangerousProjectileExplosionDamage 5 within their dangerous radius R x sqrt(1 - 5/D) (where the
+        // damage has fallen to 5), above fDangerousProjectileExplosionRadius 30; timed fuses only in their last
+        // fCombatThreatTimedExplosionLength 5 s
+        const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
         std::optional<osg::Vec3f> nearest;
-        float best = radius;
+        float best = std::numeric_limits<float>::max();
         for (const FlyingProjectile& projectile : sProjectiles)
         {
+            const ESM4::Projectile::Data& data = projectile.mProjectile->mData;
+            const ESM4::Explosion* explosion = store.get<ESM4::Explosion>().search(ESM::RefId(data.explosion));
+            if (explosion == nullptr || explosion->mData.damage <= 5.f)
+                continue;
+            const float dangerous = explosion->mData.radius * std::sqrt(1.f - 5.f / explosion->mData.damage);
+            if (dangerous <= 30.f)
+                continue;
+            if (data.explosionTimer > 0.f && data.explosionTimer - projectile.mAge > 5.f)
+                continue;
             const float distance = (projectile.mPosition - position).length();
-            if (distance <= best)
+            if (distance <= dangerous + radius && distance < best)
             {
                 best = distance;
                 nearest = projectile.mPosition;

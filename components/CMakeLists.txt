@@ -265,6 +265,7 @@ add_component_dir (esm4
     loadproj
     loadexpl
     loaddebr
+    loadcsty
     loadnavi
     loadnavm
     loadnote

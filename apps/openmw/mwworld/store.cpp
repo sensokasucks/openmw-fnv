@@ -1312,6 +1312,7 @@ template class MWWorld::TypedDynamicStore<ESM4::Projectile>;
 template class MWWorld::TypedDynamicStore<ESM4::BodyPartData>;
 template class MWWorld::TypedDynamicStore<ESM4::Explosion>;
 template class MWWorld::TypedDynamicStore<ESM4::Debris>;
+template class MWWorld::TypedDynamicStore<ESM4::CombatStyle>;
 template class MWWorld::TypedDynamicStore<ESM4::TalkingActivator>;
 template class MWWorld::TypedDynamicStore<ESM4::MediaLocationController>;
 template class MWWorld::TypedDynamicStore<ESM4::MediaSet>;

@@ -103,6 +103,9 @@ end
 
 local tracked = {} -- id -> actor in an active cell
 local thrownBy = {} -- actor id -> { weapon id -> grenades thrown }
+local updateExplosiveBlocked -- below
+local coverTaken = {} -- cover edge key -> actor id (one actor per cover)
+local releaseCover -- below
 local fighting = {} -- id -> { actor, target, fleeing, nextAttack, nextMove }
 local simTime, nextTick = 0, 0
 local wantsToFlee -- below
@@ -118,6 +121,9 @@ local function startCombat(actor, target)
         nextThreatCheck = simTime + math.random() * gmst('fCombatThreatRatioUpdateTime', 7.5) }
     -- what it carries and holds, for the combat planner (weapon types: 1 ranged, 2 melee, 6 hand to hand, 7 none drawn)
     s.equippedType, s.drawnType = 6, 6
+    s.flushed = true
+    s.failedCovers = {}
+    s.style = combat.getCombatStyle and combat.getCombatStyle(actor) or nil
     -- grenades thrown in earlier fights are gone too
     thrownBy[actor.id] = thrownBy[actor.id] or {}
     s.thrown = thrownBy[actor.id]
@@ -140,6 +146,7 @@ local function stopCombat(actor, why)
     if s then
         print(('[combat] %s (%s) stops fighting (%s)'):format(actor.recordId, tostring(actor.id), why or 'told to'))
         fighting[actor.id] = nil
+        if releaseCover then releaseCover(s) end
         scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
             ai.stop(actor)
@@ -426,12 +433,16 @@ end
 local P = require('scripts.omw.fnvcombat.planner')
 local PW = P.W
 local REPLAN_EVERY = 1.0
-local LOST_AFTER = 3 -- seconds without noticing the target before it counts as lost
+-- seconds without noticing the target before it counts as lost (fCombatDetectionLostTime)
+local function lostAfter() return gmst('fCombatDetectionLostTime', 15) end
+local RECENT_LOS = 2 -- [inferred] how long a line of sight counts as recent (TARGET_360_LOS, TARGET_FLUSHED)
 local STEP_TIMEOUT = 15
--- Grenades [inferred until the original's grenade rules are read]: thrown from 400 to 1500 units, one every 8 s,
--- scored at half their damage so guns stay the usual choice
-local GRENADE_MIN, GRENADE_MAX, GRENADE_EVERY = 400, 1500, 8
-local THREAT_RADIUS = 400 -- a live grenade this close makes an actor run from it
+-- Grenades (ghidra-findings-4 §3): thrown from 256 units up to v^2/g, with no cooldown (only what the NPC
+-- carries); scored at half their damage [inferred] so guns stay the usual choice. The blast-safety check latches
+-- after fExplosiveProjectileBlockedWaitTime 2.5 s and is rechecked every fExplosiveProjectileBlockedResetTime 5 s.
+local GRENADE_MIN = 256
+local FLUSH_LAST_SEEN = 10 -- a hiding target's last-seen position is a grenade target for this long
+local ACTOR_RADIUS = 32
 
 local function lostRemoveTime()
     return gmst('fCombatTargetLostRemoveTime', 30)
@@ -457,11 +468,10 @@ local function bestWeapons(s, distance)
     local best = {}
     for _, weapon in ipairs(s.weapons or {}) do
         local t = weapon.type
-        -- grenades while some are left and none was thrown in the last GRENADE_EVERY seconds; mines are not used
+        -- grenades while some are left; mines are not used
         local usable = t == PW.RANGED or t == PW.MELEE or t == PW.HAND_TO_HAND
             or (t == PW.EXPLOSIVE and weapon.isGun)
-            or (t == PW.GRENADE and weapon.explosive and (s.thrown[weapon.id] or 0) < (weapon.count or 1)
-                and simTime >= (s.grenadeReadyAt or 0))
+            or (t == PW.GRENADE and weapon.explosive and (s.thrown[weapon.id] or 0) < (weapon.count or 1))
         if usable then
             local score = weaponScore(weapon, t, distance)
             if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
@@ -469,6 +479,26 @@ local function bestWeapons(s, distance)
     end
     if next(best) == nil then best[PW.HAND_TO_HAND] = { score = 1 } end
     return best
+end
+
+-- How far the actor's grenades go (the shortest throw of those it has), 0 without any
+local function throwRange(s)
+    local range
+    for _, weapon in ipairs(s.weapons or {}) do
+        if weapon.type == PW.GRENADE and weapon.explosive and (weapon.throwRange or 0) > 0 then
+            range = math.min(range or math.huge, weapon.throwRange)
+        end
+    end
+    return range or 0
+end
+
+-- The blast radius that matters for safety (FalloutNV.exe 0x992720): the largest of its explosives
+local function blastRadius(s)
+    local radius = 0
+    for _, weapon in ipairs(s.weapons or {}) do
+        if weapon.explosive then radius = math.max(radius, weapon.blastRadius or 0) end
+    end
+    return radius
 end
 
 local function meleeReach(s)
@@ -485,11 +515,65 @@ local function closeEnough(s, los)
 end
 
 local function targetLost(s)
-    return simTime - (s.lastSeenAt or s.since) > LOST_AFTER
+    return simTime - (s.lastSeenAt or s.since) > lostAfter()
 end
 
 local function inGunRange(s, distance)
     return s.gun ~= nil and distance <= gunRange(s.gun)
+end
+
+-- Cover (ghidra-findings-4 §1): USE_COVER is rolled every 10 s with the combat style's Take Cover Chance; a
+-- cover search that found nothing keeps it off for a few seconds [inferred: the original remembers failed edges
+-- for 3 s]
+local COVER_ROLL_EVERY = 10
+local function coverWanted(s)
+    if simTime >= (s.nextCoverRoll or 0) then
+        s.nextCoverRoll = simTime + COVER_ROLL_EVERY
+        local chance = s.style and s.style.takeCoverChance or 0
+        s.useCover = chance > 0 and math.random() * 100 < chance
+    end
+    return s.useCover and simTime >= (s.noCoverUntil or 0) and types.ESM4NPC.objectIsInstance(s.actor)
+end
+
+releaseCover = function(s)
+    local c = s.cover
+    if c and coverTaken[c.key] == s.actor.id then coverTaken[c.key] = nil end
+    s.cover, s.inCoverLoop = nil, false
+end
+
+-- The range band cover is searched in (FalloutNV.exe 0x9a9180): the gun's range, else 512-1024
+local function coverBand(s)
+    local gun = s.gun or (s.best and s.best[PW.RANGED] and s.best[PW.RANGED].weapon)
+    local min, max = 512, 1024
+    if gun then
+        max = gun.maxRange and gun.maxRange > 0 and gun.maxRange or gunRange(gun)
+        min = math.max(0, math.min(gun.minRange or 0, max - 256))
+    end
+    local absMax = max * gmst('fCombatAbsoluteMaxRangeMult', 4)
+    return math.max(min, 512), math.min(max * gmst('fCombatCoverMaxRangeMult', 1.5), absMax)
+end
+
+local function findCover(s)
+    local excluded = {}
+    for key, owner in pairs(coverTaken) do
+        if owner ~= s.actor.id then excluded[#excluded + 1] = key end
+    end
+    s.failedCovers = s.failedCovers or {}
+    for key, at in pairs(s.failedCovers) do
+        if simTime - at < 3 then excluded[#excluded + 1] = key end
+    end
+    local min, max = coverBand(s)
+    local found = combat.findCover(s.actor, s.target, {
+        searchRadius = s.style and s.style.coverSearchRadius > 0 and s.style.coverSearchRadius or 2048,
+        minDistance = min, maxDistance = max, fire = true, excluded = excluded })
+    if found then
+        releaseCover(s)
+        coverTaken[found.key] = s.actor.id
+        s.cover = found
+        print(('[combat] %s (%s) takes cover %s, %.0f from %s'):format(s.actor.recordId, tostring(s.actor.id),
+            found.key, (found.cover - s.target.position):length(), tostring(s.target.recordId)))
+    end
+    return found
 end
 
 local function worldState(s, distance, los)
@@ -504,6 +588,11 @@ local function worldState(s, distance, los)
             return s.searchPos ~= nil and (s.actor.position - s.searchPos):length() <= 128
         end
         if kind == L.AVOID_THREAT then return s.threat == nil end
+        if kind == L.COVER then
+            local c = s.cover
+            return c ~= nil and (s.inCoverLoop or (s.actor.position - c.cover):length() <= 40
+                or (s.actor.position - c.fire):length() <= 40)
+        end
         return kind == L.DESTINATION or kind == L.GUARD or kind == L.CLUSTER or kind == L.COMBAT_AREA
     end
     return function(fact, param)
@@ -515,16 +604,18 @@ local function worldState(s, distance, los)
         if fact == P_F.TARGET_360_LOS then
             if not los then return 0 end
             if s.drawnType == PW.RANGED or s.drawnType == PW.EXPLOSIVE then return inGunRange(s, distance) and 1 or 0 end
-            if s.drawnType == PW.GRENADE then return distance <= GRENADE_MAX and 1 or 0 end
+            if s.drawnType == PW.GRENADE then return distance <= throwRange(s) and 1 or 0 end
             return 1
         end
-        -- too close to throw or fire an explosive safely, or too far to throw
+        -- the blast would hurt the actor, its side or bystanders (latched), or the target is out of throwing range
         if fact == P_F.EXPLOSIVE_PROJECTILE_BLOCKED then
-            return (distance < GRENADE_MIN or distance > GRENADE_MAX) and 1 or 0
+            return (s.explBlocked or distance < GRENADE_MIN or distance > throwRange(s)) and 1 or 0
         end
-        -- a target that is known but out of sight is hiding; a grenade flushes it out [inferred]
-        if fact == P_F.TARGET_FLUSHED then
-            return (los or targetLost(s) or simTime < (s.flushedUntil or 0)) and 1 or 0
+        -- out in the open while seen; a target that has gone out of sight is hiding, and a grenade flushes it out
+        if fact == P_F.TARGET_FLUSHED then return s.flushed and 1 or 0 end
+        if fact == P_F.TARGET_SPACE_DIFFERENT then
+            return (s.target.cell ~= nil and s.actor.cell ~= nil and not (s.target.cell.isExterior and s.actor.cell.isExterior)
+                and s.target.cell.id ~= s.actor.cell.id) and 1 or 0
         end
         if fact == P_F.THREATENED then return s.threat ~= nil and 1 or 0 end
         if fact == P_F.WEAPON_DRAWN then return s.drawnType end
@@ -532,6 +623,7 @@ local function worldState(s, distance, los)
         if fact == P_F.HAS_WEAPON_TYPE then return best[param] ~= nil and 1 or 0 end
         if fact == P_F.WANTS_TO_FLEE then return s.fleeing and 1 or 0 end
         if fact == P_F.EXECUTION_FLAGS then
+            if param == P.X.COVER then return coverWanted(s) and 1 or 0 end
             return (param == P.X.SEARCH or param == P.X.MOVE or param == P.X.MELEE) and 1 or 0
         end
         return 0
@@ -567,8 +659,9 @@ local function replan(s, distance, los)
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
-    local ctx = { actorType = actorType,
-        locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT },
+    local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT }
+    if coverWanted(s) then locations[#locations + 1] = P.L.COVER end
+    local ctx = { actorType = actorType, locations = locations,
         weaponTypes = weaponTypes, cost = planCost(s) }
     local goal, plan = P.plan(worldState(s, distance, los), ctx)
     s.replanAt = simTime + REPLAN_EVERY
@@ -627,6 +720,25 @@ local function moveTowards(s, kind, distance, los)
     local actor, target = s.actor, s.target
     local L = P.L
     local state = s.stepState
+    if kind == L.COVER then
+        if s.cover == nil and findCover(s) == nil then
+            s.noCoverUntil = simTime + 3
+            return 'failed'
+        end
+        if (actor.position - s.cover.cover):length() <= 40 then
+            holdStill(actor)
+            return 'done'
+        end
+        if not state.sent or ai.status(actor) == 'idle' then
+            state.sent = true
+            ai.moveTo(actor, s.cover.cover, { run = true, direct = true, tolerance = 24 })
+        elseif ai.status(actor) == 'nopath' then
+            s.failedCovers[s.cover.key] = simTime
+            releaseCover(s)
+            return 'failed'
+        end
+        return 'running'
+    end
     if kind == L.AVOID_THREAT then
         if s.threat == nil then
             holdStill(actor)
@@ -638,7 +750,7 @@ local function moveTowards(s, kind, distance, los)
             local away = actor.position - s.threat
             away = util.vector3(away.x, away.y, 0)
             if away:length() < 1 then away = util.vector3(1, 0, 0) end
-            ai.moveTo(actor, actor.position + away:normalize() * (THREAT_RADIUS + 200),
+            ai.moveTo(actor, actor.position + away:normalize() * 600,
                 { run = true, direct = true, straight = true, tolerance = 64 })
         end
         return 'running'
@@ -716,6 +828,53 @@ local function attackMelee(s, distance)
     return 'running'
 end
 
+-- The blast-safety check (FalloutNV.exe 0x992720): an explosion at the target would hurt the actor, someone on
+-- its side, or (with Responsibility >= iAvoidHurtingNonTargetsResponsibility 50) a bystander. Latched after
+-- fExplosiveProjectileBlockedWaitTime of failing, cleared on a recheck every fExplosiveProjectileBlockedResetTime.
+local function blastUnsafe(s)
+    local radius = blastRadius(s)
+    if radius <= 0 then return false end
+    local actor, target = s.actor, s.target
+    local at = target.position
+    local function near(other) return (other.position - at):length() <= radius + ACTOR_RADIUS end
+    if near(actor) then return true end
+    local careful = stats.get(actor, 'Responsibility') >= gmst('iAvoidHurtingNonTargetsResponsibility', 50)
+    for id, other in pairs(tracked) do
+        if other ~= actor and other ~= target and other:isValid() and isAlive(other) and near(other) then
+            local f = fighting[id]
+            local sameSide = (f ~= nil and f.target == target) or (onPlayerSide(actor) and onPlayerSide(other))
+            if sameSide or careful then return true end
+        end
+    end
+    local player = world.players[1]
+    if player ~= nil and player ~= target and onPlayerSide(actor) and near(player) then return true end
+    return false
+end
+
+updateExplosiveBlocked = function(s, distance)
+    if blastRadius(s) <= 0 then return end
+    if s.explBlocked then
+        if simTime >= (s.explRecheckAt or 0) then
+            s.explRecheckAt = simTime + gmst('fExplosiveProjectileBlockedResetTime', 5)
+            if not blastUnsafe(s) then
+                s.explBlocked = false
+                s.replanAt = 0
+            end
+        end
+        return
+    end
+    if blastUnsafe(s) then
+        s.unsafeSince = s.unsafeSince or simTime
+        if simTime - s.unsafeSince >= gmst('fExplosiveProjectileBlockedWaitTime', 2.5) then
+            s.explBlocked = true
+            s.explRecheckAt = simTime + gmst('fExplosiveProjectileBlockedResetTime', 5)
+            s.replanAt = 0
+        end
+    else
+        s.unsafeSince = nil
+    end
+end
+
 -- Throws the grenade in hand at the target (or where it hides, to flush it out)
 local function throwGrenade(s, distance, flush)
     local actor, target = s.actor, s.target
@@ -723,18 +882,119 @@ local function throwGrenade(s, distance, flush)
     if state.thrownAt then
         return simTime >= state.thrownAt + 1.2 and 'done' or 'running'
     end
-    if s.inHand == nil or not s.inHand.explosive or distance < GRENADE_MIN or distance > GRENADE_MAX then
+    if s.inHand == nil or not s.inHand.explosive or distance < GRENADE_MIN or distance > throwRange(s) then
         return 'failed'
     end
+    -- the target where it is if seen, else where it was last seen up to FLUSH_LAST_SEEN s ago
+    local at
+    if not s.recentLos then
+        if s.lastLosPos == nil or simTime - (s.lastLosAt or -math.huge) > FLUSH_LAST_SEEN then return 'failed' end
+        at = s.lastLosPos
+    end
     holdStill(actor)
-    ai.face(actor, yawTo(actor.position, target.position))
-    combat.launchAt(actor, target)
+    ai.face(actor, yawTo(actor.position, (at or target.position)))
+    combat.launchAt(actor, target, at)
     state.thrownAt = simTime
     s.thrown[s.inHand.id] = (s.thrown[s.inHand.id] or 0) + 1
-    s.grenadeReadyAt = simTime + GRENADE_EVERY
-    if flush then s.flushedUntil = simTime + GRENADE_EVERY end
+    -- [inferred] one throw per hiding: the target counts as flushed until it is seen and hides again
+    s.flushed, s.hidingHandled = true, true
     print(('[combat] %s (%s) throws %s at %s from %.0f%s'):format(actor.recordId, tostring(actor.id),
         tostring(s.inHand.editorId), tostring(target.recordId), distance, flush and ' to flush it out' or ''))
+    return 'running'
+end
+
+-- A combat style timer, with defaults when the style leaves it at 0 [inferred]
+local function styleTimer(s, name, defaultMin, defaultMax)
+    local range = s.style and s.style[name]
+    local min, max = range and range.min or 0, range and range.max or 0
+    if max <= 0 then min, max = defaultMin, defaultMax end
+    return min + math.random() * (max - min)
+end
+
+-- CombatProcedureBeInCover (FalloutNV.exe 0x9d25b0): wait behind cover, step out to the fire point, wait to
+-- fire, fire for a while, step back in; reload behind cover under fCoverWaitReloadClipPercent 0.33, go back in
+-- under fCoverFiringReloadClipPercent 0.25. When the target can see the cover point, hold 2 s and give it up.
+local function beInCover(s, distance, los, grenade)
+    local actor, target, c, st = s.actor, s.target, s.cover, s.stepState
+    if c == nil then return 'failed' end
+    s.inCoverLoop = true
+    st.phase = st.phase or 'movingIn'
+    local function fail()
+        s.failedCovers[c.key] = simTime
+        releaseCover(s)
+        return 'failed'
+    end
+    local function near(point) return (actor.position - point):length() <= 40 end
+    local function go(point)
+        if not st.sent or ai.status(actor) == 'idle' then
+            st.sent = true
+            ai.moveTo(actor, point, { run = true, direct = true, tolerance = 24 })
+        end
+    end
+    if st.phase == 'waiting' and simTime >= (st.nextCheck or 0) then
+        st.nextCheck = simTime + 1
+        if combat.canTargetSee(actor, target, c.cover) then
+            st.holdUntil = st.holdUntil or simTime + 2
+        else
+            st.holdUntil = nil
+        end
+    end
+    if st.holdUntil and (simTime >= st.holdUntil or (distance < 512 and simTime >= st.holdUntil - 1.5)) then
+        return fail() -- Target has LOS on Cover position
+    end
+    if st.phase == 'movingIn' then
+        if near(c.cover) then
+            holdStill(actor)
+            st.phase, st.sent = 'waiting', false
+            st.untilT = simTime + styleTimer(s, 'waitTimer', 1, 3)
+        else
+            go(c.cover)
+        end
+    elseif st.phase == 'waiting' then
+        ai.face(actor, yawTo(actor.position, target.position))
+        if s.gun and s.gun.clipSize > 0 and s.clip < s.gun.clipSize * gmst('fCoverWaitReloadClipPercent', 0.33)
+            and not st.reloaded then
+            combat.reload(actor)
+            s.clip = s.gun.clipSize
+            st.reloaded = true
+        end
+        if simTime >= st.untilT then st.phase, st.sent = 'movingOut', false end
+    elseif st.phase == 'movingOut' then
+        if near(c.fire) then
+            holdStill(actor)
+            st.phase, st.fired = 'out', false
+            st.untilT = simTime + styleTimer(s, 'waitToFireTimer', 0.5, 1.5)
+        else
+            go(c.fire)
+        end
+    elseif st.phase == 'out' then
+        ai.face(actor, yawTo(actor.position, target.position))
+        if los and simTime >= s.nextAttack then
+            if grenade then
+                if not st.fired and s.inHand and s.inHand.explosive then
+                    combat.launchAt(actor, target)
+                    s.thrown[s.inHand.id] = (s.thrown[s.inHand.id] or 0) + 1
+                    print(('[combat] %s (%s) throws %s at %s from cover'):format(actor.recordId, tostring(actor.id),
+                        tostring(s.inHand.editorId), tostring(target.recordId)))
+                    st.fired, st.untilT = true, simTime + 1.2
+                end
+            elseif s.gun then
+                shootAt(s, actor, target)
+                if not st.fired then
+                    st.fired = true
+                    st.untilT = simTime + styleTimer(s, 'fireTimer', 1.5, 3)
+                end
+            end
+        end
+        if not st.fired and simTime >= st.untilT then
+            return fail() -- Waited out of cover without firing
+        end
+        local lowClip = s.gun and s.gun.clipSize > 0
+            and s.clip < s.gun.clipSize * gmst('fCoverFiringReloadClipPercent', 0.25)
+        if st.fired and (simTime >= st.untilT or lowClip) then
+            st.phase, st.sent, st.reloaded = 'movingIn', false, false
+        end
+    end
     return 'running'
 end
 
@@ -763,6 +1023,9 @@ local procedures = {
     ATTACK_GRENADE = function(s, step, distance) return throwGrenade(s, distance, false) end,
     ATTACK_GRENADE_FLUSH_TARGET = function(s, step, distance) return throwGrenade(s, distance, true) end,
     AVOID_THREAT = function(s) return s.threat == nil and 'done' or 'running' end,
+    ATTACK_RANGED_FROM_COVER = function(s, step, distance, los) return beInCover(s, distance, los, false) end,
+    ATTACK_RANGED_EXPLOSIVE_FROM_COVER = function(s, step, distance, los) return beInCover(s, distance, los, false) end,
+    ATTACK_GRENADE_FROM_COVER = function(s, step, distance, los) return beInCover(s, distance, los, true) end,
     ATTACK_MELEE = function(s, step, distance) return attackMelee(s, distance) end,
     ATTACK_HAND_TO_HAND = function(s, step, distance) return attackMelee(s, distance) end,
     APPROACH_TARGET = function() return 'done' end,
@@ -830,7 +1093,7 @@ local function fight(s)
         local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
         noticed = los or distance <= REACH * 2 or (score ~= nil and score > gmst('fSneakNoticedMin', -20))
     end
-    if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > LOST_AFTER then
+    if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > lostAfter() then
         local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
         print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, moving %s; %s)')
             :format(actor.recordId, tostring(actor.id), tostring(target.recordId), distance, tostring(score),
@@ -846,9 +1109,30 @@ local function fight(s)
     end
 
     -- a live grenade close by
-    local threat = combat.findProjectileNear and combat.findProjectileNear(actor.position, THREAT_RADIUS)
+    -- only while the AVOID_THREATS roll (fCombatAvoidThreatsChance 0.5, every 5 s) is on, or a threat is already
+    -- being avoided
+    if simTime >= (s.nextThreatRoll or 0) then
+        s.nextThreatRoll = simTime + 5
+        s.avoidThreats = math.random() < gmst('fCombatAvoidThreatsChance', 0.5)
+    end
+    local threat
+    if (s.avoidThreats or s.threat ~= nil) and combat.findProjectileNear then
+        threat = combat.findProjectileNear(actor.position, ACTOR_RADIUS)
+    end
     if (threat ~= nil) ~= (s.threat ~= nil) then s.replanAt = 0 end
     s.threat = threat
+
+    -- line of sight history: recent LOS, out in the open (TARGET_FLUSHED)
+    if los then
+        s.lastLosAt, s.lastLosPos = simTime, target.position
+        s.flushed, s.hidingHandled = true, false
+    end
+    s.recentLos = simTime - (s.lastLosAt or -math.huge) <= RECENT_LOS
+    if not s.recentLos and not s.hidingHandled and simTime - (s.lastLosAt or -math.huge) <= FLUSH_LAST_SEEN then
+        -- it has gone out of sight: hiding
+        s.flushed = false
+    end
+    updateExplosiveBlocked(s, distance)
 
     if combat.isActing(actor) then return end
     if s.plan == nil or s.stepFailed or simTime >= (s.replanAt or 0) then
@@ -859,6 +1143,7 @@ local function fight(s)
         holdStill(actor)
         return
     end
+    if step.name:sub(-10) ~= 'FROM_COVER' then s.inCoverLoop = false end
     local procedure = procedures[step.name]
     local result = procedure and procedure(s, step, distance, los) or 'failed'
     if step.action.move and step.param ~= P.L.FLEE then

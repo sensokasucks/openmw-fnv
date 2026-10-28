@@ -52,6 +52,21 @@ namespace MWMechanics
         std::optional<osg::Vec3f> randomPoint(
             ESM::FormId cell, const osg::Vec3f& center, float radius, std::mt19937& rng);
 
+        // A navmesh edge marked as cover (NVTR cover flags), as the original's cover search sees it.
+        struct CoverEdge
+        {
+            osg::Vec3f mA, mB; // ends
+            osg::Vec3f mInward; // horizontal unit vector from the edge into its triangle (the side to stand on)
+            bool mOpenA = false, mOpenB = false; // whether the actor can step out past that end
+            int mHeight = 0; // cover value 1-15
+            std::uint64_t mKey = 0; // navmesh, triangle and edge, for reservations
+        };
+
+        // Cover edges in the navmeshes around center, nearest first along the navmesh (a flood from center's
+        // triangle within radius), at most maxCount.
+        std::vector<CoverEdge> findCoverEdges(
+            ESM::FormId cell, const osg::Vec3f& center, float radius, std::size_t maxCount);
+
         // Height of the triangle's plane at (x, y).
         static float heightAt(const Triangle& triangle, float x, float y);
         static bool contains2D(const Triangle& triangle, float x, float y);
