@@ -924,6 +924,11 @@ local function beInCover(s, distance, los, grenade)
         releaseCover(s)
         return 'failed'
     end
+    if st.phase ~= st.loggedPhase then
+        st.loggedPhase = st.phase
+        print(('[combat] %s (%s) cover: %s (%.0f from %s, line of fire %s)'):format(actor.recordId,
+            tostring(actor.id), st.phase, distance, tostring(target.recordId), tostring(los)))
+    end
     local function near(point) return (actor.position - point):length() <= 40 end
     local function go(point)
         if not st.sent or ai.status(actor) == 'idle' then
@@ -987,6 +992,7 @@ local function beInCover(s, distance, los, grenade)
             end
         end
         if not st.fired and simTime >= st.untilT then
+            print(('[combat] %s (%s) waited out of cover without firing'):format(actor.recordId, tostring(actor.id)))
             return fail() -- Waited out of cover without firing
         end
         local lowClip = s.gun and s.gun.clipSize > 0
@@ -1128,8 +1134,10 @@ local function fight(s)
         s.flushed, s.hidingHandled = true, false
     end
     s.recentLos = simTime - (s.lastLosAt or -math.huge) <= RECENT_LOS
-    if not s.recentLos and not s.hidingHandled and simTime - (s.lastLosAt or -math.huge) <= FLUSH_LAST_SEEN then
-        -- it has gone out of sight: hiding
+    if not s.recentLos and not s.hidingHandled and not s.inCoverLoop
+        and simTime - (s.lastLosAt or -math.huge) <= FLUSH_LAST_SEEN then
+        -- it has gone out of sight: hiding (an actor behind its own cover sees nothing, which is not the target
+        -- hiding [inferred])
         s.flushed = false
     end
     updateExplosiveBlocked(s, distance)
