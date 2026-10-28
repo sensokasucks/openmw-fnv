@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <optional>
 #include <random>
 #include <set>
+#include <sstream>
 #include <string>
 
 #include <osg/MatrixTransform>
@@ -1251,6 +1253,11 @@ namespace MWMechanics::ESM4Combat
         return clearRay(eyesOf(target), point + osg::Vec3f(0, 0, head), actor, target);
     }
 
+    namespace
+    {
+        std::map<ESM::RefNum, std::string> sNoCoverLogged;
+    }
+
     std::optional<Cover> findCover(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
         const osg::Vec3f& targetPosition, float searchRadius, float minDistance, float maxDistance, bool needFire,
         const std::vector<std::uint64_t>& excluded)
@@ -1267,11 +1274,9 @@ namespace MWMechanics::ESM4Combat
             ++checked;
             if (std::find(excluded.begin(), excluded.end(), edge.mKey) != excluded.end())
                 continue;
-            if (needFire && !edge.mOpenA && !edge.mOpenB)
-            {
-                ++closed;
-                continue; // No edges are open
-            }
+            const bool noOpenEnd = !edge.mOpenA && !edge.mOpenB;
+            if (needFire && noOpenEnd)
+                ++closed; // No edges are open: only usable by firing over it (below)
             const osg::Vec3f mid = (edge.mA + edge.mB) * 0.5f;
             const osg::Vec3f coverPoint = mid + edge.mInward * (radius + 8.f);
             const float toTarget = (coverPoint - targetPosition).length();
@@ -1321,18 +1326,35 @@ namespace MWMechanics::ESM4Combat
                     cover.mFirePoint = firePoint;
                     found = true;
                 }
+                if (!found && noOpenEnd && !findProjectileNear(coverPoint, 0.f)
+                    && clearRay(coverPoint + osg::Vec3f(0, 0, half.z() * 1.7f), aim, actor, target))
+                {
+                    // Low cover with no open end: stand up and fire over it from the cover point [inferred; the
+                    // sight line from standing height decides whether the cover is low enough]. Run 17 had
+                    // 60 % of the edges near Goodsprings closed at both ends, so nobody found cover.
+                    cover.mFirePoint = coverPoint;
+                    found = true;
+                }
                 if (!found)
                 {
                     ++noFire;
                     continue;
                 }
             }
+            sNoCoverLogged.erase(actor.getCellRef().getRefNum());
             return cover;
         }
-        Log(Debug::Verbose) << "ESM4 no cover for " << actor.getCellRef().getRefId() << ": " << checked
-                            << " edges, " << closed << " closed, " << band << " out of " << minDistance << "-"
-                            << maxDistance << ", " << facing << " not facing the target, " << seen
-                            << " seen by it, " << noFire << " without a fire point";
+        std::ostringstream why;
+        why << "ESM4 no cover for " << actor.getCellRef().getRefId() << ": " << checked << " edges, " << closed
+            << " closed at both ends, " << band << " out of " << minDistance << "-" << maxDistance << ", " << facing
+            << " not facing the target, " << seen << " seen by it, " << noFire << " without a fire point";
+        // The original searches on every replan (about once a second); log only when the outcome changes
+        std::string& last = sNoCoverLogged[actor.getCellRef().getRefNum()];
+        if (last != why.str())
+        {
+            last = why.str();
+            Log(Debug::Verbose) << last;
+        }
         return std::nullopt;
     }
 

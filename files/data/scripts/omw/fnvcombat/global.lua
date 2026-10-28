@@ -1065,7 +1065,7 @@ local function attackRanged(s, distance, los)
     s.straight = false
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
-    if simTime >= s.nextAttack then shootAt(s, actor, target) end
+    if simTime >= s.nextAttack then shootAt(s, actor, target) else s.fireNow = true end
     return 'running'
 end
 
@@ -1394,8 +1394,8 @@ local procedures = {
         return moveTowards(s, step.param, distance, los)
     end,
     MOVE_AND_ATTACK_RANGED = function(s, step, distance, los)
-        if los and s.gun and simTime >= s.nextAttack and inGunRange(s, distance) then
-            shootAt(s, s.actor, s.target)
+        if los and s.gun and inGunRange(s, distance) then
+            if simTime >= s.nextAttack then shootAt(s, s.actor, s.target) else s.fireNow = true end
         end
         return moveTowards(s, step.param, distance, los)
     end,
@@ -1697,6 +1697,20 @@ return {
         end,
         onUpdate = function(dt)
             simTime = simTime + dt
+            -- Shot timing runs every frame: on the 0.2 s tick each semi-auto gap stretched by up to a tick and
+            -- came out quantized (run 17: always 1.6 or 1.8 s)
+            for _, s in pairs(fighting) do
+                if (s.pendingDelay or s.fireNow) and s.actor:isValid() and not combat.isActing(s.actor) then
+                    if s.pendingDelay then
+                        s.nextAttack = math.max(s.nextAttack or 0, simTime + s.pendingDelay)
+                        s.pendingDelay = nil
+                    end
+                    if s.fireNow and s.gun and simTime >= s.nextAttack and s.target and s.target:isValid() then
+                        s.fireNow = nil
+                        shootAt(s, s.actor, s.target)
+                    end
+                end
+            end
             if simTime < nextTick then return end
             nextTick = simTime + TICK_EVERY
             local player = world.players[1]
@@ -1743,6 +1757,7 @@ return {
             end
             if playerAlive then teammatesHelp(player) end
             for id, s in pairs(fighting) do
+                s.fireNow = nil -- set again below while an attack step waits for its shot
                 if tracked[id] == nil or not s.actor:isValid() then
                     fighting[id] = nil
                 else

@@ -242,7 +242,26 @@ namespace MWClass
 
     const ESM4::Weapon* ESM4Npc::getEquippedWeapon(const MWWorld::Ptr& ptr)
     {
-        return getCustomData(ptr).mEquippedWeapon;
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mEquippedWeapon != nullptr)
+        {
+            // A weapon that left the inventory (taken by a script, dropped) is no longer held: run 17 had an NPC
+            // firing a revolver that had been removed from it
+            bool held = false;
+            for (MWWorld::ConstContainerStoreIterator it
+                 = data.mStore.cbegin(MWWorld::ContainerStore::Type_ESM4Weapon);
+                 it != data.mStore.cend(); ++it)
+            {
+                if (it->getCellRef().getCount() > 0 && it->get<ESM4::Weapon>()->mBase == data.mEquippedWeapon)
+                {
+                    held = true;
+                    break;
+                }
+            }
+            if (!held)
+                data.mEquippedWeapon = nullptr;
+        }
+        return data.mEquippedWeapon;
     }
 
     // The weapon list follows the inventory, so a gun picked up in a fight (or taken by a script) counts
