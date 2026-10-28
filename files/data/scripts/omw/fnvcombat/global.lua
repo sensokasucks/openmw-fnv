@@ -254,7 +254,10 @@ local function approach(s, actor, target, reach, aroundObstacles)
             s.sideStepUntil = simTime + 2
             -- keep going round the same side; only a missing path turns the actor the other way
             s.sideStepSign = s.sideStepSign or (math.random() < 0.5 and -1 or 1)
-            if status == 'nopath' then s.sideStepSign = -s.sideStepSign end
+            -- a missing path, or a step that went nowhere (run 21: parked against the rock), turns the actor round
+            local stuck = s.lastSideStepFrom ~= nil and (actor.position - s.lastSideStepFrom):length() < 32
+            if status == 'nopath' or stuck then s.sideStepSign = -s.sideStepSign end
+            s.lastSideStepFrom = actor.position
             local flat = util.vector3(toTarget.x, toTarget.y, 0):normalize()
             local side = util.vector3(-flat.y, flat.x, 0) * (256 * s.sideStepSign)
             s.goal = nil
