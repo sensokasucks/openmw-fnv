@@ -2263,11 +2263,13 @@ return {
                 elseif backingUp[id] ~= nil and simTime < backingUp[id].until_ then
                     -- the companion wheel's Back Up: a short step away from the player over the package
                     local b = backingUp[id]
-                    if not b.sent then
+                    local there = (npc.position - b.to):length() <= 48
+                    if there then
+                        b.until_ = simTime -- (run 25: a fixed 3 s stopped it 165 units out)
+                    elseif not b.sent or ai.status(npc) ~= 'moving' then
+                        -- (run 26: the move reported done 90 units short; send it again until there or 6 s)
                         b.sent = true
-                        ai.moveTo(npc, b.to, { tolerance = 32 })
-                    elseif ai.status(npc) ~= 'moving' then
-                        b.until_ = simTime -- there (run 25: a fixed 3 s stopped it 165 units out)
+                        ai.moveTo(npc, b.to, { tolerance = 24, direct = true })
                     end
                 elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
                     -- fighting (scripts/omw/fnvcombat) runs over the package, like the original's runtime Combat

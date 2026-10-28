@@ -213,6 +213,13 @@ local function show(data)
 end
 
 return {
+    interfaceName = 'FNVDialogueWindow',
+    interface = {
+        version = 0,
+        --- Open, including the frame the Escape that closes it is handled in (UiModeChanged comes later), so
+        -- that Escape opens no pause menu (scripts/omw/fnvmenus)
+        isOpen = function() return open end,
+    },
     engineHandlers = {
         onFrame = function(dt)
             dialogueCamera.update(core.getRealFrameDuration())
