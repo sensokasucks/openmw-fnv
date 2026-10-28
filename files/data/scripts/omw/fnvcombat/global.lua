@@ -60,6 +60,12 @@ local GIVE_UP_DISTANCE = 6000 -- combat ends when the target gets this far
 local ASSIST_DISTANCE = 1500
 local REACH = 150 -- unarmed and creature attacks
 local STRAIGHT_DISTANCE = 600 -- closer than this, attackers leave the navmesh and go straight for the target
+local DODGE_DISTANCE = 128 -- the original's DODGE_LOCATION step (ghidra-findings-10)
+local DODGES_BEFORE_IGNORE = 3 -- [inferred] dodges without a clear shot before IGNORE_BLOCKED_TARGET
+local IGNORE_BLOCKED_TIME = 10 -- [inferred] how long a blocked target is waited out (fCombatDetectionBufferTime)
+local LOS_BUFFER_TIME = 5 -- fCombatLOSBufferTime: an ally saw the target this recently
+local LOS_ALLY_RANGE = 8192 -- FUN_0099f480 ignores allies further away
+local MOVE_TO_ACTOR_BUFFER = 64 -- fCombatMoveToActorBufferDistance
 local FLEE_DISTANCE = 2000 -- how far a fleeing actor runs from its attacker
 -- Flee check (FalloutNV.exe 0x9a1380): an actor wants to flee when its Confidence value, less a per-fight random
 -- modifier (fCombatConfidenceModifierMin..Max), is above the threat ratio, its side's strength over the enemy's.
@@ -244,24 +250,37 @@ local function approach(s, actor, target, reach, aroundObstacles)
     local status = ai.status(actor)
     local toTarget = target.position - actor.position
     local close = toTarget:length() < STRAIGHT_DISTANCE
-    -- a side-step in progress is left alone (run 20: the approach route replaced it 0.2 s after it was sent)
-    if simTime < (s.sideStepUntil or 0) and status == 'moving' then return end
+    -- a dodge in progress is left alone (run 20: the approach route replaced a side-step 0.2 s after it was sent)
+    if simTime < (s.dodgeUntil or 0) and status == 'moving' then return end
     if aroundObstacles and (status == 'arrived' or status == 'nopath') then
-        -- The route ended short of a clear shot: side-step around whatever is in the way instead of pushing
-        -- straight at the target [inferred; run 19 had a gunman jittering against a rock 108 units from the
-        -- player for 35 s, re-sending a straight move every tick]
-        if simTime >= (s.sideStepUntil or 0) then
-            s.sideStepUntil = simTime + 2
-            -- keep going round the same side; only a missing path turns the actor the other way
-            s.sideStepSign = s.sideStepSign or (math.random() < 0.5 and -1 or 1)
-            -- a missing path, or a step that went nowhere (run 21: parked against the rock), turns the actor round
-            local stuck = s.lastSideStepFrom ~= nil and (actor.position - s.lastSideStepFrom):length() < 32
-            if status == 'nopath' or stuck then s.sideStepSign = -s.sideStepSign end
-            s.lastSideStepFrom = actor.position
+        -- The route ended short of a clear shot: the target is blocked. The original's cheapest fix is DODGE
+        -- (cost 0.1): a free spot 128 units to a side, forward or back (FUN_0099e190 mask 0xF, 128, 128;
+        -- ghidra-findings-10). After a few dodges without a shot it takes IGNORE_BLOCKED_TARGET (1.5) instead
+        -- [inferred count: runs 20-22 swept round a rock for a minute when no reachable spot saw the player].
+        if simTime >= (s.dodgeUntil or 0) then
+            if (s.dodges or 0) >= DODGES_BEFORE_IGNORE then
+                s.dodges = 0
+                s.ignoreBlockedUntil = simTime + IGNORE_BLOCKED_TIME
+                s.goal = nil
+                ai.stop(actor)
+                print(('[combat] %s (%s) ignores blocked target %s for %.0f s after %d dodges'):format(
+                    actor.recordId, tostring(actor.id), tostring(target.recordId), IGNORE_BLOCKED_TIME,
+                    DODGES_BEFORE_IGNORE))
+                return
+            end
+            s.dodges = (s.dodges or 0) + 1
+            s.dodgeUntil = simTime + 2
+            -- keep to one side; a missing path or a step that went nowhere turns to the next direction
+            s.dodgeDir = s.dodgeDir or (math.random() < 0.5 and 1 or 2)
+            local stuck = s.lastDodgeFrom ~= nil and (actor.position - s.lastDodgeFrom):length() < 32
+            if status == 'nopath' or stuck then s.dodgeDir = s.dodgeDir % 4 + 1 end
+            s.lastDodgeFrom = actor.position
             local flat = util.vector3(toTarget.x, toTarget.y, 0):normalize()
-            local side = util.vector3(-flat.y, flat.x, 0) * (256 * s.sideStepSign)
+            local right = util.vector3(-flat.y, flat.x, 0)
+            local dirs = { right, -right, flat, -flat }
             s.goal = nil
-            ai.moveTo(actor, actor.position + side + flat * 96, { run = true, direct = false, tolerance = 32 })
+            ai.moveTo(actor, actor.position + dirs[s.dodgeDir] * DODGE_DISTANCE,
+                { run = true, direct = false, tolerance = 32 })
         end
         return
     end
@@ -802,12 +821,19 @@ local function worldState(s, distance, los)
         if kind == L.TARGET then
             -- a gunman has not reached its target while something blocks the shot: run 18 had one standing 127
             -- units from the player behind a rock, "arrived" and never firing
-            if s.gun ~= nil then return los and inGunRange(s, distance) end
+            if s.gun ~= nil then
+                return (los and inGunRange(s, distance)) or simTime < (s.ignoreBlockedUntil or 0)
+            end
             return distance <= closeEnough(s, los)
         end
         if kind == L.MELEE then return distance <= meleeReach(s) end
         if kind == L.FLEE then return distance >= FLEE_DISTANCE end
-        if kind == L.LOS then return los and (s.gun == nil or inGunRange(s, distance)) end
+        if kind == L.LOS then
+            if los and (s.gun == nil or inGunRange(s, distance)) then return true end
+            local ally = s.losAlly
+            return ally ~= nil and ally:isValid()
+                and (s.actor.position - ally.position):length() <= 2 * ACTOR_RADIUS + MOVE_TO_ACTOR_BUFFER
+        end
         if kind == L.INVESTIGATE then
             return s.searchPos ~= nil and (s.actor.position - s.searchPos):length() <= 128
         end
@@ -898,6 +924,29 @@ local function stepLabel(step)
     return step.name .. (step.param ~= nil and ('(' .. step.param .. ')') or '')
 end
 
+-- FUN_0099f480: the nearest member of the actor's combat group (here: others fighting the same target on the
+-- same side) within 8192 that saw the target within fCombatLOSBufferTime 5 s. The current one is kept while it
+-- still qualifies.
+local function losAlly(s)
+    local function qualifies(o)
+        return o ~= s and o.actor:isValid() and isAlive(o.actor) and o.target == s.target and not o.fleeing
+            and simTime - (o.lastLosAt or -math.huge) <= LOS_BUFFER_TIME
+            and (o.actor.position - s.actor.position):length() <= LOS_ALLY_RANGE
+    end
+    if s.losAlly ~= nil then
+        local o = fighting[s.losAlly.id]
+        if o ~= nil and qualifies(o) then return s.losAlly end
+    end
+    local best, bestD
+    for _, o in pairs(fighting) do
+        if qualifies(o) then
+            local d = (o.actor.position - s.actor.position):length()
+            if bestD == nil or d <= bestD then best, bestD = o.actor, d end
+        end
+    end
+    return best
+end
+
 local function replan(s, distance, los)
     if s.refreshWeaponsUntil then
         s.weapons = combat.getActorWeapons(s.actor)
@@ -908,7 +957,10 @@ local function replan(s, distance, los)
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
-    local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT }
+    local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.INVESTIGATE, P.L.AVOID_THREAT }
+    -- ACQUIRE_LINE_OF_SIGHT walks to an ally that sees the target; a lone actor never gets it (ghidra-findings-10)
+    s.losAlly = losAlly(s)
+    if s.losAlly ~= nil then locations[#locations + 1] = P.L.LOS end
     -- cover is searched while planning (ghidra-findings-9): the cover plan is only on offer when a spot exists,
     -- and a failed search is forgotten with the pass (only the failed spots are remembered, for 3 s)
     if coverWanted(s) and not s.inCoverLoop and s.cover == nil then findCover(s) end
@@ -1064,6 +1116,23 @@ local function moveTowards(s, kind, distance, los)
         end
         return 'running'
     end
+    if kind == L.LOS and s.losAlly ~= nil then
+        local ally = s.losAlly
+        if not ally:isValid() then return 'failed' end
+        if los and (s.gun == nil or inGunRange(s, distance)) then return 'done' end
+        if (actor.position - ally.position):length() <= 2 * ACTOR_RADIUS + MOVE_TO_ACTOR_BUFFER then
+            holdStill(actor)
+            return 'done'
+        end
+        if not state.sent or ai.status(actor) == 'idle' or simTime >= (state.resend or 0) then
+            state.sent, state.resend = true, simTime + 1
+            ai.moveTo(actor, ally.position, { run = true, direct = true,
+                tolerance = 2 * ACTOR_RADIUS + MOVE_TO_ACTOR_BUFFER })
+        elseif ai.status(actor) == 'nopath' then
+            return 'failed'
+        end
+        return 'running'
+    end
     -- the target, a spot in melee reach or one with a line of fire
     local reach
     if kind == L.MELEE then
@@ -1089,7 +1158,15 @@ local function attackRanged(s, distance, los)
         print(('[combat] %s (%s) has no line of fire to %s at %.0f: %s'):format(actor.recordId, tostring(actor.id),
             tostring(target.recordId), distance, describeLine(actor, target)))
     end
+    if s.gun ~= nil and not los and simTime < (s.ignoreBlockedUntil or 0) then
+        -- IGNORE_BLOCKED_TARGET: wait it out where it stands, aimed at the target [inferred]
+        holdStill(actor)
+        ai.face(actor, yawTo(actor.position, target.position))
+        return 'running'
+    end
     if s.gun == nil or not los or not inGunRange(s, distance) then return 'failed' end
+    s.dodges = 0
+    s.ignoreBlockedUntil = nil
     s.straight = false
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
