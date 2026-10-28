@@ -813,6 +813,11 @@ namespace MWLua
             const char* value = std::getenv("OPENMW_OBSCRIPT_TRACE");
             return value != nullptr && *value != '\0' && std::string_view(value) != "0";
         }();
+        // Player input/view trace for soft locks (OPENMW_FNV_UI_TRACE=1, scripts/omw/fnvuitrace.lua).
+        api["uiTraceEnabled"] = [] {
+            const char* value = std::getenv("OPENMW_FNV_UI_TRACE");
+            return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+        }();
 
         api["dialogue"] = initObScriptDialogueBindings(context);
         api["ai"] = initObScriptAIBindings(context);

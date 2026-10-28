@@ -109,6 +109,8 @@ local messageTime = 0
 -- (scripts/omw/camera) is also on Tab and switches the view when the Pip-Boy closes.
 local viewMode = nil
 local viewRestoreFrames = 0
+-- The view toggle is off from a Tab press until Tab is up again (see onKeyPress).
+local tabBlocksView = false
 
 -- ------------------------------------------------------------ helpers
 
@@ -1226,6 +1228,12 @@ return {
                 local mode = camera.getMode()
                 if mode == camera.MODE.FirstPerson or mode == camera.MODE.ThirdPerson then viewMode = mode end
                 viewRestoreFrames = 0
+                -- Held in third person, the view toggle goes to the orbiting preview view at once, and its
+                -- release can be lost to the Pip-Boy or another menu, leaving the view stuck there.
+                if not tabBlocksView then
+                    tabBlocksView = true
+                    I.Camera.disableModeControl('pipboy-tab')
+                end
                 if open then
                     close()
                 elseif I.UI.getMode() == nil and not core.isWorldPaused() then
@@ -1267,6 +1275,12 @@ return {
             if not windowsReplaced then replaceWindows() end
             -- the local map's tiles arrive a frame after they are asked for
             if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
+            -- the view toggle comes back once Tab is up, out of every menu
+            if tabBlocksView and I.UI.getMode() == nil and not input.isKeyPressed(input.KEY.Tab) then
+                tabBlocksView = false
+                I.Camera.enableModeControl('pipboy-tab')
+                if camera.getMode() == camera.MODE.Preview and viewMode then camera.setMode(viewMode) end
+            end
             if viewRestoreFrames > 0 and I.UI.getMode() == nil then
                 viewRestoreFrames = viewRestoreFrames - 1
                 local mode = camera.getMode()
