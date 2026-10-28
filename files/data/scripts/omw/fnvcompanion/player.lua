@@ -25,8 +25,8 @@ local INNER, OUTER = 76, 332 -- button_companion_wheel.xml user4 / user5
 local ICON = 180
 
 local SOUNDS = {
-    open = 'sound/fx/ui/popup/ui_popup_messagegeneral.wav', -- UIPopUpMessageGeneral
-    hover = 'sound/fx/ui/pipboy/ui_pipboy_scroll.wav', -- UIPipBoyScroll
+    open = 'sound/fx/ui/popup/ui_popup_messagewindow.wav', -- UIPopUpMessageGeneral
+    hover = 'sound/fx/ui/menu/ui_menu_focus.wav', -- UIPipBoyScroll
     ok = 'sound/fx/ui/menu/ui_menu_ok.wav', -- UIMenuOK
 }
 
@@ -49,6 +49,8 @@ local BUTTONS = {
 local wheel = nil -- { companion, aggressive, long, ranged, following, hover, subtitle }
 local element = nil
 local closingByScript = false
+local closedAt = -1 -- real time the wheel last closed: the Escape that closed it opens no pause menu
+local EXIT_SIZE = v2(200, 44)
 
 local function playSound(name)
     style.sound(SOUNDS[name])
@@ -79,8 +81,17 @@ local function screen()
 end
 
 -- The button under a screen position: the slices measure from the screen centre (user0 / user1)
+local function exitOrigin()
+    local size, k = screen()
+    local centre = v2(size.x / 2, size.y / 2 - LIFT * k)
+    return centre + v2(WHEEL / 2 - EXIT_SIZE.x, WHEEL / 2 + 20) * k
+end
+
 local function buttonAt(position)
     local size, k = screen()
+    local exit = exitOrigin()
+    local rel = position - exit
+    if rel.x >= 0 and rel.y >= 0 and rel.x <= EXIT_SIZE.x * k and rel.y <= EXIT_SIZE.y * k then return 11 end
     local d = position - size * 0.5
     local r = d:length() / k
     if r < INNER or r > OUTER then return nil end
@@ -101,6 +112,7 @@ local function close()
     end
     if wheel then
         wheel = nil
+        closedAt = core.getRealTime()
         closingByScript = true
         if I.UI.getMode() == 'Interface' then I.UI.setMode() end
         closingByScript = false
@@ -128,7 +140,7 @@ end
 local function hover(id)
     if wheel == nil or wheel.hover == id then return end
     wheel.hover = id
-    playSound('hover')
+    if id ~= nil then playSound('hover') end
     render()
 end
 
@@ -157,38 +169,43 @@ render = function()
         local at = origin + v2(b.at.x, b.at.y - 45) * k -- user7 is measured from the top of the 960 screen
         add(image(icons[hovered and 2 or 1], at, v2(ICON, ICON) * k, 1))
     end
-    local function centredText(str, y, props)
+    -- y in the 960-high screen space, width the XML's wrapwidth
+    local function centredText(str, y, width, props)
         props = props or {}
         props.position = v2(size.x / 2, y * k)
         props.anchor = v2(0.5, 0)
+        props.size = v2(width * k, 120 * k)
+        props.autoSize = false
         props.textAlignH = ui.ALIGNMENT.Center
         props.multiline = true
         props.wordWrap = true
-        props.autoSize = true
         props.textSize = props.textSize or style.TEXT
         return style.text(str, props)
     end
-    add(centredText(gmst('sCWheelTitle', 'Companion Commands'), 110))
-    add(centredText(description(wheel.hover), 205, { font = style.FONT_SMALL, textSize = style.SMALL }))
+    add(centredText(gmst('sCWheelTitle', 'Companion Commands'), 110, 230))
+    add(centredText(description(wheel.hover), 205, 190, { font = style.FONT_SMALL, textSize = style.SMALL }))
     if wheel.subtitle and wheel.subtitle ~= '' then
-        add(centredText(wheel.subtitle, 740, { font = style.FONT_DIALOG })) -- CWM_Subtitle, 960-high screen units
+        add(centredText(wheel.subtitle, 740, 800, { font = style.FONT_DIALOG })) -- CWM_Subtitle
     end
-    add(style.button({ id = 'exit', label = gmst('sExit', 'Exit'), position = origin + v2(WHEEL - 200, WHEEL + 20) * k,
-        size = v2(200, 44) * k, onClick = function() press(11) end }, wheel, render))
+    -- Exit (text_box.xml): a box round it while the mouse is over it
+    local exitAt, exitSize = exitOrigin(), EXIT_SIZE * k
+    if wheel.hover == 11 then style.box(content, exitAt, exitSize, 1, 0.12) end
+    add(style.text(gmst('sExit', 'Exit'), { position = exitAt, size = exitSize, autoSize = false,
+        textAlignH = ui.ALIGNMENT.Center, textAlignV = ui.ALIGNMENT.Center, alpha = wheel.hover == 11 and 1 or style.DIM }))
     local root = {
         type = ui.TYPE.Widget,
         props = { relativeSize = v2(1, 1) },
         content = content,
         events = {
             mouseMove = async:callback(function(e) hover(buttonAt(e.position)) end),
-            mouseClick = async:callback(function(e)
-                local id = buttonAt(e.position)
-                if id ~= nil then press(id) end
+            -- mouseClick carries no position: the button under the mouse is the hovered one
+            mouseClick = async:callback(function()
+                if wheel and wheel.hover ~= nil then press(wheel.hover) end
             end),
         },
     }
     if element then
-        element.layout = root
+        element.layout.content = ui.content { root }
         element:update()
     else
         element = ui.create { layer = 'Windows', type = ui.TYPE.Widget, props = { relativeSize = v2(1, 1) },
@@ -197,6 +214,12 @@ render = function()
 end
 
 return {
+    interfaceName = 'FNVCompanionWheel',
+    interface = {
+        version = 0,
+        --- Open, or closed by the Escape being handled now (scripts/omw/fnvmenus opens no pause menu then)
+        isOpen = function() return wheel ~= nil or core.getRealTime() - closedAt < 0.25 end,
+    },
     engineHandlers = {
         onKeyPress = function(key)
             if wheel and key.code == require('openmw.input').KEY.E then press(11) end
@@ -226,6 +249,7 @@ return {
             -- Escape or another window closed the wheel
             if wheel and not closingByScript and e.newMode ~= 'Interface' then
                 wheel = nil
+                closedAt = core.getRealTime()
                 if element then element:destroy(); element = nil end
             end
         end,

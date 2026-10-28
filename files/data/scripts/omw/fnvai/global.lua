@@ -2085,9 +2085,9 @@ return {
             local away = npc.position - from.position
             away = util.vector3(away.x, away.y, 0)
             if away:length() < 1 then away = util.vector3(0, 1, 0) end
-            backingUp[npc.id] = { to = npc.position + away:normalize() * BACK_UP_DISTANCE, until_ = simTime + 3 }
+            backingUp[npc.id] = { to = npc.position + away:normalize() * BACK_UP_DISTANCE, until_ = simTime + 6 }
             local s = states[npc.id]
-            if s ~= nil then s.nextEvaluation = simTime + 3 end
+            if s ~= nil then s.nextEvaluation = simTime + 6 end
         end,
         setTeammate = function(npc, on)
             if npc == nil or not npc:isValid() then return end
@@ -2266,6 +2266,8 @@ return {
                     if not b.sent then
                         b.sent = true
                         ai.moveTo(npc, b.to, { tolerance = 32 })
+                    elseif ai.status(npc) ~= 'moving' then
+                        b.until_ = simTime -- there (run 25: a fixed 3 s stopped it 165 units out)
                     end
                 elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
                     -- fighting (scripts/omw/fnvcombat) runs over the package, like the original's runtime Combat

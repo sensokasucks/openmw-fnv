@@ -39,8 +39,14 @@ local function refVar(obj, name)
     return locals and locals[name:lower()]
 end
 
+-- through the dialogue, so that the next line's GetScriptVariable condition sees it at once (run 25: Be Passive
+-- right after Be Aggressive picked the "already passive" line)
 local function setVar(obj, name, value)
-    obj:sendEvent('ObScriptSetVar', { name = name, value = value })
+    if I.FNVDialogue and I.FNVDialogue.setScriptVariable then
+        I.FNVDialogue.setScriptVariable(obj, name, value)
+    else
+        obj:sendEvent('ObScriptSetVar', { name = name, value = value })
+    end
 end
 
 local function isTeammate(npc)
