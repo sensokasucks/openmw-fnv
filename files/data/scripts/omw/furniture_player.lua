@@ -1,8 +1,8 @@
 -- Player side of sitting on ESM4 furniture (see ESM4FurnitureActivation in activationhandlers.lua).
 -- There is no sit animation for the player yet, so sitting locks movement and lowers the first-person camera
 -- to the eye height of someone seated (or lying, in the opening of a new game). With the FO3/FNV player body
--- the view goes to third person while seated, as in the game; without it the Morrowind body would stand in the
--- seat, so then the view stays in first person until the player gets up.
+-- the view stays whatever it was (first person in the opening); without it the Morrowind body would stand in
+-- the seat, so then the view goes to first person until the player gets up.
 
 local async = require('openmw.async')
 local camera = require('openmw.camera')
@@ -52,30 +52,29 @@ end
 -- data: { furniture, pose = 'sitting' | 'lying', eyeHeight = eye height above the feet (optional) }
 local function lockFirstPerson()
     previousMode = camera.getMode()
-    local ai = core.obscript and core.obscript.ai
-    if ai and ai.hasPlayerBody and ai.hasPlayerBody() then
-        -- The FO3/FNV body sits for real (RenderingManager::hasPlayerBody); the game shows that from third
-        -- person while furniture is used, and so do we (the first-person arms have no seated poses).
-        I.Camera.disableModeControl('furniture')
-        camera.setMode(camera.MODE.ThirdPerson)
-        self:sendEvent('FNVFurnitureView', { mode = camera.MODE.ThirdPerson, seated = true })
-        return
-    end
     previousVanity = types.Player.getControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode)
     types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, false)
     I.Camera.disableModeControl('furniture')
     I.Camera.disableStandingPreview('furniture')
+    local ai = core.obscript and core.obscript.ai
+    if ai and ai.hasPlayerBody and ai.hasPlayerBody() then
+        -- The FO3/FNV body sits for real (RenderingManager::hasPlayerBody). The game keeps whatever view the
+        -- player is in (the opening, lying in Doc Mitchell's bed, is first person), and so do we; the view
+        -- just can't be changed while seated.
+        if previousMode ~= camera.MODE.FirstPerson and previousMode ~= camera.MODE.ThirdPerson then
+            previousMode = camera.MODE.FirstPerson
+            camera.setMode(previousMode, true)
+        end
+        self:sendEvent('FNVFurnitureView', { mode = previousMode, seated = true })
+        return
+    end
     camera.setMode(camera.MODE.FirstPerson, true)
 end
 
 local function unlockFirstPerson()
     I.Camera.enableModeControl('furniture')
     I.Camera.enableStandingPreview('furniture')
-    local ai = core.obscript and core.obscript.ai
-    local body = ai and ai.hasPlayerBody and ai.hasPlayerBody()
-    if not body then
-        types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, previousVanity)
-    end
+    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode, previousVanity)
     if previousMode == camera.MODE.ThirdPerson or previousMode == camera.MODE.FirstPerson then
         camera.setMode(previousMode, true)
         -- a dialogue open right now (the opening) would put the seated view back when it ends
