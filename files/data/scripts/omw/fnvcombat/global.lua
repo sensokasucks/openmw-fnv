@@ -279,7 +279,8 @@ local function shootAt(s, actor, target)
         if max > 0 then
             local mult = s.style and s.style.semiAutoDelayMult or nil
             local m = mult and mult.max > 0 and (mult.min + math.random() * (mult.max - mult.min)) or 1
-            delay = math.max(delay, (min + math.random() * (max - min)) * m)
+            -- the delay runs after the attack animation, which sets the pace by itself (see the tick)
+            s.pendingDelay = (min + math.random() * (max - min)) * m
         else
             delay = delay + 0.4 + math.random() * 0.8
         end
@@ -1525,6 +1526,10 @@ local function fight(s)
     updateExplosiveBlocked(s, distance)
 
     if combat.isActing(actor) then return end
+    if s.pendingDelay then
+        s.nextAttack = math.max(s.nextAttack or 0, simTime + s.pendingDelay)
+        s.pendingDelay = nil
+    end
     if s.plan == nil or s.stepFailed or simTime >= (s.replanAt or 0) then
         replan(s, distance, los)
     end
