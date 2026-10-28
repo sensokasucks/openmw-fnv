@@ -663,10 +663,22 @@ void Launcher::MainDialog::play()
 
         // Replace (not append to) the Morrowind setup from openmw.cfg. Morrowind.esm must come first: it supplies
         // the records the engine needs at startup and the Morrowind [Fallback] settings stay in openmw.cfg.
-        const QStringList arguments{ QLatin1String("--replace=content"), QLatin1String("--replace=data"),
-            QLatin1String("--data=") + QDir::toNativeSeparators(morrowindData),
-            QLatin1String("--data=") + QDir::toNativeSeparators(newVegasData),
-            QLatin1String("--content=Morrowind.esm"), QLatin1String("--content=FalloutNV.esm") };
+        QStringList arguments{ QLatin1String("--replace=content"), QLatin1String("--replace=data"),
+            QLatin1String("--replace=fallback-archive") };
+        // Keep the data folders the install itself ships (resources/vfs-mw holds the Morrowind UI scripts).
+        for (const Config::SettingValue& dir : mGameSettings.getDataDirs())
+            if (!mGameSettings.isUserSetting(dir))
+                arguments << QLatin1String("--data=") + QDir::toNativeSeparators(dir.value);
+        arguments << QLatin1String("--data=") + QDir::toNativeSeparators(morrowindData)
+                  << QLatin1String("--data=") + QDir::toNativeSeparators(newVegasData)
+                  << QLatin1String("--content=Morrowind.esm") << QLatin1String("--content=FalloutNV.esm");
+        // A plain Morrowind openmw.cfg lists only Morrowind's archives; New Vegas needs its own base BSAs too.
+        if (QFileInfo::exists(QDir(morrowindData).filePath(QLatin1String("Morrowind.bsa"))))
+            arguments << QLatin1String("--fallback-archive=Morrowind.bsa");
+        for (const char* archive : { "Fallout - Meshes.bsa", "Fallout - Textures.bsa", "Fallout - Textures2.bsa",
+                 "Fallout - Misc.bsa", "Fallout - Sound.bsa", "Fallout - Voices1.bsa", "Update.bsa" })
+            if (QFileInfo::exists(QDir(newVegasData).filePath(QLatin1String(archive))))
+                arguments << QLatin1String("--fallback-archive=") + QLatin1String(archive);
         if (mGameInvoker->startProcess(QLatin1String("openmw"), arguments, true))
             return qApp->quit();
         return;
