@@ -16,6 +16,7 @@
 #include <components/compiler/scanner.hpp>
 #include <components/files/conversion.hpp>
 #include <components/interpreter/interpreter.hpp>
+#include <components/misc/strings/algorithm.hpp>
 #include <components/misc/utf8stream.hpp>
 #include <components/settings/values.hpp>
 
@@ -230,7 +231,20 @@ namespace MWGui
         else
             print(mConsoleMode + " " + command + "\n");
 
-        if (!mConsoleMode.empty() || (command.size() >= 3 && std::string_view(command).substr(0, 3) == "lua"))
+        // FO3/FNV testing commands that Lua scripts handle (scripts/omw/fnvgore/player.lua): the script compiler
+        // never sees them
+        const auto isLuaCommand = [](std::string_view cmd) {
+            static constexpr std::string_view luaCommands[] = { "gib", "sever" };
+            const std::size_t end = cmd.find_first_of(" \t");
+            const std::string_view word = cmd.substr(0, end);
+            for (std::string_view name : luaCommands)
+                if (Misc::StringUtils::ciEqual(word, name))
+                    return true;
+            return false;
+        };
+
+        if (!mConsoleMode.empty() || (command.size() >= 3 && std::string_view(command).substr(0, 3) == "lua")
+            || isLuaCommand(command))
         {
             MWBase::Environment::get().getLuaManager()->handleConsoleCommand(mConsoleMode, command, mPtr);
             return;

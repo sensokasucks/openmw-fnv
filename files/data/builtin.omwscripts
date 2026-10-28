@@ -21,6 +21,7 @@ GLOBAL: scripts/omw/fnvai/global.lua
 GLOBAL: scripts/omw/fnvcombat/global.lua
 GLOBAL: scripts/omw/fnvcrime/global.lua
 GLOBAL: scripts/omw/fnvgore/global.lua
+PLAYER: scripts/omw/fnvgore/player.lua
 GLOBAL: scripts/omw/usehandlers.lua
 GLOBAL: scripts/omw/fnveffects/global.lua
 GLOBAL: scripts/omw/worldeventhandlers.lua

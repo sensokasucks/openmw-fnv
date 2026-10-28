@@ -192,6 +192,7 @@ set(BUILTIN_DATA_FILES
     scripts/omw/fnvcrime/global.lua
     scripts/omw/fnvcombat/player.lua
     scripts/omw/fnvgore/global.lua
+    scripts/omw/fnvgore/player.lua
     scripts/omw/fnvhud/frame.lua
     scripts/omw/fnvhud/global.lua
     scripts/omw/fnvhud/keys.lua
