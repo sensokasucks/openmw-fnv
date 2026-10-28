@@ -96,6 +96,8 @@ local element = nil
 local open = false
 local radioPageTime = 0
 local closingByScript = false
+-- Opened, and the UiModeChanged for its Interface mode not seen yet (see UiModeChanged)
+local openPending = false
 local pauseWhileOpen = true
 local tabIndex = 1
 local subIndex = { 1, 1, 1 }
@@ -1116,6 +1118,7 @@ local function show(tab, sub)
     end
     if not open then
         open = true
+        openPending = I.UI.getMode() ~= 'Interface'
         localRerender = true
         if not pauseWhileOpen then I.UI.setPauseOnMode('Interface', false) end
         closingByScript = true
@@ -1273,6 +1276,7 @@ return {
         end,
         onFrame = function(dt)
             if not windowsReplaced then replaceWindows() end
+            if openPending and I.UI.getMode() == 'Interface' then openPending = false end
             -- the local map's tiles arrive a frame after they are asked for
             if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
             -- the view toggle comes back once Tab is up, out of every menu
@@ -1317,7 +1321,15 @@ return {
     eventHandlers = {
         UiModeChanged = function(e)
             if open then
-                if not closingByScript and e.newMode ~= 'Interface' then closed() end
+                -- UiModeChanged comes a frame or two late: a close that was still on its way when the
+                -- Pip-Boy opened again must not close it, or Interface mode stays on with nothing shown and
+                -- the controls dead. So it closes only if Interface mode is really gone and the opening has
+                -- reached I.UI (it has once I.UI.getMode() says Interface; see onFrame).
+                if e.newMode == 'Interface' then
+                    openPending = false
+                elseif not closingByScript and not openPending and I.UI.getMode() ~= 'Interface' then
+                    closed()
+                end
                 return
             end
             -- Something opened the Morrowind windows: show the Pip-Boy instead. Windows of FNV scripts

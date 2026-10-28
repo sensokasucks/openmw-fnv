@@ -763,15 +763,25 @@ namespace MWMechanics
             }
             std::optional<osg::Vec3f> position;
             if (it->second.mPlayer)
-                // the player's eyes, whichever view the camera is in
-                position = osg::Vec3f(world.getCamera()->getPosition());
+            {
+                // The player's eyes: the camera in first person; from any other view the camera is away from
+                // the body, so the head of the FO3/FNV player body (or the standing eye height without one).
+                const MWRender::Camera& camera = *world.getCamera();
+                const MWWorld::Ptr player = world.getPlayerPtr();
+                if (camera.getMode() == MWRender::Camera::Mode::FirstPerson)
+                    position = osg::Vec3f(camera.getPosition());
+                else if (const MWRender::Animation* playerAnimation = world.getAnimation(player))
+                    position = MWRender::ESM4NpcAnimation::getEyePosition(*playerAnimation);
+                if (!position)
+                    position = player.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, 120);
+            }
             else
             {
                 const MWWorld::Ptr target = worldModel.getPtr(it->second.mTarget);
                 if (!target.isEmpty() && target.getRefData().getBaseNode() != nullptr)
                 {
                     if (auto* targetAnimation = getAnimation(target))
-                        position = targetAnimation->getHeadPosition();
+                        position = MWRender::ESM4NpcAnimation::getEyePosition(*targetAnimation);
                     if (!position)
                         position = target.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, 100);
                 }

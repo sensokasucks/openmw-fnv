@@ -1333,6 +1333,21 @@ namespace MWRender
         return osg::Vec3f(osg::computeLocalToWorld(paths[0]).getTrans());
     }
 
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getEyePosition(const Animation& animation)
+    {
+        // Height of the eyes over the head bone of the FO3/FNV skeletons (estimated, not measured on the meshes)
+        constexpr float eyeAboveHead = 8.f;
+        const osg::Node* head = animation.getNode("Bip01 Head");
+        if (head == nullptr)
+            head = animation.getNode("Head");
+        if (head == nullptr)
+            return std::nullopt;
+        const osg::NodePathList paths = head->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(osg::computeLocalToWorld(paths[0]).getTrans()) + osg::Vec3f(0, 0, eyeAboveHead);
+    }
+
     void ESM4NpcAnimation::attachLookCallback()
     {
         if (mLookBone == nullptr)
@@ -1356,9 +1371,10 @@ namespace MWRender
         float pitch = 0.f;
         if (mLookTarget && !mDead && mPtr.getRefData().getBaseNode() != nullptr)
         {
-            if (const std::optional<osg::Vec3f> headPosition = getHeadPosition())
+            // from the eyes: aimed from the head bone, the eyes above it would look over the target
+            if (const std::optional<osg::Vec3f> eyePosition = getEyePosition(*this))
             {
-                osg::Vec3f direction = *mLookTarget - *headPosition;
+                osg::Vec3f direction = *mLookTarget - *eyePosition;
                 if (direction.normalize() > 0.f)
                 {
                     const osg::Vec3f facing = mPtr.getRefData().getBaseNode()->getAttitude() * osg::Vec3f(0, 1, 0);
