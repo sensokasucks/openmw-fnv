@@ -98,6 +98,7 @@ local radioPageTime = 0
 local closingByScript = false
 -- Opened, and the UiModeChanged for its Interface mode not seen yet (see UiModeChanged)
 local openPending = false
+local openPendingSince = 0
 local pauseWhileOpen = true
 local tabIndex = 1
 local subIndex = { 1, 1, 1 }
@@ -113,6 +114,8 @@ local viewMode = nil
 local viewRestoreFrames = 0
 -- The view toggle is off from a Tab press until Tab is up again (see onKeyPress).
 local tabBlocksView = false
+-- Whether the press of the Tab now down reached onKeyPress (see onKeyRelease)
+local tabPressSeen = false
 
 -- ------------------------------------------------------------ helpers
 
@@ -1119,6 +1122,7 @@ local function show(tab, sub)
     if not open then
         open = true
         openPending = I.UI.getMode() ~= 'Interface'
+        openPendingSince = core.getRealTime()
         localRerender = true
         if not pauseWhileOpen then I.UI.setPauseOnMode('Interface', false) end
         closingByScript = true
@@ -1237,6 +1241,7 @@ return {
                     tabBlocksView = true
                     I.Camera.disableModeControl('pipboy-tab')
                 end
+                tabPressSeen = true
                 if open then
                     close()
                 elseif I.UI.getMode() == nil and not core.isWorldPaused() then
@@ -1257,7 +1262,12 @@ return {
             end
         end,
         onKeyRelease = function(key)
-            if key.code == input.KEY.Tab and viewMode then viewRestoreFrames = 30 end
+            if key.code ~= input.KEY.Tab then return end
+            -- In a menu the GUI's keyboard navigation takes the Tab press for itself (it moves the focus), so
+            -- scripts never see it; the release still comes, and closes the Pip-Boy instead.
+            if not tabPressSeen and open then close() end
+            tabPressSeen = false
+            if viewMode then viewRestoreFrames = 30 end
         end,
         onMouseWheel = function(vertical)
             if not open or vertical == 0 then return end
@@ -1276,7 +1286,8 @@ return {
         end,
         onFrame = function(dt)
             if not windowsReplaced then replaceWindows() end
-            if openPending and I.UI.getMode() == 'Interface' then openPending = false end
+            -- in case the change to Interface mode never comes as an event
+            if openPending and core.getRealTime() - openPendingSince > 1 then openPending = false end
             -- the local map's tiles arrive a frame after they are asked for
             if open and currentSub() == 'local' and core.getRealTime() - localMapTime > 0.5 then render() end
             -- the view toggle comes back once Tab is up, out of every menu
@@ -1323,11 +1334,11 @@ return {
             if open then
                 -- UiModeChanged comes a frame or two late: a close that was still on its way when the
                 -- Pip-Boy opened again must not close it, or Interface mode stays on with nothing shown and
-                -- the controls dead. So it closes only if Interface mode is really gone and the opening has
-                -- reached I.UI (it has once I.UI.getMode() says Interface; see onFrame).
+                -- the controls dead. So a close only counts after the change to our Interface mode came. (Not
+                -- "Interface mode is gone now": Escape closes it and the pause menu opens it again at once.)
                 if e.newMode == 'Interface' then
                     openPending = false
-                elseif not closingByScript and not openPending and I.UI.getMode() ~= 'Interface' then
+                elseif not closingByScript and not openPending then
                     closed()
                 end
                 return
