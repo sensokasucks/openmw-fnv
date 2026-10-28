@@ -565,6 +565,8 @@ local function scanPickups(s)
     s.nextPickupScan = simTime + every
     s.pickup = nil
     local actor = s.actor
+    -- what it carries may have changed (scripts, pickups): the original rescans the inventory on its own timer too
+    if types.ESM4NPC.objectIsInstance(actor) then s.weapons = combat.getActorWeapons(actor) end
     if actor.cell == nil or not types.ESM4NPC.objectIsInstance(actor) or types.ESM4Weapon == nil then return end
     local bar = ownDps(s) * (1 + gmst('fPickupWeaponMinDPSImprovementPercent', 0.5))
     local minDist, maxDist = pickupBand(s)
@@ -825,6 +827,10 @@ local function stepLabel(step)
 end
 
 local function replan(s, distance, los)
+    if s.refreshWeaponsUntil then
+        s.weapons = combat.getActorWeapons(s.actor)
+        if simTime > s.refreshWeaponsUntil then s.refreshWeaponsUntil = nil end
+    end
     s.best = bestWeapons(s, distance)
     local actorType = s.equippedType
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
@@ -1305,8 +1311,10 @@ local function activateCombatItem(s, step)
         pickup.holder and (' from ' .. tostring(pickup.holder.recordId)) or ' from the ground'))
     pickupBlocked[obj.id] = simTime + 5
     s.pickup, s.nextPickupScan = nil, 0
-    s.weapons = combat.getActorWeapons(actor)
-    s.replanAt = 0
+    -- moveInto lands with the next frame: re-read the weapons at the replans of the next moment, so the new gun
+    -- counts and the plan switches to it (SWITCH_WEAPON)
+    s.refreshWeaponsUntil = simTime + 1.5
+    s.replanAt = simTime + 0.25
     return okMove and 'done' or 'failed'
 end
 
