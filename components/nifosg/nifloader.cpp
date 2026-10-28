@@ -16,7 +16,12 @@
 #include <yaml-cpp/yaml.h>
 
 // resource
+#include <cstdlib>
+
+#include <osgDB/WriteFile>
+
 #include <components/debug/debuglog.hpp>
+#include <components/files/conversion.hpp>
 #include <components/misc/constants.hpp>
 #include <components/misc/osguservalues.hpp>
 #include <components/misc/resourcehelpers.hpp>
@@ -691,6 +696,68 @@ namespace NifOsg
                 created->getOrCreateUserDataContainer()->addUserObject(textkeys);
 
             created->setUserValue(Misc::OsgUserValues::sFileHash, nif.getHash());
+
+            // Debugging aid: OPENMW_DUMP_NIF=<substring> writes the scene built from matching models as
+            // <name>.osgt next to the log (what the engine made of a NIF, state sets and all).
+            if (const char* dump = std::getenv("OPENMW_DUMP_NIF"); dump != nullptr && *dump != '\0')
+            {
+                const std::string file(mFilename.value());
+                if (file.find(dump) != std::string::npos)
+                {
+                    std::string out = file.substr(file.find_last_of("/\\") + 1) + ".osgt";
+                    if (const char* dir = std::getenv("OPENMW_DUMP_DIR"); dir != nullptr && *dir != '\0')
+                        out = std::string(dir) + "/" + out;
+                    osgDB::writeNodeFile(*created, out);
+                    Log(Debug::Info) << "Dumped " << file << " to " << out;
+
+                    // osgt leaves out the engine's own node types, so the outline goes to the log too
+                    struct DumpVisitor : osg::NodeVisitor
+                    {
+                        int mDepth = 0;
+                        DumpVisitor()
+                            : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+                        {
+                        }
+                        static std::string describe(const osg::StateSet* ss)
+                        {
+                            if (ss == nullptr)
+                                return "";
+                            std::ostringstream s;
+                            for (unsigned int unit = 0; unit < ss->getTextureAttributeList().size(); ++unit)
+                            {
+                                if (const auto* tex = dynamic_cast<const osg::Texture*>(
+                                        ss->getTextureAttribute(unit, osg::StateAttribute::TEXTURE)))
+                                    s << " tex" << unit << "=" << (tex->getImage(0) ? tex->getImage(0)->getFileName() : "?");
+                            }
+                            if (const auto* mat = dynamic_cast<const osg::Material*>(
+                                    ss->getAttribute(osg::StateAttribute::MATERIAL)))
+                                s << " material(colorMode=" << mat->getColorMode()
+                                  << " diffuseA=" << mat->getDiffuse(osg::Material::FRONT_AND_BACK).a() << ")";
+                            for (const auto& [name, uniform] : ss->getUniformList())
+                                s << " uniform:" << name;
+                            if (ss->getRenderingHint() != osg::StateSet::DEFAULT_BIN)
+                                s << " hint=" << ss->getRenderingHint();
+                            s << " bin=" << ss->getBinName() << "/" << ss->getBinNumber();
+                            if (ss->getMode(GL_BLEND) & osg::StateAttribute::ON)
+                                s << " blend";
+                            return s.str();
+                        }
+                        void apply(osg::Node& node) override
+                        {
+                            std::string prefix;
+                            node.getUserValue("shaderPrefix", prefix);
+                            Log(Debug::Info) << std::string(mDepth * 2, ' ') << node.className() << " '" << node.getName()
+                                             << "' mask=" << std::hex << node.getNodeMask() << std::dec
+                                             << (prefix.empty() ? "" : " shaderPrefix=" + prefix)
+                                             << describe(node.getStateSet());
+                            ++mDepth;
+                            traverse(node);
+                            --mDepth;
+                        }
+                    } dumpVisitor;
+                    created->accept(dumpVisitor);
+                }
+            }
 
             return created;
         }
@@ -1436,8 +1503,10 @@ namespace NifOsg
         void handleTextureControllers(const Nif::NiProperty* texProperty,
             SceneUtil::CompositeStateSetUpdater* composite, osg::StateSet* stateset, int animflags) const
         {
-            // The base map's NiTextureTransformControllers (one per transform member) share one TexMat
+            // The base map's NiTextureTransformControllers (one per transform member) share one TexMat; those a
+            // NiControllerManager drives (the sand dust's "Idle") run on the embedded sequence's time instead
             osg::ref_ptr<TextureTransformController> textureTransform;
+            osg::ref_ptr<TextureTransformController> sequenceTransform;
             for (Nif::NiTimeControllerPtr ctrl = texProperty->mController; !ctrl.empty(); ctrl = ctrl->mNext)
             {
                 if (!ctrl->isActive())
@@ -1451,6 +1520,21 @@ namespace NifOsg
                     {
                         Log(Debug::Info) << "NiTextureTransformController on texture slot " << transformCtrl->mTexSlot
                                          << " ignored in " << mFilename;
+                        continue;
+                    }
+                    if (transformCtrl->mManagerControlled)
+                    {
+                        // Driven by the animation time of the embedded sequence being played; no source of its own.
+                        auto keys = joinSequenceKeys<Nif::FloatKeyMap, Nif::NiFloatInterpolator>(
+                            mEmbeddedSequences, transformCtrl, Nif::RC_NiFloatInterpolator);
+                        if (!keys)
+                            continue;
+                        if (!sequenceTransform)
+                        {
+                            sequenceTransform = new TextureTransformController(0);
+                            composite->addController(sequenceTransform);
+                        }
+                        sequenceTransform->addTrack(transformCtrl->mTransformMember, FloatInterpolator(keys, 0.f));
                         continue;
                     }
                     FloatInterpolator track;
@@ -1871,6 +1955,12 @@ namespace NifOsg
             osg::ref_ptr<osgParticle::ParticleSystemUpdater> updater = new osgParticle::ParticleSystemUpdater;
             updater->addParticleSystem(partsys);
             parentNode->addChild(updater);
+
+            // The shader visitor picks a drawable's shader from the drawable's own prefix, not its parents', so
+            // the particles would get the lit default shader (and show as solid white) without this
+            std::string shaderPrefix;
+            if (parentNode->getUserValue("shaderPrefix", shaderPrefix))
+                partsys->setUserValue("shaderPrefix", shaderPrefix);
 
             if (rf == osgParticle::ParticleProcessor::RELATIVE_RF)
                 parentNode->addChild(partsys);
@@ -2897,13 +2987,15 @@ namespace NifOsg
                 case Nif::BSShaderType::ShaderType_Default:
                     return "bs/default";
                 case Nif::BSShaderType::ShaderType_NoLighting:
+                // The tile shader is the unlit one for scrolling effect sheets (FO3/FNV dust, mist, beams) with the
+                // same properties (BSShaderNoLightingProperty, falloff); lit, they come out as solid white blobs.
+                case Nif::BSShaderType::ShaderType_Tile:
                     return "bs/nolighting";
                 case Nif::BSShaderType::ShaderType_TallGrass:
                 case Nif::BSShaderType::ShaderType_Sky:
                 case Nif::BSShaderType::ShaderType_Skin:
                 case Nif::BSShaderType::ShaderType_Water:
                 case Nif::BSShaderType::ShaderType_Lighting30:
-                case Nif::BSShaderType::ShaderType_Tile:
                     Log(Debug::Warning) << "Unhandled BSShaderType " << type << " in " << mFilename;
                     return "bs/default";
             }
@@ -3069,6 +3161,7 @@ namespace NifOsg
                         stateset->addUniform(new osg::Uniform("falloffParams", texprop->mFalloffParams));
                     }
                     stateset->addUniform(new osg::Uniform("useFalloff", useFalloff));
+                    stateset->addUniform(new osg::Uniform("materialAlpha", 1.f)); // a material may replace it
                     handleTextureControllers(texprop, composite, stateset, animflags);
                     handleDepthFlags(stateset, texprop->depthTest(), texprop->depthWrite());
                     break;
@@ -3104,6 +3197,7 @@ namespace NifOsg
                     // TODO: implement BSEffectShader as a shader
                     node->setUserValue("shaderPrefix", std::string("bs/nolighting"));
                     osg::StateSet* stateset = node->getOrCreateStateSet();
+                    stateset->addUniform(new osg::Uniform("materialAlpha", 1.f));
                     clearBoundTextures(stateset, boundTextures);
                     if (Bgsm::MaterialFilePtr material
                         = getShaderMaterial(VFS::Path::toNormalized(texprop->mName), mMaterialManager))
@@ -3417,6 +3511,10 @@ namespace NifOsg
                 || mat->getShininess(osg::Material::FRONT_AND_BACK) != 0
                 || mat->getSpecular(osg::Material::FRONT_AND_BACK) != osg::Vec4f(0.f, 0.f, 0.f, 0.f))
             {
+                // Shaders that keep vertex colours (bs/nolighting) read the material's alpha from this; see
+                // AlphaController for the animated case
+                node->getOrCreateStateSet()->addUniform(
+                    new osg::Uniform("materialAlpha", mat->getDiffuse(osg::Material::FRONT_AND_BACK).a()));
                 mat = shareAttribute(mat);
                 node->getOrCreateStateSet()->setAttributeAndModes(mat, osg::StateAttribute::ON);
             }

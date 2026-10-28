@@ -831,6 +831,9 @@ namespace NifOsg
     {
         stateset->setAttribute(
             static_cast<osg::Material*>(mBaseMaterial->clone(osg::CopyOp::DEEP_COPY_ALL)), osg::StateAttribute::ON);
+        // shaders that keep vertex colours (bs/nolighting) read the material alpha from this uniform
+        stateset->addUniform(
+            new osg::Uniform("materialAlpha", mBaseMaterial->getDiffuse(osg::Material::FRONT_AND_BACK).a()));
     }
 
     void AlphaController::apply(osg::StateSet* stateset, osg::NodeVisitor* nv)
@@ -842,6 +845,8 @@ namespace NifOsg
             osg::Vec4f diffuse = mat->getDiffuse(osg::Material::FRONT_AND_BACK);
             diffuse.a() = value;
             mat->setDiffuse(osg::Material::FRONT_AND_BACK, diffuse);
+            if (osg::Uniform* alpha = stateset->getUniform("materialAlpha"))
+                alpha->set(value);
         }
     }
 
