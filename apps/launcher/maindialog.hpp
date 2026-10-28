@@ -10,6 +10,7 @@
 #endif
 #include "ui_mainwindow.h"
 
+class QComboBox;
 class QListWidgetItem;
 class QStackedWidget;
 class QStringListModel;
@@ -80,6 +81,10 @@ namespace Launcher
 
         void setVersionLabel();
 
+        void createGameChooser();
+        bool isNewVegasSelected() const;
+        bool resolveNewVegasPaths(QString& morrowindData, QString& newVegasData);
+
         void loadSettings();
         void saveSettings();
 
@@ -94,6 +99,7 @@ namespace Launcher
         GraphicsPage* mGraphicsPage;
         DataFilesPage* mDataFilesPage;
         ImportPage* mImportPage;
+        QComboBox* mGameCombo = nullptr;
         SettingsPage* mSettingsPage;
 
         Process::ProcessInvoker* mGameInvoker;
