@@ -111,7 +111,9 @@ M.actions = {
     -- MOVE and the MoveAnd* actions take the location kind as their parameter (see expand)
     { name = 'MOVE', cost = 0, move = true, filter = { c(F.EXECUTION_FLAGS, X.MOVE) },
         pre = { c(F.WEAPON_DRAWN, nil, ACTOR_TYPE) }, sideEffects = { c(F.TARGET_BLOCKED, nil, 0) } },
-    { name = 'MOVE_AND_SWITCH_TO_MELEE', cost = 0, move = true,
+    -- [inferred] only towards melee reach: offered for every location it tied with DRAW_WEAPON > MOVE(0) and had a
+    -- gunman approach a hidden target with its knife out, then draw the gun
+    { name = 'MOVE_AND_SWITCH_TO_MELEE', cost = 0, move = true, onlyAt = { [L.MELEE] = true },
         filter = { c(F.EXECUTION_FLAGS, X.MOVE), c(F.HAS_WEAPON_TYPE, W.MELEE) }, pre = {},
         effects = { c(F.WEAPON_TYPE_EQUIPPED, nil, W.MELEE), c(F.WEAPON_DRAWN, nil, W.MELEE) },
         sideEffects = { c(F.TARGET_BLOCKED, nil, 0) } },
@@ -188,9 +190,11 @@ local function instances(action, ws, ctx)
     local list = {}
     if action.move then
         for _, kind in ipairs(ctx.locations) do
+            if action.onlyAt and not action.onlyAt[kind] then goto continue end
             local effects = { c(F.AT_LOCATION, kind), c(F.NOT_AT_LOCATION, kind, 0) }
             for _, e in ipairs(action.effects or {}) do effects[#effects + 1] = e end
             list[#list + 1] = { action = action, param = kind, effects = effects }
+            ::continue::
         end
     elseif action.weapon then
         for _, weaponType in ipairs(ctx.weaponTypes) do
