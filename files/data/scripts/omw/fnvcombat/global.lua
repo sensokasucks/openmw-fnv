@@ -244,13 +244,17 @@ local function approach(s, actor, target, reach, aroundObstacles)
     local status = ai.status(actor)
     local toTarget = target.position - actor.position
     local close = toTarget:length() < STRAIGHT_DISTANCE
+    -- a side-step in progress is left alone (run 20: the approach route replaced it 0.2 s after it was sent)
+    if simTime < (s.sideStepUntil or 0) and status == 'moving' then return end
     if aroundObstacles and (status == 'arrived' or status == 'nopath') then
         -- The route ended short of a clear shot: side-step around whatever is in the way instead of pushing
         -- straight at the target [inferred; run 19 had a gunman jittering against a rock 108 units from the
         -- player for 35 s, re-sending a straight move every tick]
         if simTime >= (s.sideStepUntil or 0) then
             s.sideStepUntil = simTime + 2
-            s.sideStepSign = -(s.sideStepSign or 1)
+            -- keep going round the same side; only a missing path turns the actor the other way
+            s.sideStepSign = s.sideStepSign or (math.random() < 0.5 and -1 or 1)
+            if status == 'nopath' then s.sideStepSign = -s.sideStepSign end
             local flat = util.vector3(toTarget.x, toTarget.y, 0):normalize()
             local side = util.vector3(-flat.y, flat.x, 0) * (256 * s.sideStepSign)
             s.goal = nil
