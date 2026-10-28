@@ -777,7 +777,12 @@ local function worldState(s, distance, los)
     local P_F, L = P.F, P.L
     local best = s.best
     local function at(kind)
-        if kind == L.TARGET then return distance <= closeEnough(s, los) or (los and inGunRange(s, distance)) end
+        if kind == L.TARGET then
+            -- a gunman has not reached its target while something blocks the shot: run 18 had one standing 127
+            -- units from the player behind a rock, "arrived" and never firing
+            if s.gun ~= nil then return los and inGunRange(s, distance) end
+            return distance <= closeEnough(s, los)
+        end
         if kind == L.MELEE then return distance <= meleeReach(s) end
         if kind == L.FLEE then return distance >= FLEE_DISTANCE end
         if kind == L.LOS then return los and (s.gun == nil or inGunRange(s, distance)) end
@@ -1044,7 +1049,8 @@ local function moveTowards(s, kind, distance, los)
         if distance <= reach then return 'done' end
     else
         reach = closeEnough(s, los)
-        if los and (s.gun == nil or inGunRange(s, distance)) or kind == L.TARGET and distance <= reach then
+        if los and (s.gun == nil or inGunRange(s, distance)) or kind == L.TARGET and s.gun == nil and distance <= reach
+        then
             s.straight = false
             return 'done'
         end
@@ -1270,6 +1276,8 @@ local function beInCover(s, distance, los, grenade)
                     st.untilT = simTime + styleTimer(s, 'fireTimer', 1.5, 3)
                 end
             end
+        elseif los and not grenade and s.gun then
+            s.fireNow = true -- the shot itself runs every frame (see onUpdate)
         end
         if not st.fired and simTime >= st.untilT then
             print(('[combat] %s (%s) waited out of cover without firing'):format(actor.recordId, tostring(actor.id)))
@@ -1708,6 +1716,11 @@ return {
                     if s.fireNow and s.gun and simTime >= s.nextAttack and s.target and s.target:isValid() then
                         s.fireNow = nil
                         shootAt(s, s.actor, s.target)
+                        local st = s.stepState
+                        if st and st.phase == 'out' and not st.fired then
+                            st.fired = true
+                            st.untilT = simTime + styleTimer(s, 'fireTimer', 1.5, 3)
+                        end
                     end
                 end
             end
