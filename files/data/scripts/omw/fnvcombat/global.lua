@@ -498,11 +498,12 @@ local function scanCombatItems(s)
     s.nextItemScan = simTime + ITEM_SCAN_EVERY
     s.restoreItem = nil
     if types.ESM4Potion == nil then return end
-    local ok, items = pcall(function() return types.Actor.inventory(s.actor):getAll(types.ESM4Potion) end)
+    -- getAll takes no ESM4 type filter yet
+    local ok, items = pcall(function() return types.Actor.inventory(s.actor):getAll() end)
     if not ok then return end
     local best = 0
     for _, item in ipairs(items) do
-        local score = restoreScore(item.recordId)
+        local score = types.ESM4Potion.objectIsInstance(item) and restoreScore(item.recordId) or 0
         if score > best then best, s.restoreItem = score, item.recordId end
     end
 end
