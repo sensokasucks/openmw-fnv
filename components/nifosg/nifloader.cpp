@@ -651,6 +651,10 @@ namespace NifOsg
                 auto node = handleNode(
                     root, nullptr, nullptr, { .mNifVersion = nif.getVersion(), .mTextKeys = &textkeys->mTextKeys });
                 created->addChild(node);
+                // The optimizer may fold the root node away, so what it carries moves up to the model
+                std::string attachmentBone;
+                if (node->getUserValue(Constants::AttachmentBone, attachmentBone))
+                    created->setUserValue(Constants::AttachmentBone, attachmentBone);
             }
             if (mHasNightDayLabel)
                 created->getOrCreateUserDataContainer()->addDescription(Constants::NightDayLabel);
@@ -998,6 +1002,11 @@ namespace NifOsg
                     else if (sd->mData.rfind(extraDataIdentifer, 0) == 0)
                     {
                         extraData = sd->mData.substr(extraDataIdentifer.length());
+                    }
+                    else if (sd->mName == "Prn" && args.mRootNode == node)
+                    {
+                        // FO3/FONV: the bone a rigid attachment (the Pip-Boy, hats, glasses) hangs off
+                        node->setUserValue(Constants::AttachmentBone, sd->mData);
                     }
                 }
                 else if (e->mRecordType == Nif::RC_BSXFlags)
