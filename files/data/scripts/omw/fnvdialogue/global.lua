@@ -2136,6 +2136,15 @@ obs.bind('ShowBarterMenu', function(ref)
     return 0
 end)
 
+-- `OpenTeammateContainer` (every companion's FollowersTrade line, the companion wheel's Open Inventory): the
+-- companion's inventory in the container menu (scripts/omw/fnvmenus)
+obs.bind('OpenTeammateContainer', function(ref)
+    local mate = speakerOr(ref)
+    if mate == nil or not mate:isValid() then return 0 end
+    world.players[1]:sendEvent('FNVOpenTeammateContainer', { container = mate })
+    return 0
+end)
+
 -- `player.ShowRecipeMenu CampfireRecipes` (campfires, workbenches): the crafting window
 -- for that recipe category (scripts/omw/fnvcrafting).
 obs.bind('ShowRecipeMenu', function(...)
@@ -2574,6 +2583,31 @@ return {
         end,
         isConversing = function(npc)
             return conversing[npc.id] == true
+        end,
+        --- Opens dialogue with `npc` as activating it would (the companion wheel's Talk To).
+        startDialogue = function(npc, player)
+            return startDialogue(npc, player or world.players[1])
+        end,
+        --- The companion wheel's "says topic X" (ghidra-findings-11, FUN_007573d0 / FUN_007575b0): the
+        -- companion's first matching line of the topic is voiced and both its result scripts run at once.
+        -- @return the line's text for the wheel's subtitle, nil if it has no line
+        wheelSay = function(npc, topicIdOrEditorId)
+            local actor = dlg.getActor(npc)
+            local topic = getTopic(topicIdOrEditorId)
+            if actor == nil or topic == nil then return nil end
+            local info = pickInfoFor(topic, npc, actor, world.players[1])
+            if info == nil then
+                tlog(('wheel: %s has no line for %s'):format(actor.editorId, topic.editorId))
+                return nil
+            end
+            tlog(('wheel: %s says %s INFO %s'):format(actor.editorId, topic.editorId, info.id))
+            markSaid(info)
+            local label = 'INFO ' .. info.id .. ' (companion wheel)'
+            runScript(info.scriptBegin, label .. ' begin', npc)
+            runScript(info.scriptEnd, label .. ' end', npc)
+            local line = startSpeech(npc, info, false, nil)
+            local first = line.responses[1]
+            return first and first.text or ''
         end,
         --- Declares that a player script shows the menu a command opens
         -- (`ShowRaceMenu`, `GetPlayerName`, `ShowSPECIALMenu`, `SetTagSkills`,

@@ -344,6 +344,8 @@ end
 
 local states = {} -- npc id -> state
 local tracked = {} -- npc id -> npc
+local backingUp = {} -- npc id -> { to, until_, sent }: the companion wheel's Back Up
+local BACK_UP_DISTANCE = 256 -- [inferred]
 
 -- Head tracking outside conversations: an NPC near the player turns its head to
 -- them (FalloutNV.exe: fAIMaxHeadTrackDistance 400; the choice is looked at again
@@ -2077,6 +2079,16 @@ return {
             if s then s.nextEvaluation = simTime end
         end,
         --- SetPlayerTeammate: teammates follow the player through doors (unless Waiting is 1).
+        --- The companion wheel's Back Up (ghidra-findings-11: package type 0x27 with the player as target,
+        -- [inferred] a step away from it): walk `BACK_UP_DISTANCE` away from `from`, then back to the package.
+        backUp = function(npc, from)
+            local away = npc.position - from.position
+            away = util.vector3(away.x, away.y, 0)
+            if away:length() < 1 then away = util.vector3(0, 1, 0) end
+            backingUp[npc.id] = { to = npc.position + away:normalize() * BACK_UP_DISTANCE, until_ = simTime + 3 }
+            local s = states[npc.id]
+            if s ~= nil then s.nextEvaluation = simTime + 3 end
+        end,
         setTeammate = function(npc, on)
             if npc == nil or not npc:isValid() then return end
             teammates[npc.id] = on and npc or nil
@@ -2248,6 +2260,13 @@ return {
                 if not npc:isValid() or not ai.isInScene(npc) or not npc.enabled
                     or (combat and combat.isDead(npc)) then
                     drop(id, npc)
+                elseif backingUp[id] ~= nil and simTime < backingUp[id].until_ then
+                    -- the companion wheel's Back Up: a short step away from the player over the package
+                    local b = backingUp[id]
+                    if not b.sent then
+                        b.sent = true
+                        ai.moveTo(npc, b.to, { tolerance = 32 })
+                    end
                 elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
                     -- fighting (scripts/omw/fnvcombat) runs over the package, like the original's runtime Combat
                     -- package; the package waits and goes on afterwards
