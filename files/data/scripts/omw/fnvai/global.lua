@@ -2263,7 +2263,8 @@ return {
                 elseif backingUp[id] ~= nil and simTime < backingUp[id].until_ then
                     -- the companion wheel's Back Up: a short step away from the player over the package
                     local b = backingUp[id]
-                    local there = (npc.position - b.to):length() <= 48
+                    -- (run 27: within 48 it stopped about 50 short at the 0.2 s tick; arrive within the move's tolerance)
+                    local there = (npc.position - b.to):length() <= 28
                     if there then
                         b.until_ = simTime -- (run 25: a fixed 3 s stopped it 165 units out)
                     elseif not b.sent or ai.status(npc) ~= 'moving' then
