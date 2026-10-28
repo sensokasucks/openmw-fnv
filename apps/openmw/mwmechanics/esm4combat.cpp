@@ -1274,6 +1274,13 @@ namespace MWMechanics::ESM4Combat
                 continue; // Too close / Too far
             if ((coverPoint - targetPosition).length() < 256.f)
                 continue; // Hostiles near
+            // The cover has to stand between the actor and the target: the target on the edge's outer side
+            // [inferred: the original's edges face away from where the actor stands]
+            osg::Vec3f toTargetFlat = targetPosition - mid;
+            toTargetFlat.z() = 0.f;
+            toTargetFlat.normalize();
+            if (toTargetFlat * edge.mInward > -0.5f)
+                continue;
             if (findProjectileNear(coverPoint, 0.f))
                 continue; // Cover threatened
             if (canTargetSee(actor, target, coverPoint))
