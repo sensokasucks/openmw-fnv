@@ -10,6 +10,7 @@
 #include "../mwrender/renderinginterface.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/containerstore.hpp"
 #include "../mwworld/registeredclass.hpp"
 
 #include "esm4base.hpp"
@@ -78,6 +79,14 @@ namespace MWClass
             const MWWorld::Ptr& ptr, bool female, const std::vector<const ESM4::Armor*>* apparel);
         // FO3/FONV: the weapon from the NPC's inventory it fights with (a gun if it has one), or nullptr.
         static const ESM4::Weapon* getEquippedWeapon(const MWWorld::Ptr& ptr);
+
+        // FO3/FONV: what the NPC carries (its inventory template rolled once), so scripts and the combat AI can
+        // count, take and use its items. Saved with the reference.
+        MWWorld::ContainerStore& getContainerStore(const MWWorld::Ptr& ptr) const override;
+        float getCapacity(const MWWorld::Ptr& ptr) const override;
+        float getEncumbrance(const MWWorld::Ptr& ptr) const override;
+        void readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const override;
+        void writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const override;
         static const std::vector<const ESM4::Weapon*>& getWeapons(const MWWorld::Ptr& ptr);
         static int getWeaponCount(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon);
         static void setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon);
