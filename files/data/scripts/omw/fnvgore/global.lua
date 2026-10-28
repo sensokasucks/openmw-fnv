@@ -75,7 +75,8 @@ local function onKilled(e)
     local seed = math.random(1, 2147483646)
     local results = combat.rollDismemberment(target, {
         limb = e.limb or -1,
-        weapon = e.weapon,
+        -- A blast's own hit carries no weapon (FUN_008b4d10), so a grenade's "On Hit" setting doesn't apply
+        weapon = not e.explosion and e.weapon or nil,
         bloodyMess = hasBloodyMess(e.attacker),
         explosion = e.explosion == true,
         seed = seed,

@@ -422,6 +422,9 @@ namespace MWMechanics::ESM4Combat
         result.mCorpse = isDead(result.mTarget);
         if (!result.mCorpse)
             result.mDamage = hit(result.mTarget, attacker, damage);
+        else
+            Log(Debug::Verbose) << "ESM4 shot corpse " << result.mTarget.getCellRef().getRefId() << " limb "
+                                << result.mLimb << " for " << damage;
         if (result.mLimb >= 0)
             ESM4Gore::damageLimb(result.mTarget, result.mLimb, damage,
                 weapon.mHasFO3Data && weapon.mFO3Data.limbDamageMult > 0.f ? weapon.mFO3Data.limbDamageMult : 1.f);
