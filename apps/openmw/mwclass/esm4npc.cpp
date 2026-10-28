@@ -1,6 +1,7 @@
 #include "esm4npc.hpp"
 
 #include <algorithm>
+#include <limits>
 
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadclot.hpp>
@@ -15,6 +16,12 @@
 
 #include "../mwworld/customdata.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/worldmodel.hpp"
+
+#include <components/esm3/containerstate.hpp>
+
+#include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
 
 #include "esm4base.hpp"
 
@@ -76,6 +83,7 @@ namespace MWClass
         const ESM4::Weapon* mEquippedWeapon = nullptr; // FO3/FONV: what the NPC fights with
         std::vector<const ESM4::Weapon*> mWeapons; // FO3/FONV: every weapon it carries (the combat planner switches)
         std::vector<int> mWeaponCounts; // how many of each (grenades)
+        MWWorld::ContainerStore mStore; // FO3/FONV: everything it carries
 
         ESM4NpcCustomData& asESM4NpcCustomData() override { return *this; }
         const ESM4NpcCustomData& asESM4NpcCustomData() const override { return *this; }
@@ -138,6 +146,7 @@ namespace MWClass
 
         if (auto inv = chooseTemplate(npcRecs, ESM4::Npc::Template_UseInventory))
         {
+            data->mStore.fillESM4(inv->mInventory, MWBase::Environment::get().getWorld()->getPrng());
             for (const ESM4::InventoryItem& item : inv->mInventory)
             {
                 if (auto* armor
@@ -185,6 +194,50 @@ namespace MWClass
         ESM4NpcCustomData& res = *data;
         refData.setCustomData(std::move(data));
         return res;
+    }
+
+    MWWorld::ContainerStore& ESM4Npc::getContainerStore(const MWWorld::Ptr& ptr) const
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mStore.getPtr().isEmpty())
+        {
+            MWBase::Environment::get().getWorldModel()->registerPtr(ptr);
+            data.mStore.setPtr(ptr);
+        }
+        return data.mStore;
+    }
+
+    float ESM4Npc::getCapacity(const MWWorld::Ptr& ptr) const
+    {
+        return std::numeric_limits<float>::max(); // NPCs are not held to a carry weight
+    }
+
+    float ESM4Npc::getEncumbrance(const MWWorld::Ptr& ptr) const
+    {
+        return getContainerStore(ptr).getWeight();
+    }
+
+    void ESM4Npc::readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const
+    {
+        if (!state.mHasCustomState)
+            return;
+        const ESM::ContainerState& containerState = state.asContainerState();
+        // Saves from before NPCs had inventories carry none: keep the freshly rolled one
+        if (containerState.mInventory.mItems.empty())
+            return;
+        MWWorld::ContainerStore& store = getContainerStore(ptr);
+        store.readState(containerState.mInventory);
+    }
+
+    void ESM4Npc::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
+    {
+        if (!ptr.getRefData().getCustomData())
+        {
+            state.mHasCustomState = false;
+            return;
+        }
+        ESM::ContainerState& containerState = state.asContainerState();
+        getCustomData(ptr).mStore.writeState(containerState.mInventory);
     }
 
     const ESM4::Weapon* ESM4Npc::getEquippedWeapon(const MWWorld::Ptr& ptr)

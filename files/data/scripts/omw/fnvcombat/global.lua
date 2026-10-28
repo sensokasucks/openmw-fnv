@@ -464,6 +464,59 @@ local function weaponScore(weapon, weaponType, distance)
 end
 
 -- The NPC's best weapon of each type it carries (creatures fight hand to hand with their own attacks)
+-- Combat items (ghidra-findings-5): every fCombatInventoryUpdateTimer 5 s the actor's own ingestibles (ALCH) are
+-- scored; RESTORE is the one whose Self-range Health effects (archetypes 0 Value Modifier, 34 Value And Parts)
+-- add up to the most magnitude x max(duration, 1), detrimental effects counting against. Food counts, Buffout
+-- outranks a Super Stimpak outranks a Stimpak. BUFF (Chameleon, the Stealth Boy) is blocked by the combat style
+-- flag 0x100, which every vanilla style but the Marked Men's sets [style flags are not read yet, so never].
+local ITEM_SCAN_EVERY = 5
+local AV_HEALTH = 16
+local MGEF_DETRIMENTAL = 0x4
+local effectsApi = core.obscript and core.obscript.effects
+local restoreScores = {}
+local function restoreScore(recordId)
+    local cached = restoreScores[recordId]
+    if cached ~= nil then return cached end
+    local score = 0
+    local potion = effectsApi and effectsApi.getPotion(recordId)
+    for _, e in ipairs(potion and potion.effects or {}) do
+        if e.range == 0 then
+            local mgef = effectsApi.getMagicEffect(e.effect)
+            if mgef and (mgef.archetype == 0 or mgef.archetype == 34) and mgef.actorValue == AV_HEALTH then
+                local part = e.magnitude * math.max(e.duration, 1)
+                if mgef.flags % (MGEF_DETRIMENTAL * 2) >= MGEF_DETRIMENTAL then part = -part end
+                score = score + part
+            end
+        end
+    end
+    restoreScores[recordId] = score
+    return score
+end
+
+local function scanCombatItems(s)
+    if simTime < (s.nextItemScan or 0) then return end
+    s.nextItemScan = simTime + ITEM_SCAN_EVERY
+    s.restoreItem = nil
+    if types.ESM4Potion == nil then return end
+    local ok, items = pcall(function() return types.Actor.inventory(s.actor):getAll(types.ESM4Potion) end)
+    if not ok then return end
+    local best = 0
+    for _, item in ipairs(items) do
+        local score = restoreScore(item.recordId)
+        if score > best then best, s.restoreItem = score, item.recordId end
+    end
+end
+
+-- The item the planner's USE_COMBAT_ITEM goal is about: the healing item once its cooldown has run out and health
+-- is below iAICombatRestoreHealthPercentage (60). The original re-arms both slots with fCombatItemBuffTimer 45 s
+-- (its restore case falls through into the buff case, so fCombatItemRestoreTimer 3 never applies); kept as is.
+local function combatItem(s)
+    if s.restoreItem == nil or simTime < (s.itemCooldownUntil or 0) then return nil end
+    local health, max = stats.get(s.actor, 'Health'), stats.getPermanent(s.actor, 'Health')
+    if max <= 0 or health / max * 100 >= gmst('iAICombatRestoreHealthPercentage', 60) then return nil end
+    return s.restoreItem
+end
+
 local function bestWeapons(s, distance)
     local best = {}
     for _, weapon in ipairs(s.weapons or {}) do
@@ -627,6 +680,9 @@ local function worldState(s, distance, los)
         if fact == P_F.WEAPON_TYPE_EQUIPPED then return s.equippedType end
         if fact == P_F.HAS_WEAPON_TYPE then return best[param] ~= nil and 1 or 0 end
         if fact == P_F.WANTS_TO_FLEE then return s.fleeing and 1 or 0 end
+        -- the original never writes USED_COMBAT_ITEM; the goal stops once the cooldown re-arms
+        if fact == P_F.HAS_COMBAT_ITEM then return (param ~= nil and param == s.restoreItem) and 1 or 0 end
+        if fact == P_F.USED_COMBAT_ITEM then return 0 end
         if fact == P_F.EXECUTION_FLAGS then
             if param == P.X.COVER then return coverWanted(s) and 1 or 0 end
             return (param == P.X.SEARCH or param == P.X.MOVE or param == P.X.MELEE) and 1 or 0
@@ -666,7 +722,8 @@ local function replan(s, distance, los)
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
     local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT }
     if coverWanted(s) then locations[#locations + 1] = P.L.COVER end
-    local ctx = { actorType = actorType, locations = locations,
+    scanCombatItems(s)
+    local ctx = { actorType = actorType, locations = locations, item = combatItem(s),
         weaponTypes = weaponTypes, cost = planCost(s) }
     local goal, plan = P.plan(worldState(s, distance, los), ctx)
     s.replanAt = simTime + REPLAN_EVERY
@@ -1018,7 +1075,41 @@ local function beInCover(s, distance, los, grenade)
     return 'running'
 end
 
+-- CombatProcedureUseCombatItem (FalloutNV.exe 0x9daab0): stand still; only the Stimpak has an idle
+-- (3rdP_2HH_Stimpak.kf, 3.83 s), everything else is used at once; then re-arm the cooldown and consume it. The
+-- ingestible goes through the same path as the player's (effects applied, one removed), without addiction.
+local STIMPAK_IDLE = 'characters/_male/idleanims/3rdp_2hh_stimpak.kf'
+local function useCombatItem(s, step)
+    local actor, st = s.actor, s.stepState
+    local recordId = step.param
+    if recordId == nil then return 'failed' end
+    holdStill(actor)
+    if not st.started then
+        st.started = true
+        local potion = effectsApi and effectsApi.getPotion(recordId)
+        local editorId = potion and potion.editorId or ''
+        st.until_ = simTime
+        if editorId:lower() == 'stimpak' and ai.playIdle then
+            ai.playIdle(actor, STIMPAK_IDLE)
+            st.until_ = simTime + 3.83
+        end
+        print(('[combat] %s (%s) uses %s at %.0f/%.0f health'):format(actor.recordId, tostring(actor.id),
+            editorId ~= '' and editorId or tostring(recordId), stats.get(actor, 'Health'),
+            stats.getPermanent(actor, 'Health')))
+    end
+    if simTime < st.until_ then return 'running' end
+    s.itemCooldownUntil = simTime + gmst('fCombatItemBuffTimer', 45)
+    s.nextItemScan = 0
+    local ok, item = pcall(function() return types.Actor.inventory(actor):find(recordId) end)
+    if ok and item ~= nil and I.FNVEffects then
+        item:remove(1)
+        I.FNVEffects.applyPotion(actor, recordId)
+    end
+    return 'done'
+end
+
 local procedures = {
+    USE_COMBAT_ITEM = function(s, step) return useCombatItem(s, step) end,
     MOVE = function(s, step, distance, los) return moveTowards(s, step.param, distance, los) end,
     MOVE_AND_SWITCH_TO_MELEE = function(s, step, distance, los)
         if s.equippedType ~= PW.MELEE or s.drawnType ~= PW.MELEE then equipType(s, PW.MELEE) end

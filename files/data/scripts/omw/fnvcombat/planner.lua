@@ -201,7 +201,12 @@ local function instances(action, ws, ctx)
             end
         end
     else
-        list[1] = { action = action, effects = action.effects or {} }
+        -- the item actions carry the goal's item as their parameter
+        local param = nil
+        for _, e in ipairs(action.effects or {}) do
+            if e.param == ITEM then param = ctx.item end
+        end
+        list[1] = { action = action, param = param, effects = action.effects or {} }
     end
     return list
 end
