@@ -102,6 +102,7 @@ local function scriptEvent(obj, event, ref)
 end
 
 local tracked = {} -- id -> actor in an active cell
+local thrownBy = {} -- actor id -> { weapon id -> grenades thrown }
 local fighting = {} -- id -> { actor, target, fleeing, nextAttack, nextMove }
 local simTime, nextTick = 0, 0
 local wantsToFlee -- below
@@ -117,6 +118,9 @@ local function startCombat(actor, target)
         nextThreatCheck = simTime + math.random() * gmst('fCombatThreatRatioUpdateTime', 7.5) }
     -- what it carries and holds, for the combat planner (weapon types: 1 ranged, 2 melee, 6 hand to hand, 7 none drawn)
     s.equippedType, s.drawnType = 6, 6
+    -- grenades thrown in earlier fights are gone too
+    thrownBy[actor.id] = thrownBy[actor.id] or {}
+    s.thrown = thrownBy[actor.id]
     if types.ESM4NPC.objectIsInstance(actor) then
         s.weapons = combat.getActorWeapons(actor)
         local weapon = combat.getActorWeapon(actor)
@@ -417,13 +421,17 @@ end
 --
 -- Every second (and whenever a step fails) the actor plans again from what it knows: the first of the original's
 -- goals that yields a plan wins (FLEE, FIND_TARGET when it lost the target, KILL_TARGET, ...), and the plan's
--- first step runs as a procedure here. Cover, flanking, grenades and combat items are not planned yet.
+-- first step runs as a procedure here. Grenades and launchers are planned; cover, flanking and combat items not yet.
 
 local P = require('scripts.omw.fnvcombat.planner')
 local PW = P.W
 local REPLAN_EVERY = 1.0
 local LOST_AFTER = 3 -- seconds without noticing the target before it counts as lost
 local STEP_TIMEOUT = 15
+-- Grenades [inferred until the original's grenade rules are read]: thrown from 400 to 1500 units, one every 8 s,
+-- scored at half their damage so guns stay the usual choice
+local GRENADE_MIN, GRENADE_MAX, GRENADE_EVERY = 400, 1500, 8
+local THREAT_RADIUS = 400 -- a live grenade this close makes an actor run from it
 
 local function lostRemoveTime()
     return gmst('fCombatTargetLostRemoveTime', 30)
@@ -434,9 +442,12 @@ end
 local function weaponScore(weapon, weaponType, distance)
     local damage = math.max(weapon.damage or 1, 1)
     local rate = weapon.shotsPerSecond and weapon.shotsPerSecond > 0 and weapon.shotsPerSecond or 1
-    if weaponType == PW.RANGED then
+    if weaponType == PW.RANGED or weaponType == PW.EXPLOSIVE then
         local range = gunRange(weapon)
         return damage * rate * (distance > range * 1.5 and 0.7 or 1)
+    end
+    if weaponType == PW.GRENADE then
+        return damage * 0.5
     end
     return damage * (distance > STRAIGHT_DISTANCE and 0.5 or 1)
 end
@@ -446,8 +457,12 @@ local function bestWeapons(s, distance)
     local best = {}
     for _, weapon in ipairs(s.weapons or {}) do
         local t = weapon.type
-        -- explosives, grenades and mines wait for their procedures
-        if t == PW.RANGED or t == PW.MELEE or t == PW.HAND_TO_HAND then
+        -- grenades while some are left and none was thrown in the last GRENADE_EVERY seconds; mines are not used
+        local usable = t == PW.RANGED or t == PW.MELEE or t == PW.HAND_TO_HAND
+            or (t == PW.EXPLOSIVE and weapon.isGun)
+            or (t == PW.GRENADE and weapon.explosive and (s.thrown[weapon.id] or 0) < (weapon.count or 1)
+                and simTime >= (s.grenadeReadyAt or 0))
+        if usable then
             local score = weaponScore(weapon, t, distance)
             if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
         end
@@ -488,6 +503,7 @@ local function worldState(s, distance, los)
         if kind == L.INVESTIGATE then
             return s.searchPos ~= nil and (s.actor.position - s.searchPos):length() <= 128
         end
+        if kind == L.AVOID_THREAT then return s.threat == nil end
         return kind == L.DESTINATION or kind == L.GUARD or kind == L.CLUSTER or kind == L.COMBAT_AREA
     end
     return function(fact, param)
@@ -496,7 +512,21 @@ local function worldState(s, distance, los)
         if fact == P_F.NOT_AT_LOCATION then return at(param) and 0 or 1 end
         if fact == P_F.TARGET_LOST then return targetLost(s) and 1 or 0 end
         if fact == P_F.TARGET_DETECTED then return targetLost(s) and 0 or 1 end
-        if fact == P_F.TARGET_360_LOS then return los and (s.drawnType ~= PW.RANGED or inGunRange(s, distance)) and 1 or 0 end
+        if fact == P_F.TARGET_360_LOS then
+            if not los then return 0 end
+            if s.drawnType == PW.RANGED or s.drawnType == PW.EXPLOSIVE then return inGunRange(s, distance) and 1 or 0 end
+            if s.drawnType == PW.GRENADE then return distance <= GRENADE_MAX and 1 or 0 end
+            return 1
+        end
+        -- too close to throw or fire an explosive safely, or too far to throw
+        if fact == P_F.EXPLOSIVE_PROJECTILE_BLOCKED then
+            return (distance < GRENADE_MIN or distance > GRENADE_MAX) and 1 or 0
+        end
+        -- a target that is known but out of sight is hiding; a grenade flushes it out [inferred]
+        if fact == P_F.TARGET_FLUSHED then
+            return (los or targetLost(s) or simTime < (s.flushedUntil or 0)) and 1 or 0
+        end
+        if fact == P_F.THREATENED then return s.threat ~= nil and 1 or 0 end
         if fact == P_F.WEAPON_DRAWN then return s.drawnType end
         if fact == P_F.WEAPON_TYPE_EQUIPPED then return s.equippedType end
         if fact == P_F.HAS_WEAPON_TYPE then return best[param] ~= nil and 1 or 0 end
@@ -537,7 +567,8 @@ local function replan(s, distance, los)
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
-    local ctx = { actorType = actorType, locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE },
+    local ctx = { actorType = actorType,
+        locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT },
         weaponTypes = weaponTypes, cost = planCost(s) }
     local goal, plan = P.plan(worldState(s, distance, los), ctx)
     s.replanAt = simTime + REPLAN_EVERY
@@ -582,7 +613,7 @@ local function equipType(s, weaponType)
         s.inHand = nil
     end
     s.equippedType, s.drawnType = weaponType, weaponType
-    if weaponType == PW.RANGED and s.inHand and s.inHand.isGun then
+    if (weaponType == PW.RANGED or weaponType == PW.EXPLOSIVE) and s.inHand and s.inHand.isGun then
         if s.gun == nil or s.gun.id ~= s.inHand.id then
             s.gun = s.inHand
             s.clip = math.max(1, s.gun.clipSize)
@@ -596,6 +627,22 @@ local function moveTowards(s, kind, distance, los)
     local actor, target = s.actor, s.target
     local L = P.L
     local state = s.stepState
+    if kind == L.AVOID_THREAT then
+        if s.threat == nil then
+            holdStill(actor)
+            return 'done'
+        end
+        if simTime >= (state.nextMove or 0) then
+            -- run from the grenade, a little more than its likely blast
+            state.nextMove = simTime + 0.5
+            local away = actor.position - s.threat
+            away = util.vector3(away.x, away.y, 0)
+            if away:length() < 1 then away = util.vector3(1, 0, 0) end
+            ai.moveTo(actor, actor.position + away:normalize() * (THREAT_RADIUS + 200),
+                { run = true, direct = true, straight = true, tolerance = 64 })
+        end
+        return 'running'
+    end
     if kind == L.FLEE then
         if distance >= FLEE_DISTANCE then
             holdStill(actor)
@@ -669,6 +716,28 @@ local function attackMelee(s, distance)
     return 'running'
 end
 
+-- Throws the grenade in hand at the target (or where it hides, to flush it out)
+local function throwGrenade(s, distance, flush)
+    local actor, target = s.actor, s.target
+    local state = s.stepState
+    if state.thrownAt then
+        return simTime >= state.thrownAt + 1.2 and 'done' or 'running'
+    end
+    if s.inHand == nil or not s.inHand.explosive or distance < GRENADE_MIN or distance > GRENADE_MAX then
+        return 'failed'
+    end
+    holdStill(actor)
+    ai.face(actor, yawTo(actor.position, target.position))
+    combat.launchAt(actor, target)
+    state.thrownAt = simTime
+    s.thrown[s.inHand.id] = (s.thrown[s.inHand.id] or 0) + 1
+    s.grenadeReadyAt = simTime + GRENADE_EVERY
+    if flush then s.flushedUntil = simTime + GRENADE_EVERY end
+    print(('[combat] %s (%s) throws %s at %s from %.0f%s'):format(actor.recordId, tostring(actor.id),
+        tostring(s.inHand.editorId), tostring(target.recordId), distance, flush and ' to flush it out' or ''))
+    return 'running'
+end
+
 local procedures = {
     MOVE = function(s, step, distance, los) return moveTowards(s, step.param, distance, los) end,
     MOVE_AND_SWITCH_TO_MELEE = function(s, step, distance, los)
@@ -690,6 +759,10 @@ local procedures = {
         return simTime >= state.readyAt and 'done' or 'running'
     end,
     ATTACK_RANGED = function(s, step, distance, los) return attackRanged(s, distance, los) end,
+    ATTACK_RANGED_EXPLOSIVE = function(s, step, distance, los) return attackRanged(s, distance, los) end,
+    ATTACK_GRENADE = function(s, step, distance) return throwGrenade(s, distance, false) end,
+    ATTACK_GRENADE_FLUSH_TARGET = function(s, step, distance) return throwGrenade(s, distance, true) end,
+    AVOID_THREAT = function(s) return s.threat == nil and 'done' or 'running' end,
     ATTACK_MELEE = function(s, step, distance) return attackMelee(s, distance) end,
     ATTACK_HAND_TO_HAND = function(s, step, distance) return attackMelee(s, distance) end,
     APPROACH_TARGET = function() return 'done' end,
@@ -715,6 +788,8 @@ local procedures = {
     end,
 }
 procedures.SWITCH_WEAPON = procedures.DRAW_WEAPON
+procedures.MOVE_AND_ATTACK_RANGED_EXPLOSIVE = procedures.MOVE_AND_ATTACK_RANGED
+procedures.MOVE_AND_ATTACK_GRENADE = procedures.MOVE
 procedures.SEARCH = procedures.INVESTIGATE
 
 local function fight(s)
@@ -769,6 +844,11 @@ local function fight(s)
         stopCombat(actor, 'target lost')
         return
     end
+
+    -- a live grenade close by
+    local threat = combat.findProjectileNear and combat.findProjectileNear(actor.position, THREAT_RADIUS)
+    if (threat ~= nil) ~= (s.threat ~= nil) then s.replanAt = 0 end
+    s.threat = threat
 
     if combat.isActing(actor) then return end
     if s.plan == nil or s.stepFailed or simTime >= (s.replanAt or 0) then

@@ -8,15 +8,22 @@
 #include <string>
 
 #include <osg/ComputeBoundsVisitor>
+#include <osg/MatrixTransform>
 
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm4/loadcrea.hpp>
+#include <components/esm4/loadexpl.hpp>
 #include <components/esm4/loadfact.hpp>
 #include <components/esm4/loadnpc.hpp>
+#include <components/esm4/loadproj.hpp>
 #include <components/esm4/loadweap.hpp>
+#include <components/misc/resourcehelpers.hpp>
 #include <components/misc/strings/algorithm.hpp>
+#include <components/resource/resourcesystem.hpp>
+#include <components/resource/scenemanager.hpp>
+#include <components/sceneutil/lightmanager.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
@@ -27,6 +34,7 @@
 #include "../mwclass/esm4stats.hpp"
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/raycasting.hpp"
+#include "../mwrender/renderingmanager.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
@@ -130,6 +138,24 @@ namespace MWMechanics::ESM4Combat
         };
         std::vector<PendingHit> sPendingHits;
         BlowListener sBlowListener;
+
+        // A grenade or launcher shell in flight (or lying, waiting for its timer)
+        struct FlyingProjectile
+        {
+            ESM::RefNum mAttacker;
+            const ESM4::Weapon* mWeapon;
+            const ESM4::Projectile* mProjectile;
+            osg::ref_ptr<osg::MatrixTransform> mNode;
+            osg::Vec3f mPosition;
+            osg::Vec3f mVelocity;
+            float mAge = 0.f;
+            float mTravelled = 0.f;
+            bool mResting = false;
+        };
+        std::vector<FlyingProjectile> sProjectiles;
+
+        // Havok gravity, 9.81 m/s^2 at 69.99 units a metre [inferred: PROJ gravity is a multiple of it]
+        constexpr float sGravity = 686.6f;
 
         std::mt19937& random()
         {
@@ -735,6 +761,15 @@ namespace MWMechanics::ESM4Combat
         const float pitch = error * unit(random());
         direction = direction + side * std::tan(yaw) + up * std::tan(pitch);
 
+        // Launchers fire shells that fly and burst (the blast is reported later, to the blow listener)
+        if (isExplosiveProjectile(*weapon))
+        {
+            direction.normalize();
+            result = HitResult();
+            result.mDirection = direction;
+            launch(attacker, *weapon, origin, origin + direction * (aimPoint(target) - origin).length());
+            return true;
+        }
         result = fire(attacker, *weapon, origin, direction);
         return true;
     }
@@ -786,9 +821,253 @@ namespace MWMechanics::ESM4Combat
         return true;
     }
 
+    namespace
+    {
+        const ESM4::Projectile* projectileOf(const ESM4::Weapon& weapon)
+        {
+            if (!weapon.mHasFO3Data || weapon.mFO3Data.projectile.isZeroOrUnset())
+                return nullptr;
+            return MWBase::Environment::get().getESMStore()->get<ESM4::Projectile>().search(
+                ESM::RefId(weapon.mFO3Data.projectile));
+        }
+
+        void removeNode(FlyingProjectile& projectile)
+        {
+            if (projectile.mNode == nullptr)
+                return;
+            while (projectile.mNode->getNumParents() > 0)
+                projectile.mNode->getParent(0)->removeChild(projectile.mNode);
+            projectile.mNode = nullptr;
+        }
+
+        // The point an explosion damages an actor at: the middle of its body
+        osg::Vec3f bodyCentre(const MWWorld::Ptr& actor)
+        {
+            const osg::Vec3f position = actor.getRefData().getPosition().asVec3();
+            return position + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(actor).z());
+        }
+
+        void explode(const FlyingProjectile& projectile)
+        {
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            const MWWorld::ESMStore& store = *MWBase::Environment::get().getESMStore();
+            const ESM4::Explosion* explosion
+                = store.get<ESM4::Explosion>().search(ESM::RefId(projectile.mProjectile->mData.explosion));
+            const osg::Vec3f at = projectile.mPosition;
+            if (explosion == nullptr)
+                return;
+            if (!explosion->mModel.empty())
+                world->spawnEffect(Misc::ResourceHelpers::correctMeshPath(
+                                       VFS::Path::Normalized(explosion->mModel.getOriginal())),
+                    {}, at, 1.f, false, false);
+            if (!explosion->mData.sound1.isZeroOrUnset())
+                MWBase::Environment::get().getSoundManager()->playSound3D(
+                    at, ESM::RefId(explosion->mData.sound1), 1.f, 1.f);
+
+            const float radius = explosion->mData.radius;
+            if (radius <= 0.f)
+                return;
+            // Grenades carry their damage on the weapon, some explosions on the EXPL record [inferred: the larger]
+            const float baseDamage
+                = std::max(explosion->mData.damage, projectile.mWeapon != nullptr ? projectile.mWeapon->mData.damage : 0.f);
+            const MWWorld::Ptr attacker = MWBase::Environment::get().getWorldModel()->getPtr(projectile.mAttacker);
+
+            std::vector<MWWorld::Ptr> candidates;
+            for (MWWorld::CellStore* cell : MWBase::Environment::get().getWorldScene()->getActiveCells())
+            {
+                collectTargets<ESM4::Npc>(*cell, candidates);
+                collectTargets<ESM4::Creature>(*cell, candidates);
+            }
+            const MWWorld::Ptr player = getPlayer();
+            if (!player.getClass().getCreatureStats(player).isDead())
+                candidates.push_back(player);
+            const osg::Vec3f from = at + osg::Vec3f(0, 0, 8);
+            for (const MWWorld::Ptr& candidate : candidates)
+            {
+                if (candidate != player && isDead(candidate))
+                    continue;
+                const osg::Vec3f centre = bodyCentre(candidate);
+                const float distance = (centre - at).length();
+                if (distance > radius)
+                    continue;
+                // Walls and terrain shield from the blast
+                const MWPhysics::RayCastingResult wall = world->getRayCasting()->castRay(from, centre, { candidate },
+                    {}, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
+                if (wall.mHit)
+                    continue;
+                // [inferred until the explosion code is read: full damage at the centre, half at the edge]
+                const float falloff = 1.f - 0.5f * distance / radius;
+                const float damage = applyArmor(candidate, baseDamage * falloff);
+                HitResult result;
+                result.mTarget = candidate;
+                result.mPosition = centre;
+                result.mDirection = centre - at;
+                result.mDirection.normalize();
+                if (candidate == player)
+                {
+                    hurtPlayer(candidate, damage);
+                    result.mDamage = damage;
+                    result.mKilled = candidate.getClass().getCreatureStats(candidate).isDead();
+                }
+                else
+                {
+                    result.mDamage = hit(candidate, attacker, damage);
+                    result.mKilled = isDead(candidate);
+                }
+                if (sBlowListener && !attacker.isEmpty())
+                    sBlowListener(attacker, projectile.mWeapon, result);
+            }
+        }
+
+        // Moves one projectile; true once it has gone off (or flown out of range)
+        bool stepProjectile(FlyingProjectile& projectile, float duration)
+        {
+            const ESM4::Projectile::Data& data = projectile.mProjectile->mData;
+            projectile.mAge += duration;
+            const bool timed = data.explosionTimer > 0.f;
+            if (timed && projectile.mAge >= data.explosionTimer)
+                return true;
+            if (projectile.mResting)
+                return false;
+            projectile.mVelocity.z() -= sGravity * data.gravity * duration;
+            const osg::Vec3f next = projectile.mPosition + projectile.mVelocity * duration;
+            MWBase::World* world = MWBase::Environment::get().getWorld();
+            std::vector<MWWorld::ConstPtr> ignore;
+            // the thrower's own body for the first moment
+            if (projectile.mAge < 0.3f)
+                ignore.push_back(MWBase::Environment::get().getWorldModel()->getPtr(projectile.mAttacker));
+            const MWPhysics::RayCastingResult hit = world->getRayCasting()->castRay(projectile.mPosition, next, ignore,
+                {},
+                MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door
+                    | MWPhysics::CollisionType_Actor);
+            if (hit.mHit)
+            {
+                projectile.mPosition = hit.mHitPos + hit.mHitNormal * 2.f;
+                if (!timed)
+                    return true;
+                // Grenades bounce and roll until their fuse runs out
+                const float bounce = data.bouncyMult > 0.f ? data.bouncyMult : 0.3f;
+                const osg::Vec3f normal = hit.mHitNormal;
+                projectile.mVelocity = (projectile.mVelocity - normal * (2.f * (projectile.mVelocity * normal))) * bounce;
+                if (projectile.mVelocity.length() < 40.f)
+                    projectile.mResting = true;
+            }
+            else
+            {
+                projectile.mTravelled += (next - projectile.mPosition).length();
+                projectile.mPosition = next;
+            }
+            if (projectile.mNode != nullptr)
+                projectile.mNode->setMatrix(osg::Matrix::translate(projectile.mPosition));
+            const float range = data.range > 0.f ? data.range : 20000.f;
+            return !timed && projectile.mTravelled > range;
+        }
+
+        void updateProjectiles(float duration)
+        {
+            for (std::size_t i = 0; i < sProjectiles.size();)
+            {
+                if (stepProjectile(sProjectiles[i], duration))
+                {
+                    FlyingProjectile projectile = sProjectiles[i];
+                    sProjectiles.erase(sProjectiles.begin() + static_cast<std::ptrdiff_t>(i));
+                    removeNode(projectile);
+                    explode(projectile);
+                }
+                else
+                    ++i;
+            }
+        }
+    }
+
+    bool isExplosiveProjectile(const ESM4::Weapon& weapon)
+    {
+        const ESM4::Projectile* projectile = projectileOf(weapon);
+        return projectile != nullptr && (projectile->mData.flags & ESM4::Projectile::Flag_Explosion) != 0
+            && (projectile->mData.flags & ESM4::Projectile::Flag_Hitscan) == 0;
+    }
+
+    bool launch(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
+        const osg::Vec3f& targetPosition)
+    {
+        if (!isExplosiveProjectile(weapon))
+            return false;
+        const ESM4::Projectile* data = projectileOf(weapon);
+        FlyingProjectile projectile;
+        projectile.mAttacker = attacker.getCellRef().getRefNum();
+        projectile.mWeapon = &weapon;
+        projectile.mProjectile = data;
+        projectile.mPosition = origin;
+        const float speed = data->mData.speed > 0.f ? data->mData.speed : 1000.f;
+        const float gravity = sGravity * data->mData.gravity;
+        osg::Vec3f delta = targetPosition - origin;
+        osg::Vec3f flat(delta.x(), delta.y(), 0.f);
+        const float d = flat.normalize();
+        const float h = delta.z();
+        if (gravity > 0.f && d > 1.f)
+        {
+            // The low arc that lands on the target at this speed; 45 degrees when it is out of reach
+            const float v2 = speed * speed;
+            const float root = v2 * v2 - gravity * (gravity * d * d + 2.f * h * v2);
+            const float angle
+                = root >= 0.f ? std::atan((v2 - std::sqrt(root)) / (gravity * d)) : osg::DegreesToRadians(45.f);
+            projectile.mVelocity = (flat * std::cos(angle) + osg::Vec3f(0, 0, std::sin(angle))) * speed;
+        }
+        else
+        {
+            delta.normalize();
+            projectile.mVelocity = delta * speed;
+        }
+        if (!data->mModel.empty())
+        {
+            osg::ref_ptr<osg::Node> model = MWBase::Environment::get().getResourceSystem()->getSceneManager()->getInstance(
+                Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(data->mModel.getOriginal())));
+            projectile.mNode = new osg::MatrixTransform(osg::Matrix::translate(origin));
+            projectile.mNode->setName("ESM4Projectile");
+            projectile.mNode->addChild(model);
+            MWBase::Environment::get().getWorld()->getRenderingManager()->getLightRoot()->addChild(projectile.mNode);
+        }
+        sProjectiles.push_back(std::move(projectile));
+        return true;
+    }
+
+    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target)
+    {
+        const ESM4::Weapon* weapon = getActorWeapon(attacker);
+        if (weapon == nullptr || !isExplosiveProjectile(*weapon) || isDead(attacker)
+            || ESM4Actors::get().isActing(attacker))
+            return false;
+        if (ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
+            ESM4Actors::get().playAction(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
+        if (!weapon->mFireSound.isZeroOrUnset())
+            MWBase::Environment::get().getSoundManager()->playSound3D(
+                attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
+        // Aim at the feet: a lobbed grenade lands there, a shell bursts there
+        return launch(attacker, *weapon, muzzle(attacker), target.getRefData().getPosition().asVec3());
+    }
+
+    std::optional<osg::Vec3f> findProjectileNear(const osg::Vec3f& position, float radius)
+    {
+        std::optional<osg::Vec3f> nearest;
+        float best = radius;
+        for (const FlyingProjectile& projectile : sProjectiles)
+        {
+            const float distance = (projectile.mPosition - position).length();
+            if (distance <= best)
+            {
+                best = distance;
+                nearest = projectile.mPosition;
+            }
+        }
+        return nearest;
+    }
+
     void update(float duration, bool paused)
     {
-        if (paused || sPendingHits.empty())
+        if (paused)
+            return;
+        updateProjectiles(duration);
+        if (sPendingHits.empty())
             return;
         MWWorld::WorldModel& worldModel = *MWBase::Environment::get().getWorldModel();
         std::vector<PendingHit> landed;
@@ -846,6 +1125,9 @@ namespace MWMechanics::ESM4Combat
     void clear()
     {
         sPendingHits.clear();
+        for (FlyingProjectile& projectile : sProjectiles)
+            removeNode(projectile);
+        sProjectiles.clear();
     }
 
     void kill(const MWWorld::Ptr& actor, bool instant)

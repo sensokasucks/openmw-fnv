@@ -2,6 +2,7 @@
 #define GAME_MWMECHANICS_ESM4COMBAT_H
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include <osg/Vec3f>
@@ -47,6 +48,19 @@ namespace MWMechanics::ESM4Combat
     // Called when a melee weapon, unarmed or creature blow lands: attacker, weapon (nullptr unarmed), result.
     using BlowListener = std::function<void(const MWWorld::Ptr&, const ESM4::Weapon*, const HitResult&)>;
     void setBlowListener(BlowListener listener);
+
+    // Thrown grenades and launcher shells (weapons whose projectile explodes and is not hitscan): lobbers fly an arc
+    // under gravity and bounce until their timer runs out, or go off where they land without one; missiles fly
+    // straight and go off where they hit. The explosion hurts the FO3/FONV actors and the player within its
+    // radius that it can reach; each one hurt is reported to the blow listener. False if the weapon has no such
+    // projectile.
+    bool isExplosiveProjectile(const ESM4::Weapon& weapon);
+    bool launch(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
+        const osg::Vec3f& targetPosition);
+    // An NPC throws or fires its grenade or launcher at the target (attack sequence and sound, then launch).
+    bool launchAt(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target);
+    // The nearest grenade or shell still flying or waiting to go off within the radius of the position, if any.
+    std::optional<osg::Vec3f> findProjectileNear(const osg::Vec3f& position, float radius);
 
     // Fires one shot of a gun along a ray: the first FO3/FONV actor in front of any wall takes the weapon's damage.
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,

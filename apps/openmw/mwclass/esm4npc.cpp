@@ -75,6 +75,7 @@ namespace MWClass
         std::vector<const ESM4::Clothing*> mEquippedClothing;
         const ESM4::Weapon* mEquippedWeapon = nullptr; // FO3/FONV: what the NPC fights with
         std::vector<const ESM4::Weapon*> mWeapons; // FO3/FONV: every weapon it carries (the combat planner switches)
+        std::vector<int> mWeaponCounts; // how many of each (grenades)
 
         ESM4NpcCustomData& asESM4NpcCustomData() override { return *this; }
         const ESM4NpcCustomData& asESM4NpcCustomData() const override { return *this; }
@@ -151,8 +152,14 @@ namespace MWClass
                     };
                     if (data->mEquippedWeapon == nullptr || (isGun(weapon) && !isGun(data->mEquippedWeapon)))
                         data->mEquippedWeapon = weapon;
-                    if (std::find(data->mWeapons.begin(), data->mWeapons.end(), weapon) == data->mWeapons.end())
+                    const auto found = std::find(data->mWeapons.begin(), data->mWeapons.end(), weapon);
+                    if (found == data->mWeapons.end())
+                    {
                         data->mWeapons.push_back(weapon);
+                        data->mWeaponCounts.push_back(std::max<int>(1, item.count));
+                    }
+                    else
+                        data->mWeaponCounts[found - data->mWeapons.begin()] += std::max<int>(1, item.count);
                 }
                 else if (data->mTraits != nullptr && data->mTraits->mIsTES4)
                 {
@@ -188,6 +195,13 @@ namespace MWClass
     const std::vector<const ESM4::Weapon*>& ESM4Npc::getWeapons(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mWeapons;
+    }
+
+    int ESM4Npc::getWeaponCount(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)
+    {
+        const ESM4NpcCustomData& data = getCustomData(ptr);
+        const auto found = std::find(data.mWeapons.begin(), data.mWeapons.end(), weapon);
+        return found == data.mWeapons.end() ? 0 : data.mWeaponCounts[found - data.mWeapons.begin()];
     }
 
     void ESM4Npc::setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)

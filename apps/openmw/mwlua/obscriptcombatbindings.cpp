@@ -390,6 +390,14 @@ namespace MWLua
                             sounds->playSound3D(attackerPtr, ESM::RefId(sound), 1.f, 1.f);
                     }
 
+                    // Launchers and thrown grenades fly and burst; the blast reports each actor it hurts
+                    if (Combat::isExplosiveProjectile(*weapon))
+                    {
+                        osg::Vec3f dir = direction;
+                        dir.normalize();
+                        Combat::launch(attackerPtr, *weapon, origin, origin + dir * 2000.f);
+                        return;
+                    }
                     const Combat::HitResult hit = Combat::fire(attackerPtr, *weapon, origin, direction);
                     sendShot(context, attackerPtr, weapon, hit);
                 },
@@ -404,6 +412,26 @@ namespace MWLua
                     Combat::attack(attacker.ptr(), target.ptr(), reach);
                 },
                 "obscriptCombatAttackAction");
+        };
+        // The NPC throws its grenade or fires its launcher at the target: the projectile flies and bursts, and
+        // every actor the blast hurts arrives as "FNVCombat_Shot" with melee = true.
+        api["launchAt"] = [context](const Object& attacker, const Object& target) {
+            context.mLuaManager->addAction(
+                [attacker = Object(attacker), target = Object(target)] {
+                    Combat::launchAt(attacker.ptr(), target.ptr());
+                },
+                "obscriptCombatLaunchAction");
+        };
+        // Whether a weapon (record id) throws or fires an exploding projectile (grenades, mines, launchers).
+        api["isExplosive"] = [](std::string_view weaponId) {
+            const ESM4::Weapon* weapon = findWeapon(weaponId);
+            return weapon != nullptr && Combat::isExplosiveProjectile(*weapon);
+        };
+        // Where the nearest grenade or shell flying or lying within the radius of the position is, nil if none.
+        api["findProjectileNear"] = [](const osg::Vec3f& position, float radius) -> sol::optional<osg::Vec3f> {
+            if (const std::optional<osg::Vec3f> found = Combat::findProjectileNear(position, radius))
+                return *found;
+            return sol::nullopt;
         };
         // Whether an attack (or another one-off sequence) is playing.
         api["isActing"]
@@ -432,6 +460,8 @@ namespace MWLua
                 sol::table t = makeWeapon(lua, *weapon);
                 t["isGun"] = Combat::isGun(*weapon);
                 t["type"] = Combat::getWeaponType(*weapon);
+                t["count"] = MWClass::ESM4Npc::getWeaponCount(actor.ptr(), weapon);
+                t["explosive"] = Combat::isExplosiveProjectile(*weapon);
                 res[res.size() + 1] = t;
             }
             return res;
