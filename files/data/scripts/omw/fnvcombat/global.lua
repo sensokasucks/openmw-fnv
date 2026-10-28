@@ -263,6 +263,7 @@ local function approach(s, actor, target, reach, aroundObstacles)
                 s.ignoreBlockedUntil = simTime + IGNORE_BLOCKED_TIME
                 s.goal = nil
                 ai.stop(actor)
+                s.replanAt = 0 -- the running MOVE step would send more orders until the next replan (run 23)
                 print(('[combat] %s (%s) ignores blocked target %s for %.0f s after %d dodges'):format(
                     actor.recordId, tostring(actor.id), tostring(target.recordId), IGNORE_BLOCKED_TIME,
                     DODGES_BEFORE_IGNORE))
@@ -903,6 +904,7 @@ local function planCost(s)
             if param == L.TARGET or param == L.MELEE then to = s.target.position
             elseif param == L.COVER then to = s.cover and s.cover.cover
             elseif param == L.INVESTIGATE then to = s.searchPos
+            elseif param == L.LOS then to = s.losAlly and s.losAlly:isValid() and s.losAlly.position or nil
             elseif s.pickup and param == s.pickup.key then to = s.pickup.position end
             if to == nil then return action.cost end
             local d = (to - s.actor.position):length() / 768
