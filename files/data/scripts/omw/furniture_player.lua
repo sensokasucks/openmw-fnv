@@ -58,7 +58,7 @@ local function lockFirstPerson()
         -- person while furniture is used, and so do we (the first-person arms have no seated poses).
         I.Camera.disableModeControl('furniture')
         camera.setMode(camera.MODE.ThirdPerson)
-        self:sendEvent('FNVFurnitureView', { mode = camera.MODE.ThirdPerson })
+        self:sendEvent('FNVFurnitureView', { mode = camera.MODE.ThirdPerson, seated = true })
         return
     end
     previousVanity = types.Player.getControlSwitch(self, types.Player.CONTROL_SWITCH.VanityMode)
@@ -79,7 +79,7 @@ local function unlockFirstPerson()
     if previousMode == camera.MODE.ThirdPerson or previousMode == camera.MODE.FirstPerson then
         camera.setMode(previousMode, true)
         -- a dialogue open right now (the opening) would put the seated view back when it ends
-        self:sendEvent('FNVFurnitureView', { mode = previousMode })
+        self:sendEvent('FNVFurnitureView', { mode = previousMode, seated = false })
     end
 end
 

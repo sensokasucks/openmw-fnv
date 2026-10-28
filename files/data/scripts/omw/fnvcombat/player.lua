@@ -33,6 +33,10 @@ local hudColor = util.color.rgb(1.0, 0.71, 0.26)
 
 local weapon = nil -- record table from combat.getWeapon
 local drawn = false
+-- Holding the reload key this long holsters or draws the weapon (not traced; feels like the game's)
+local HOLSTER_HOLD = 0.5
+local reloadHeld = 0
+local holsteredThisHold = false
 local clip = 0
 local cooldown = 0
 local reloading = 0
@@ -238,6 +242,27 @@ return {
                     clip = weapon.clipSize
                     updateHud()
                 end
+            end
+            -- As in the game: firing with the weapon holstered draws it (the press is used up by that), and
+            -- holding the reload key holsters it. ToggleWeapon is unbound in the FNV defaults (F is the view).
+            if not drawn and triggerHeld and not firedThisPress and I.UI.getMode() == nil then
+                firedThisPress = true
+                drawn = true
+                updateHud()
+                publishWeapon()
+            end
+            if input.isKeyPressed(input.KEY.R) and I.UI.getMode() == nil then
+                reloadHeld = reloadHeld + dt
+                if reloadHeld >= HOLSTER_HOLD and not holsteredThisHold then
+                    holsteredThisHold = true
+                    drawn = not drawn
+                    reloading = 0
+                    updateHud()
+                    publishWeapon()
+                end
+            else
+                reloadHeld = 0
+                holsteredThisHold = false
             end
             if drawn and triggerHeld and I.UI.getMode() == nil and (weapon.automatic or not firedThisPress) then
                 if cooldown <= 0 and reloading <= 0 then

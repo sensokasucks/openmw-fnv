@@ -113,7 +113,11 @@ end
 
 -- The view to go back to after the dialogue. Furniture changes it while a line is spoken (the opening:
 -- the player gets up from Doc Mitchell's bed in the middle of his lines), so the furniture script tells us.
-function M.setPreviousMode(mode)
+-- `seated` false means the furniture is done with the view: the next dialogue goes back to whatever view
+-- it finds the player in, not the seated one.
+local furnitureMode = nil
+function M.setPreviousMode(mode, seated)
+    furnitureMode = seated and mode or nil
     if state then state.previousMode = mode end
 end
 
@@ -133,7 +137,9 @@ function M.start(speaker)
         phase = 'in',
         elapsed = 0,
         zoom = 0,
-        previousMode = mode,
+        -- a dialogue that opens while the player is seated, or right after standing up, could otherwise take
+        -- the seated third-person view as the one to go back to (the opening left players in third person)
+        previousMode = furnitureMode or mode,
         baseFov = camera.getFieldOfView(),
         fov = camera.getFieldOfView(),
         yaw = camera.getYaw() + camera.getExtraYaw(),
