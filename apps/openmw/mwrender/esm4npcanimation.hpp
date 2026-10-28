@@ -87,6 +87,9 @@ namespace MWRender
         float playActionFONV(std::string_view file);
         void resumeLocomotion();
 
+        // Whether a loop with this name exists next to the skeleton (locomotion/<sex>/, locomotion/, ...)
+        bool hasLoopFONV(std::string_view file) const { return !findLoopFONV(file).empty(); }
+
         // Sequence looped while standing instead of mtidle.kf (e.g. "2hraim.kf" with a rifle drawn); empty resets.
         void setIdleSequence(std::string_view file);
         // Puts a weapon model on the "Weapon" bone of the right hand; empty takes it away.

@@ -5,6 +5,7 @@
 #include <limits>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 
 #include <osg/MatrixTransform>
@@ -154,6 +155,9 @@ namespace MWMechanics::ESM4Combat
             int mBounces = 0;
         };
         std::vector<FlyingProjectile> sProjectiles;
+
+        // Actors crouched behind cover
+        std::set<ESM::RefNum> sCrouched;
 
         // Havok gravity, 9.81 m/s^2 at 69.99 units a metre [inferred: PROJ gravity is a multiple of it]
         constexpr float sGravity = 686.6f;
@@ -552,8 +556,56 @@ namespace MWMechanics::ESM4Combat
         const ESM4::Weapon* weapon = getActorWeapon(actor);
         if (animation == nullptr || weapon == nullptr || isDead(actor))
             return;
+        sCrouched.erase(actor.getCellRef().getRefNum());
         animation->showWeapon(drawn ? weapon->mModel.getOriginal() : std::string_view());
         animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
+    }
+
+    namespace
+    {
+        // The crouched idle for the drawn weapon (locomotion/sneak/), else the plain sneak idle [inferred names]
+        std::string crouchLoop(const MWRender::ESM4NpcAnimation& animation, const ESM4::Weapon* weapon)
+        {
+            std::vector<std::string> candidates;
+            if (weapon != nullptr)
+            {
+                const std::string aim = std::string(animPrefix(*weapon)) + "aim.kf";
+                candidates.push_back("sneak/" + aim);
+                candidates.push_back("sneak" + aim);
+            }
+            candidates.push_back("sneak/mtidle.kf");
+            candidates.push_back("sneakmtidle.kf");
+            for (const std::string& file : candidates)
+                if (animation.hasLoopFONV(file))
+                    return file;
+            return {};
+        }
+    }
+
+    bool setCrouched(const MWWorld::Ptr& actor, bool crouched)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        if (animation == nullptr || isDead(actor))
+            return false;
+        const ESM::RefNum ref = actor.getCellRef().getRefNum();
+        const ESM4::Weapon* weapon = getActorWeapon(actor);
+        const bool drawn = weapon != nullptr && animation->isWeaponShown();
+        if (!crouched)
+        {
+            if (sCrouched.erase(ref) != 0)
+                animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
+            return true;
+        }
+        const std::string loop = crouchLoop(*animation, drawn ? weapon : nullptr);
+        if (loop.empty())
+        {
+            Log(Debug::Verbose) << "ESM4 no crouch loop for " << actor.getCellRef().getRefId();
+            return false;
+        }
+        if (sCrouched.insert(ref).second)
+            Log(Debug::Verbose) << "ESM4 crouch " << actor.getCellRef().getRefId() << " with " << loop;
+        animation->setIdleSequence(loop);
+        return true;
     }
 
     namespace
@@ -563,7 +615,8 @@ namespace MWMechanics::ESM4Combat
         osg::Vec3f muzzle(const MWWorld::Ptr& actor)
         {
             const float half = MWBase::Environment::get().getWorld()->getHalfExtents(actor).z();
-            return actor.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, half > 0.f ? half * 1.7f : 110.f);
+            const float eyes = sCrouched.count(actor.getCellRef().getRefNum()) != 0 ? 1.1f : 1.7f;
+            return actor.getRefData().getPosition().asVec3() + osg::Vec3f(0, 0, half > 0.f ? half * eyes : 110.f);
         }
 
         // Where shots at an actor go: the upper body
@@ -1179,8 +1232,11 @@ namespace MWMechanics::ESM4Combat
 
     bool canTargetSee(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, const osg::Vec3f& point)
     {
-        // a crouched actor's head [inferred: the original tests the cover point against the target's LOS]
-        const float head = MWBase::Environment::get().getWorld()->getHalfExtents(actor).z() * 1.2f;
+        // the head: crouched if the actor can crouch [inferred: the original tests the cover point against the
+        // target's LOS]
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        const bool canCrouch = animation != nullptr && !crouchLoop(*animation, getActorWeapon(actor)).empty();
+        const float head = MWBase::Environment::get().getWorld()->getHalfExtents(actor).z() * (canCrouch ? 1.2f : 1.7f);
         return clearRay(eyesOf(target), point + osg::Vec3f(0, 0, head), actor, target);
     }
 
