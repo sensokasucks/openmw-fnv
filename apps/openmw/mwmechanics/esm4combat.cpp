@@ -1260,18 +1260,26 @@ namespace MWMechanics::ESM4Combat
         const float radius = std::max(half.x(), half.y());
         const osg::Vec3f aim = targetPosition
             + osg::Vec3f(0, 0, MWBase::Environment::get().getWorld()->getHalfExtents(target).z() * 1.3f);
+        int checked = 0, closed = 0, band = 0, facing = 0, seen = 0, noFire = 0;
         for (const ESM4Navigation::CoverEdge& edge :
             ESM4Actors::get().findCoverEdges(actor, position, searchRadius, 64))
         {
+            ++checked;
             if (std::find(excluded.begin(), excluded.end(), edge.mKey) != excluded.end())
                 continue;
             if (needFire && !edge.mOpenA && !edge.mOpenB)
+            {
+                ++closed;
                 continue; // No edges are open
+            }
             const osg::Vec3f mid = (edge.mA + edge.mB) * 0.5f;
             const osg::Vec3f coverPoint = mid + edge.mInward * (radius + 8.f);
             const float toTarget = (coverPoint - targetPosition).length();
             if (toTarget < minDistance || toTarget > maxDistance)
+            {
+                ++band;
                 continue; // Too close / Too far
+            }
             if ((coverPoint - targetPosition).length() < 256.f)
                 continue; // Hostiles near
             // The cover has to stand between the actor and the target: the target on the edge's outer side
@@ -1280,11 +1288,17 @@ namespace MWMechanics::ESM4Combat
             toTargetFlat.z() = 0.f;
             toTargetFlat.normalize();
             if (toTargetFlat * edge.mInward > -0.5f)
+            {
+                ++facing;
                 continue;
+            }
             if (findProjectileNear(coverPoint, 0.f))
                 continue; // Cover threatened
             if (canTargetSee(actor, target, coverPoint))
+            {
+                ++seen;
                 continue; // Target has Cover LOS
+            }
             Cover cover{ coverPoint, coverPoint, edge.mKey };
             if (needFire)
             {
@@ -1308,10 +1322,17 @@ namespace MWMechanics::ESM4Combat
                     found = true;
                 }
                 if (!found)
+                {
+                    ++noFire;
                     continue;
+                }
             }
             return cover;
         }
+        Log(Debug::Verbose) << "ESM4 no cover for " << actor.getCellRef().getRefId() << ": " << checked
+                            << " edges, " << closed << " closed, " << band << " out of " << minDistance << "-"
+                            << maxDistance << ", " << facing << " not facing the target, " << seen
+                            << " seen by it, " << noFire << " without a fire point";
         return std::nullopt;
     }
 
