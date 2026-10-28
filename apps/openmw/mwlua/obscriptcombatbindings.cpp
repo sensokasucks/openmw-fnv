@@ -11,6 +11,7 @@
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadcell.hpp>
+#include <components/esm4/loadcsty.hpp>
 #include <components/esm4/loadclas.hpp>
 #include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loadfact.hpp>
@@ -390,6 +391,14 @@ namespace MWLua
                             sounds->playSound3D(attackerPtr, ESM::RefId(sound), 1.f, 1.f);
                     }
 
+                    // Launchers and thrown grenades fly and burst; the blast reports each actor it hurts
+                    if (Combat::isExplosiveProjectile(*weapon))
+                    {
+                        osg::Vec3f dir = direction;
+                        dir.normalize();
+                        Combat::launch(attackerPtr, *weapon, origin, origin + dir * 2000.f);
+                        return;
+                    }
                     const Combat::HitResult hit = Combat::fire(attackerPtr, *weapon, origin, direction);
                     sendShot(context, attackerPtr, weapon, hit);
                 },
@@ -404,6 +413,99 @@ namespace MWLua
                     Combat::attack(attacker.ptr(), target.ptr(), reach);
                 },
                 "obscriptCombatAttackAction");
+        };
+        // The NPC throws its grenade or fires its launcher at the target: the projectile flies and bursts, and
+        // every actor the blast hurts arrives as "FNVCombat_Shot" with melee = true.
+        // at (optional): where to aim instead, e.g. where a hiding target was last seen.
+        api["launchAt"] = [context](const Object& attacker, const Object& target, sol::optional<osg::Vec3f> at) {
+            std::optional<osg::Vec3f> point;
+            if (at)
+                point = *at;
+            context.mLuaManager->addAction(
+                [attacker = Object(attacker), target = Object(target), point] {
+                    Combat::launchAt(attacker.ptr(), target.ptr(), point);
+                },
+                "obscriptCombatLaunchAction");
+        };
+        // The actor's combat style (ZNAM, else the game's DefaultCombatStyle): { editorId, coverSearchRadius,
+        // takeCoverChance (0-100), waitTimer = {min, max}, waitToFireTimer, fireTimer, dodgeChance }, nil if none.
+        api["getCombatStyle"] = [](const Object& actor, sol::this_state s) -> sol::object {
+            const MWWorld::Ptr ptr = actor.ptr();
+            ESM::FormId id;
+            if (ptr.getType() == ESM::REC_NPC_4)
+                id = ptr.get<ESM4::Npc>()->mBase->mCombatStyle;
+            else if (ptr.getType() == ESM::REC_CREA4)
+                id = ptr.get<ESM4::Creature>()->mBase->mCombatStyle;
+            const MWWorld::Store<ESM4::CombatStyle>& store
+                = MWBase::Environment::get().getESMStore()->get<ESM4::CombatStyle>();
+            const ESM4::CombatStyle* style = id.isZeroOrUnset() ? nullptr : store.search(ESM::RefId(id));
+            if (style == nullptr)
+                for (const ESM4::CombatStyle& candidate : store)
+                    if (Misc::StringUtils::ciEqual(candidate.mEditorId, "DefaultCombatStyle"))
+                    {
+                        style = &candidate;
+                        break;
+                    }
+            if (style == nullptr)
+                return sol::nil;
+            sol::state_view view(s);
+            sol::table t(view, sol::create);
+            t["editorId"] = style->mEditorId;
+            t["coverSearchRadius"] = style->mCoverSearchRadius;
+            t["takeCoverChance"] = style->mTakeCoverChance;
+            auto range = [&](float min, float max) {
+                sol::table r(view, sol::create);
+                r["min"] = min;
+                r["max"] = max;
+                return r;
+            };
+            t["waitTimer"] = range(style->mWaitTimerMin, style->mWaitTimerMax);
+            t["waitToFireTimer"] = range(style->mWaitToFireTimerMin, style->mWaitToFireTimerMax);
+            t["fireTimer"] = range(style->mFireTimerMin, style->mFireTimerMax);
+            t["dodgeChance"] = style->mDodgeChance;
+            t["hasCoverData"] = style->mHasSimpleData;
+            return t;
+        };
+
+        // Cover from the target (see ESM4Combat::findCover). options: { searchRadius, minDistance, maxDistance,
+        // fire = whether it must be able to shoot from it, targetPosition, excluded = { key, ... } }.
+        // Returns { cover = vec3, fire = vec3, key = string } or nil.
+        api["findCover"] = [](const Object& actor, const Object& target, sol::table options,
+                               sol::this_state s) -> sol::object {
+            sol::state_view lua(s);
+            std::vector<std::uint64_t> excluded;
+            if (sol::optional<sol::table> list = options.get<sol::optional<sol::table>>("excluded"))
+                for (const auto& [_, value] : *list)
+                    if (value.is<std::string>())
+                        excluded.push_back(std::stoull(value.as<std::string>()));
+            osg::Vec3f targetPosition = target.ptr().getRefData().getPosition().asVec3();
+            if (sol::optional<osg::Vec3f> given = options.get<sol::optional<osg::Vec3f>>("targetPosition"))
+                targetPosition = *given;
+            const std::optional<Combat::Cover> cover = Combat::findCover(actor.ptr(), target.ptr(), targetPosition,
+                options.get_or("searchRadius", 2048.f), options.get_or("minDistance", 512.f),
+                options.get_or("maxDistance", 1536.f), options.get_or("fire", true), excluded);
+            if (!cover)
+                return sol::nil;
+            sol::table t(lua, sol::create);
+            t["cover"] = cover->mCoverPoint;
+            t["fire"] = cover->mFirePoint;
+            t["key"] = std::to_string(cover->mKey);
+            return t;
+        };
+        // Whether the target can see the point at the actor's crouched head height (cover lost).
+        api["canTargetSee"] = [](const Object& actor, const Object& target, const osg::Vec3f& point) {
+            return Combat::canTargetSee(actor.ptr(), target.ptr(), point);
+        };
+        // Whether a weapon (record id) throws or fires an exploding projectile (grenades, mines, launchers).
+        api["isExplosive"] = [](std::string_view weaponId) {
+            const ESM4::Weapon* weapon = findWeapon(weaponId);
+            return weapon != nullptr && Combat::isExplosiveProjectile(*weapon);
+        };
+        // Where the nearest grenade or shell flying or lying within the radius of the position is, nil if none.
+        api["findProjectileNear"] = [](const osg::Vec3f& position, float radius) -> sol::optional<osg::Vec3f> {
+            if (const std::optional<osg::Vec3f> found = Combat::findProjectileNear(position, radius))
+                return *found;
+            return sol::nullopt;
         };
         // Whether an attack (or another one-off sequence) is playing.
         api["isActing"]
@@ -432,6 +534,13 @@ namespace MWLua
                 sol::table t = makeWeapon(lua, *weapon);
                 t["isGun"] = Combat::isGun(*weapon);
                 t["type"] = Combat::getWeaponType(*weapon);
+                t["count"] = MWClass::ESM4Npc::getWeaponCount(actor.ptr(), weapon);
+                t["explosive"] = Combat::isExplosiveProjectile(*weapon);
+                if (Combat::isExplosiveProjectile(*weapon))
+                {
+                    t["throwRange"] = Combat::getThrowRange(*weapon);
+                    t["blastRadius"] = Combat::getBlastDangerRadius(*weapon);
+                }
                 res[res.size() + 1] = t;
             }
             return res;

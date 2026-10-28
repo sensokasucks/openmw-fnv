@@ -72,6 +72,9 @@ namespace MWMechanics
         static ESM4Actors& get();
 
         ESM4Navigation& getNavigation() { return mNavigation; }
+        // Navmesh cover edges around the actor's position (see ESM4Navigation::findCoverEdges).
+        std::vector<ESM4Navigation::CoverEdge> findCoverEdges(
+            const MWWorld::Ptr& ptr, const osg::Vec3f& center, float radius, std::size_t maxCount);
         std::mt19937& getRandom() { return mRandom; }
 
         // False when no route exists (the status is then NoPath).

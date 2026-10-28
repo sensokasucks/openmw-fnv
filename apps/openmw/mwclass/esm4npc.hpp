@@ -79,6 +79,7 @@ namespace MWClass
         // FO3/FONV: the weapon from the NPC's inventory it fights with (a gun if it has one), or nullptr.
         static const ESM4::Weapon* getEquippedWeapon(const MWWorld::Ptr& ptr);
         static const std::vector<const ESM4::Weapon*>& getWeapons(const MWWorld::Ptr& ptr);
+        static int getWeaponCount(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon);
         static void setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon);
 
     private:

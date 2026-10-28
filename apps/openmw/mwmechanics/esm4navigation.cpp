@@ -361,6 +361,58 @@ namespace MWMechanics
         return path;
     }
 
+    std::vector<ESM4Navigation::CoverEdge> ESM4Navigation::findCoverEdges(
+        ESM::FormId cell, const osg::Vec3f& center, float radius, std::size_t maxCount)
+    {
+        std::vector<CoverEdge> result;
+        std::optional<Triangle> start = locate(cell, center);
+        if (!start)
+            return result;
+        // Breadth first from the center's triangle: the original walks the navmesh outward the same way
+        std::vector<Triangle> found{ *start };
+        std::map<Triangle, bool> seen{ { *start, true } };
+        std::vector<Neighbour> neighbours;
+        for (std::size_t i = 0; i < found.size() && found.size() < 8192 && result.size() < maxCount; ++i)
+        {
+            const Triangle& triangle = found[i];
+            const ESM4::NavMesh::FoTriangle& tri = triangle.mMesh->mFoTriangles[triangle.mIndex];
+            // Cover flags [inferred from xEdit's NVTR layout]: bits 0-3 cover value of edge 0-1, 4 left open,
+            // 5 right open; bits 6-9, 10 and 11 the same for edge 1-2
+            for (int k = 0; k < 2; ++k)
+            {
+                const int bits = (tri.coverFlags >> (6 * k)) & 0x3f;
+                const int height = bits & 0xf;
+                if (height == 0)
+                    continue;
+                CoverEdge edge;
+                edge.mA = vertex(triangle, k);
+                edge.mB = vertex(triangle, k + 1);
+                edge.mOpenA = (bits & 0x10) != 0;
+                edge.mOpenB = (bits & 0x20) != 0;
+                edge.mHeight = height;
+                osg::Vec3f mid = (edge.mA + edge.mB) * 0.5f;
+                osg::Vec3f inward = centroid(triangle) - mid;
+                inward.z() = 0.f;
+                if (inward.normalize() == 0.f)
+                    continue;
+                edge.mInward = inward;
+                edge.mKey = (static_cast<std::uint64_t>(triangle.mMesh->mId.toUint32()) << 32)
+                    | (static_cast<std::uint64_t>(triangle.mIndex) << 2) | static_cast<std::uint64_t>(k);
+                result.push_back(edge);
+            }
+            getNeighbours(triangle, neighbours);
+            for (const Neighbour& neighbour : neighbours)
+            {
+                if (seen.contains(neighbour.mTriangle))
+                    continue;
+                seen[neighbour.mTriangle] = true;
+                if ((centroid(neighbour.mTriangle) - center).length() <= radius)
+                    found.push_back(neighbour.mTriangle);
+            }
+        }
+        return result;
+    }
+
     std::optional<osg::Vec3f> ESM4Navigation::randomPoint(
         ESM::FormId cell, const osg::Vec3f& center, float radius, std::mt19937& rng)
     {

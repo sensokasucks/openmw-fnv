@@ -590,6 +590,15 @@ namespace MWMechanics
         return true;
     }
 
+    std::vector<ESM4Navigation::CoverEdge> ESM4Actors::findCoverEdges(
+        const MWWorld::Ptr& ptr, const osg::Vec3f& center, float radius, std::size_t maxCount)
+    {
+        const std::optional<ESM::FormId> cell = getCellFormId(ptr);
+        if (!cell)
+            return {};
+        return mNavigation.findCoverEdges(*cell, center, radius, maxCount);
+    }
+
     bool ESM4Actors::avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration)
     {
         if (state.mIgnoreTime > 0.f)
