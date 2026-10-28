@@ -63,6 +63,10 @@ namespace MWClass
         VFS::Path::NormalizedView getModel(const MWWorld::ConstPtr& ptr) const override;
         std::string_view getName(const MWWorld::ConstPtr& ptr) const override;
 
+        // FO3/FONV: a dead NPC opens as a container (looting); talking to a live one is the Lua dialogue's
+        // activation handler (scripts/omw/fnvdialogue/global.lua).
+        std::unique_ptr<MWWorld::Action> activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const override;
+
         static const ESM4::Npc* getTraitsRecord(const MWWorld::Ptr& ptr);
         static const ESM4::Npc* getAIPackagesRecord(const MWWorld::Ptr& ptr);
         static const ESM4::Race* getRace(const MWWorld::Ptr& ptr);

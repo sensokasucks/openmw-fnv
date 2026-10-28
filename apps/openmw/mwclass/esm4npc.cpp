@@ -21,7 +21,13 @@
 #include <components/esm3/containerstate.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+
+#include "../mwgui/mode.hpp"
+#include "../mwmechanics/esm4combat.hpp"
+#include "../mwworld/actionopen.hpp"
+#include "../mwworld/nullaction.hpp"
 
 #include "esm4base.hpp"
 
@@ -205,6 +211,17 @@ namespace MWClass
             data.mStore.setPtr(ptr);
         }
         return data.mStore;
+    }
+
+    std::unique_ptr<MWWorld::Action> ESM4Npc::activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const
+    {
+        if (!MWMechanics::ESM4Combat::isDead(ptr))
+            return std::make_unique<MWWorld::NullAction>();
+        if (!MWBase::Environment::get().getWindowManager()->isAllowed(MWGui::GW_Inventory))
+            return std::make_unique<MWWorld::NullAction>();
+        // the body's levelled items are rolled when first looted (ESM4Container does the same)
+        getContainerStore(ptr);
+        return std::make_unique<MWWorld::ActionOpen>(ptr);
     }
 
     float ESM4Npc::getCapacity(const MWWorld::Ptr& ptr) const
