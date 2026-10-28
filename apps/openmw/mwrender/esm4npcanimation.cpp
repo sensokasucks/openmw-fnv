@@ -22,6 +22,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/misc/mathutil.hpp>
+#include <components/misc/constants.hpp>
 #include <components/misc/resourcehelpers.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -220,6 +221,26 @@ namespace MWRender
 
     namespace
     {
+        // The bone a rigid part's file names as its parent ("Prn", kept by the NIF loader on the root)
+        class FindAttachmentBoneVisitor : public osg::NodeVisitor
+        {
+        public:
+            FindAttachmentBoneVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                if (mBone.empty() && node.getUserValue(Constants::AttachmentBone, mBone))
+                    return;
+                if (mBone.empty())
+                    traverse(node);
+            }
+
+            std::string mBone;
+        };
+
         // Resets the rotation of every transform below a rigid head part (its translation and scale stay)
         class DropRotationVisitor : public osg::NodeVisitor
         {
@@ -261,11 +282,35 @@ namespace MWRender
             return handle;
         }
 
-        // Skinned parts are bound to the NPC skeleton. The rest (hair, eyes, mouth, hats...) hang off the head bone,
-        // their "Prn" parent in FO3/FONV, and are modelled in the same space as the skinned head mesh. Place them
-        // with the head mesh's own binding to that bone so they follow it exactly like the skinned head does.
+        // Skinned parts are bound to the NPC skeleton. The rest hang off the bone their "Prn" extra data names.
+        // Rigid apparel (the Pip-Boy on "Bip01 L ForeTwist") sits on that bone as modelled, file transforms and
+        // all. Head parts (hair, eyes, mouth, hats...) name the head bone, or nothing, and are modelled in the
+        // same space as the skinned head mesh: they are placed with the head mesh's own binding to that bone so
+        // they follow it exactly like the skinned head does.
         constexpr std::string_view headBone = "Bip01 Head";
         const NodeMap& nodeMap = getNodeMap();
+        std::string attachmentBone;
+        {
+            FindAttachmentBoneVisitor findBone;
+            const_cast<osg::Node*>(templateNode.get())->accept(findBone);
+            attachmentBone = findBone.mBone;
+        }
+        if (!attachmentBone.empty() && !Misc::StringUtils::ciEqual(attachmentBone, headBone))
+        {
+            auto bone = nodeMap.find(attachmentBone);
+            if (bone != nodeMap.end())
+            {
+                // SceneUtil::attach mirrors anything put on a node named "Left ...", which these aren't; a plain
+                // group under the bone keeps the model as it is.
+                osg::ref_ptr<osg::Group> holder = new osg::Group;
+                bone->second->addChild(holder);
+                Log(Debug::Verbose) << "Rigid part " << model << " on " << attachmentBone << " for "
+                                    << mPtr.getCellRef().getRefId();
+                return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, holder, sceneManager);
+            }
+            Log(Debug::Verbose) << "No bone " << attachmentBone << " for " << model << " on "
+                                << mPtr.getCellRef().getRefId();
+        }
         auto found = nodeMap.find(headBone);
         if (found == nodeMap.end())
             return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
