@@ -1076,8 +1076,24 @@ local function attackMelee(s, distance)
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
     if simTime >= s.nextAttack then
-        s.nextAttack = simTime + 1.2 + math.random() * 0.8
-        combat.attack(actor, target, reach)
+        -- In reach the original rolls attack / block / hold each decision (ghidra-findings-7): attack = Attack % +
+        -- 20 x skill/100 (plus bonuses), block = Block % x fBlockScoreNoShieldMult 0.5, x0.25 more when not under
+        -- attack, hold = max(100 - attack - block, 30). Blocks are not animated yet, so a block is a hold here.
+        local style = s.style
+        local skill = s.inHand and s.inHand.skill and s.inHand.skill >= 0 and stats.get(actor, s.inHand.skill) or 50
+        local attack = (style and style.attackChance or 40) + 20 * skill / 100
+        local block = (style and style.blockChance or 30) * gmst('fBlockScoreNoShieldMult', 0.5)
+        local underAttack = simTime - (s.lastHitAt or -math.huge) <= 1.5
+        if not underAttack then block = block * 0.25 end
+        local hold = math.max(100 - attack - block, 30)
+        local roll = math.random() * (attack + block + hold)
+        if roll < attack then
+            s.nextAttack = simTime + 1.2 + math.random() * 0.8
+            combat.attack(actor, target, reach)
+        else
+            -- hold (or block) for the style's Hold Timer [0.5-1.5 s in the default style]
+            s.nextAttack = simTime + 0.5 + math.random()
+        end
     end
     return 'running'
 end
@@ -1634,6 +1650,7 @@ return {
                 scriptEvent(struck, 'OnHitWith', e.attacker)
             end
             if target ~= nil and target:isValid() and isActor(target) then
+                if fighting[target.id] then fighting[target.id].lastHitAt = simTime end
                 scriptEvent(target, 'OnHit', e.attacker)
                 if e.killed then
                     scriptEvent(target, 'OnDeath', e.attacker)
