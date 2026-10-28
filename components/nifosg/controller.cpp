@@ -630,6 +630,82 @@ namespace NifOsg
         }
     }
 
+    TextureTransformController::TextureTransformController(unsigned int textureUnit)
+        : mTextureUnit(textureUnit)
+    {
+    }
+
+    TextureTransformController::TextureTransformController(
+        const TextureTransformController& copy, const osg::CopyOp& copyop)
+        : osg::Object(copy, copyop)
+        , StateSetUpdater(copy, copyop)
+        , Controller(copy)
+        , mTracks(copy.mTracks)
+        , mTextureUnit(copy.mTextureUnit)
+        , mBase(copy.mBase)
+    {
+    }
+
+    void TextureTransformController::addTrack(unsigned int member, const FloatInterpolator& track)
+    {
+        mTracks.emplace_back(member, track);
+    }
+
+    void TextureTransformController::setDefaults(osg::StateSet* stateset)
+    {
+        osg::ref_ptr<osg::TexMat> texMat(new osg::TexMat);
+        if (const auto* existing
+            = static_cast<const osg::TexMat*>(stateset->getTextureAttribute(mTextureUnit, osg::StateAttribute::TEXMAT)))
+            mBase = existing->getMatrix();
+        texMat->setMatrix(mBase);
+        stateset->setTextureAttributeAndModes(mTextureUnit, texMat, osg::StateAttribute::ON);
+    }
+
+    void TextureTransformController::apply(osg::StateSet* stateset, osg::NodeVisitor* nv)
+    {
+        if (!hasInput())
+            return;
+        const float time = getInputValue(nv);
+        osg::Vec2f translate(0.f, 0.f);
+        osg::Vec2f scale(1.f, 1.f);
+        float rotation = 0.f;
+        for (const auto& [member, track] : mTracks)
+        {
+            const float value = track.interpKey(time);
+            switch (member)
+            {
+                case TranslateU:
+                    translate.x() = value;
+                    break;
+                case TranslateV:
+                    translate.y() = value;
+                    break;
+                case Rotate:
+                    rotation = value;
+                    break;
+                case ScaleU:
+                    scale.x() = value;
+                    break;
+                case ScaleV:
+                    scale.y() = value;
+                    break;
+            }
+        }
+        // Scale and turn about the texture's centre, then offset; the offsets are negated as the loader does
+        // for the property's own UV offset (BSShaderNoLightingProperty), the other way round from DirectX.
+        const osg::Vec3f origin(0.5f, 0.5f, 0.f);
+        osg::Matrixf mat = osg::Matrixf::translate(origin);
+        mat.preMultScale(osg::Vec3f(scale.x(), scale.y(), 1.f));
+        if (rotation != 0.f)
+            mat.preMultRotate(osg::Quat(rotation, osg::Vec3f(0.f, 0.f, 1.f)));
+        mat.preMultTranslate(-origin);
+        mat.setTrans(mat.getTrans() + osg::Vec3f(-translate.x(), -translate.y(), 0.f));
+
+        if (auto* texMat
+            = static_cast<osg::TexMat*>(stateset->getTextureAttribute(mTextureUnit, osg::StateAttribute::TEXMAT)))
+            texMat->setMatrix(mat * mBase);
+    }
+
     VisController::VisController(const Nif::NiVisController* ctrl, unsigned int mask)
         : mMask(mask)
     {

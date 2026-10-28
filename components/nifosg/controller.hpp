@@ -2,6 +2,10 @@
 #define COMPONENTS_NIFOSG_CONTROLLER_H
 
 #include <set>
+#include <utility>
+#include <vector>
+
+#include <osg/Matrixf>
 #include <type_traits>
 
 #include <osg/Texture2D>
@@ -334,6 +338,38 @@ namespace NifOsg
         FloatInterpolator mUScale;
         FloatInterpolator mVScale;
         std::set<unsigned int> mTextureUnits;
+    };
+
+    // NiTextureTransformController (Gamebryo 20.x, FO3/FNV): one float track drives one member (U or V offset,
+    // rotation, U or V scale) of a texture slot's transform. A slot's controllers are gathered into one of
+    // these, which keeps the slot's TexMat (over any transform the property itself set).
+    class TextureTransformController : public SceneUtil::StateSetUpdater, public SceneUtil::Controller
+    {
+    public:
+        enum Member : unsigned int
+        {
+            TranslateU = 0,
+            TranslateV = 1,
+            Rotate = 2,
+            ScaleU = 3,
+            ScaleV = 4,
+        };
+
+        TextureTransformController() = default;
+        TextureTransformController(const TextureTransformController&, const osg::CopyOp&);
+        explicit TextureTransformController(unsigned int textureUnit);
+
+        META_Object(NifOsg, TextureTransformController)
+
+        void addTrack(unsigned int member, const FloatInterpolator& track);
+
+        void setDefaults(osg::StateSet* stateset) override;
+        void apply(osg::StateSet* stateset, osg::NodeVisitor* nv) override;
+
+    private:
+        std::vector<std::pair<unsigned int, FloatInterpolator>> mTracks;
+        unsigned int mTextureUnit = 0;
+        osg::Matrixf mBase; // the property's own transform, if any
     };
 
     class VisController : public SceneUtil::NodeCallback<VisController>, public SceneUtil::Controller

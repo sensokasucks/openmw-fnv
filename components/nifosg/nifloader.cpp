@@ -1436,11 +1436,41 @@ namespace NifOsg
         void handleTextureControllers(const Nif::NiProperty* texProperty,
             SceneUtil::CompositeStateSetUpdater* composite, osg::StateSet* stateset, int animflags) const
         {
+            // The base map's NiTextureTransformControllers (one per transform member) share one TexMat
+            osg::ref_ptr<TextureTransformController> textureTransform;
             for (Nif::NiTimeControllerPtr ctrl = texProperty->mController; !ctrl.empty(); ctrl = ctrl->mNext)
             {
                 if (!ctrl->isActive())
                     continue;
-                if (ctrl->mRecordType == Nif::RC_NiFlipController)
+                if (ctrl->mRecordType == Nif::RC_NiTextureTransformController)
+                {
+                    const auto* transformCtrl
+                        = static_cast<const Nif::NiTextureTransformController*>(ctrl.getPtr());
+                    // the base map is texture unit 0 (see FlipController); other slots are left alone
+                    if (transformCtrl->mTexSlot != Nif::NiTexturingProperty::BaseTexture)
+                    {
+                        Log(Debug::Info) << "NiTextureTransformController on texture slot " << transformCtrl->mTexSlot
+                                         << " ignored in " << mFilename;
+                        continue;
+                    }
+                    FloatInterpolator track;
+                    if (!transformCtrl->mInterpolator.empty()
+                        && transformCtrl->mInterpolator->mRecordType == Nif::RC_NiFloatInterpolator)
+                        track = FloatInterpolator(
+                            static_cast<const Nif::NiFloatInterpolator*>(transformCtrl->mInterpolator.getPtr()));
+                    else if (!transformCtrl->mData.empty())
+                        track = FloatInterpolator(transformCtrl->mData->mKeyList, 0.f);
+                    else
+                        continue;
+                    if (!textureTransform)
+                    {
+                        textureTransform = new TextureTransformController(0);
+                        setupController(transformCtrl, textureTransform, animflags);
+                        composite->addController(textureTransform);
+                    }
+                    textureTransform->addTrack(transformCtrl->mTransformMember, track);
+                }
+                else if (ctrl->mRecordType == Nif::RC_NiFlipController)
                 {
                     const Nif::NiFlipController* flipctrl = static_cast<const Nif::NiFlipController*>(ctrl.getPtr());
                     if (!flipctrl->mInterpolator.empty()
