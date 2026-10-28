@@ -34,6 +34,8 @@ namespace ESM4
         std::uint8_t mDodgeChance = 0;
         std::uint8_t mLeftRightChance = 0;
         std::uint32_t mStyleFlags = 0;
+        std::uint8_t mBlockChance = 0; // CSTD 36
+        std::uint8_t mAttackChance = 0; // CSTD 37
         bool mHasStandardData = false;
 
         // CSSD (simple data)
@@ -42,6 +44,11 @@ namespace ESM4
         float mWaitTimerMin = 0.f, mWaitTimerMax = 0.f;
         float mWaitToFireTimerMin = 0.f, mWaitToFireTimerMax = 0.f;
         float mFireTimerMin = 0.f, mFireTimerMax = 0.f;
+        float mRangeMultMin = 1.f, mRangeMultMax = 1.f; // Ranged Weapon Range Mult
+        std::uint32_t mWeaponRestrictions = 0; // 0 none, 1 melee only, 2 ranged only
+        float mMaxTargetingFov = 0.f; // 0: no check
+        float mCombatRadius = 0.f;
+        float mSemiAutoDelayMultMin = 1.f, mSemiAutoDelayMultMax = 1.f;
         bool mHasSimpleData = false;
 
         void load(ESM4::Reader& reader);

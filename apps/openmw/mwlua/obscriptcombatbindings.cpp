@@ -166,6 +166,8 @@ namespace MWLua
                 t["skill"] = d.skill;
                 t["minRange"] = d.minRange;
                 t["maxRange"] = d.maxRange;
+                t["semiAutoDelayMin"] = d.semiAutoDelayMin;
+                t["semiAutoDelayMax"] = d.semiAutoDelayMax;
             }
             return t;
         }
@@ -463,6 +465,14 @@ namespace MWLua
             t["waitToFireTimer"] = range(style->mWaitToFireTimerMin, style->mWaitToFireTimerMax);
             t["fireTimer"] = range(style->mFireTimerMin, style->mFireTimerMax);
             t["dodgeChance"] = style->mDodgeChance;
+            t["blockChance"] = style->mBlockChance;
+            t["attackChance"] = style->mAttackChance;
+            t["flags"] = style->mStyleFlags;
+            t["weaponRestrictions"] = style->mWeaponRestrictions;
+            t["rangeMult"] = range(style->mRangeMultMin, style->mRangeMultMax);
+            t["maxTargetingFov"] = style->mMaxTargetingFov;
+            t["combatRadius"] = style->mCombatRadius;
+            t["semiAutoDelayMult"] = range(style->mSemiAutoDelayMultMin, style->mSemiAutoDelayMultMax);
             t["hasCoverData"] = style->mHasSimpleData;
             return t;
         };

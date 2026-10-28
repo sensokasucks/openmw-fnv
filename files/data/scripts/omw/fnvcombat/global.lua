@@ -267,8 +267,22 @@ local function shootAt(s, actor, target)
     s.clip = s.clip - math.max(1, gun.ammoUse or 1)
     local rate = gun.shotsPerSecond or 0
     local delay = rate > 0 and 1 / rate or 1
-    if not gun.automatic then
-        delay = delay + 0.4 + math.random() * 0.8
+    if gun.automatic then
+        -- 1 s bursts with a 1 s pause (ghidra-findings-7)
+        s.burstUntil = s.burstUntil or simTime + 1
+        if simTime >= s.burstUntil then
+            delay, s.burstUntil = 1, nil
+        end
+    else
+        -- semi-automatic: the weapon's Semi-Auto Fire Delay Min..Max, times the style's Semi-Auto Firing Delay Mult
+        local min, max = gun.semiAutoDelayMin or 0, gun.semiAutoDelayMax or 0
+        if max > 0 then
+            local mult = s.style and s.style.semiAutoDelayMult or nil
+            local m = mult and mult.max > 0 and (mult.min + math.random() * (mult.max - mult.min)) or 1
+            delay = math.max(delay, (min + math.random() * (max - min)) * m)
+        else
+            delay = delay + 0.4 + math.random() * 0.8
+        end
     end
     s.nextAttack = simTime + delay
 end
@@ -448,19 +462,42 @@ local function lostRemoveTime()
     return gmst('fCombatTargetLostRemoveTime', 30)
 end
 
--- How good a weapon is: damage over time, more for guns at range and for melee up close (inferred: the
--- original's weapon suitability is not decoded yet).
-local function weaponScore(weapon, weaponType, distance)
-    local damage = math.max(weapon.damage or 1, 1)
+-- How good a weapon is (ghidra-findings-6/7): its damage a second (skill-scaled damage x projectiles x shots a
+-- second, grenades / 10, melee at half); a gun whose range (DNAM max range x the style's range mult, up to
+-- fCombatAbsoluteMaxRangeMult) does not reach the target keeps 1/10000 of it, as does the type the style
+-- forbids (Weapon Restrictions); the weapon in hand gets x1.25 so the NPC does not flip back and forth.
+local function weaponDps(actor, weapon)
+    if weapon == nil then return 0 end
+    local skill = weapon.skill and weapon.skill >= 0 and stats.get(actor, weapon.skill) or 50
+    local damage = (weapon.damage or 0) * (gmst('fDamageSkillBase', 0.5) + gmst('fDamageSkillMult', 0.5) * skill / 100)
     local rate = weapon.shotsPerSecond and weapon.shotsPerSecond > 0 and weapon.shotsPerSecond or 1
+    local dps = damage * math.max(weapon.projectiles or 1, 1) * rate
+    if weapon.type == PW.GRENADE then dps = dps / 10 end
+    if weapon.type == PW.MINE then dps = 0 end
+    if weapon.type == PW.MELEE then dps = dps * gmst('fPickupWeaponMeleeWeaponDPSMult', 0.5) end
+    return math.max(dps, 0.01)
+end
+
+local function styleRange(s, weapon)
+    local range = weapon.maxRange or 0
+    if range <= 0 then return 1500 end
+    local mult = s.style and s.style.rangeMult and s.style.rangeMult.max or 1
+    if mult <= 0 then mult = 1 end
+    return range * mult * gmst('fCombatAbsoluteMaxRangeMult', 4)
+end
+
+local function weaponScore(s, weapon, weaponType, distance)
+    local score = weaponDps(s.actor, weapon)
     if weaponType == PW.RANGED or weaponType == PW.EXPLOSIVE then
-        local range = gunRange(weapon)
-        return damage * rate * (distance > range * 1.5 and 0.7 or 1)
+        if distance > styleRange(s, weapon) then score = score / 10000 end
+    elseif weaponType == PW.GRENADE then
+        if distance > (weapon.throwRange or 0) then score = score / 10000 end
     end
-    if weaponType == PW.GRENADE then
-        return damage * 0.5
-    end
-    return damage * (distance > STRAIGHT_DISTANCE and 0.5 or 1)
+    local restriction = s.style and s.style.weaponRestrictions or 0
+    local melee = weaponType == PW.MELEE or weaponType == PW.HAND_TO_HAND
+    if (restriction == 1 and not melee) or (restriction == 2 and melee) then score = score / 10000 end
+    if s.inHand and s.inHand.id == weapon.id then score = score * 1.25 end
+    return score
 end
 
 -- The NPC's best weapon of each type it carries (creatures fight hand to hand with their own attacks)
@@ -529,18 +566,6 @@ local PICKUP_TAKE_AT = 0.3
 local PICKUP_REACH = 32 + ACTOR_RADIUS + 16 -- fPickupItemDistanceFudge + the two radii
 local pickupBlocked = {} -- ref id -> until (unreachable or gone)
 
-local function weaponDps(actor, weapon)
-    if weapon == nil then return 0 end
-    local skill = weapon.skill and weapon.skill >= 0 and stats.get(actor, weapon.skill) or 50
-    local damage = (weapon.damage or 0) * (gmst('fDamageSkillBase', 0.5) + gmst('fDamageSkillMult', 0.5) * skill / 100)
-    local rate = weapon.shotsPerSecond and weapon.shotsPerSecond > 0 and weapon.shotsPerSecond or 1
-    local dps = damage * math.max(weapon.projectiles or 1, 1) * rate
-    if weapon.type == PW.GRENADE then dps = dps / 10 end
-    if weapon.type == PW.MINE then dps = 0 end
-    if weapon.type == PW.MELEE then dps = dps * gmst('fPickupWeaponMeleeWeaponDPSMult', 0.5) end
-    return dps
-end
-
 local function ownDps(s)
     local best = math.max(stats.get(s.actor, 'MeleeDamage') or 1, 1) -- fists, once a second
     for _, weapon in ipairs(s.weapons or {}) do
@@ -581,7 +606,9 @@ local function scanPickups(s)
         if dps <= bar then return end
         local where = holder and holder.position or obj.position
         local distance = (where - actor.position):length()
-        local reach = minDist + (maxDist - minDist) * math.min(dps / bar / gmst('fPickupWeaponDistanceMinMaxDPSMult', 5), 1)
+        -- the band opens with the margin over the bar: fully at fPickupWeaponDistanceMinMaxDPSMult 5 x
+        local over = math.min(dps / bar, gmst('fPickupWeaponDistanceMinMaxDPSMult', 5))
+        local reach = minDist + (maxDist - minDist) * math.max(over - 1, 0) / (gmst('fPickupWeaponDistanceMinMaxDPSMult', 5) - 1)
         if distance > reach then return end
         if simTime < (pickupBlocked[obj.id] or 0) then return end
         if s.threat and (where - s.threat):length() <= 128 then return end
@@ -634,7 +661,7 @@ local function bestWeapons(s, distance)
             or (t == PW.EXPLOSIVE and weapon.isGun)
             or (t == PW.GRENADE and weapon.explosive and (s.thrown[weapon.id] or 0) < (weapon.count or 1))
         if usable then
-            local score = weaponScore(weapon, t, distance)
+            local score = weaponScore(s, weapon, t, distance)
             if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
         end
     end
@@ -693,7 +720,7 @@ local function coverWanted(s)
         local chance = s.style and s.style.takeCoverChance or 0
         s.useCover = chance > 0 and math.random() * 100 < chance
     end
-    return s.useCover and simTime >= (s.noCoverUntil or 0) and types.ESM4NPC.objectIsInstance(s.actor)
+    return s.useCover and types.ESM4NPC.objectIsInstance(s.actor)
 end
 
 releaseCover = function(s)
@@ -735,9 +762,12 @@ local function findCover(s)
         releaseCover(s)
         coverTaken[found.key] = s.actor.id
         s.cover = found
-        print(('[combat] %s (%s) takes cover %s, %.0f from %s (cover %s, fire %s)'):format(s.actor.recordId,
-            tostring(s.actor.id), found.key, (found.cover - s.target.position):length(), tostring(s.target.recordId),
-            tostring(found.cover), tostring(found.fire)))
+        if s.coverLogged ~= found.key then
+            s.coverLogged = found.key
+            print(('[combat] %s (%s) finds cover %s, %.0f from %s (cover %s, fire %s)'):format(s.actor.recordId,
+                tostring(s.actor.id), found.key, (found.cover - s.target.position):length(),
+                tostring(s.target.recordId), tostring(found.cover), tostring(found.fire)))
+        end
     end
     return found
 end
@@ -809,7 +839,21 @@ local function planCost(s)
     local topScore = 0
     for _, b in pairs(s.best) do topScore = math.max(topScore, b.score) end
     local meleeOnly = isTeammate(s.actor) and refVar(s.actor, 'combatstylemelee') == 1
+    local L = P.L
     return function(action, param)
+        -- a move costs its path (ghidra-findings-9): clamp((distance / 768)^2, 0.01, 1e6) for the target, melee
+        -- range, cover and the search spot; so near cover beats far cover, and shooting from where it stands beats
+        -- a long walk to cover
+        if action.move then
+            local to
+            if param == L.TARGET or param == L.MELEE then to = s.target.position
+            elseif param == L.COVER then to = s.cover and s.cover.cover
+            elseif param == L.INVESTIGATE then to = s.searchPos
+            elseif s.pickup and param == s.pickup.key then to = s.pickup.position end
+            if to == nil then return action.cost end
+            local d = (to - s.actor.position):length() / 768
+            return action.cost + math.min(math.max(d * d, 0.01), 1e6)
+        end
         local weaponType = action.attack
         if action.weapon then weaponType = param end
         if weaponType == nil then return action.cost end
@@ -837,7 +881,10 @@ local function replan(s, distance, los)
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
     local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.LOS, P.L.INVESTIGATE, P.L.AVOID_THREAT }
-    if coverWanted(s) then locations[#locations + 1] = P.L.COVER end
+    -- cover is searched while planning (ghidra-findings-9): the cover plan is only on offer when a spot exists,
+    -- and a failed search is forgotten with the pass (only the failed spots are remembered, for 3 s)
+    if coverWanted(s) and not s.inCoverLoop and s.cover == nil then findCover(s) end
+    if coverWanted(s) and s.cover ~= nil then locations[#locations + 1] = P.L.COVER end
     scanCombatItems(s)
     scanPickups(s)
     local item = combatItem(s)
@@ -856,7 +903,13 @@ local function replan(s, distance, los)
         return
     end
     local labels = {}
-    for _, step in ipairs(plan) do labels[#labels + 1] = stepLabel(step) end
+    local usesCover = false
+    for _, step in ipairs(plan) do
+        labels[#labels + 1] = stepLabel(step)
+        if step.param == P.L.COVER or step.name:sub(-10) == 'FROM_COVER' then usesCover = true end
+    end
+    -- a spot found for this pass but not used goes back for others; it is searched again next pass
+    if not usesCover and s.cover ~= nil and not s.inCoverLoop then releaseCover(s) end
     local text = goal.name .. ': ' .. table.concat(labels, ' > ')
     if text ~= s.planText then
         print(('[combat] %s (%s) plans %s'):format(s.actor.recordId, tostring(s.actor.id), text))
@@ -905,10 +958,7 @@ local function moveTowards(s, kind, distance, los)
     local L = P.L
     local state = s.stepState
     if kind == L.COVER then
-        if s.cover == nil and findCover(s) == nil then
-            s.noCoverUntil = simTime + 3
-            return 'failed'
-        end
+        if s.cover == nil then return 'failed' end
         if (actor.position - s.cover.cover):length() <= 40 then
             holdStill(actor)
             return 'done'
@@ -1512,8 +1562,22 @@ return {
         end,
         isDead = function(actor) return combat.isDead(actor) end,
         --- Damage an actor's health (after its armor); attacker may be nil.
-        hit = function(target, attacker, damage) combat.hit(target, attacker, damage) end,
-        kill = function(target) combat.hit(target, nil, 1e9) end,
+        hit = function(target, attacker, damage)
+            local wasAlive = isAlive(target)
+            combat.hit(target, attacker, damage)
+            if wasAlive and not isAlive(target) then
+                scriptEvent(target, 'OnDeath', attacker)
+                dropWeaponOnDeath(target)
+            end
+        end,
+        kill = function(target)
+            local wasAlive = isAlive(target)
+            combat.hit(target, nil, 1e9)
+            if wasAlive and not isAlive(target) then
+                scriptEvent(target, 'OnDeath', nil)
+                dropWeaponOnDeath(target)
+            end
+        end,
         --- Whether the actor is fighting or running away; its AI package waits meanwhile.
         isInCombat = function(actor) return fighting[actor.id] ~= nil end,
         --- Whether the actor's detection score of the player is above fSneakNoticedMin (checked every
