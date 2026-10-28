@@ -9,6 +9,9 @@ local I = require('openmw.interfaces')
 
 local EnableObject = async:registerTimerCallback('EnableObject', function(obj) obj.enabled = true end)
 
+-- OPENMW_FNV_UI_TRACE=1 (scripts/omw/fnvuitrace.lua): log activations and door teleports
+local trace = core.obscript ~= nil and core.obscript.uiTraceEnabled == true
+
 local function ESM4DoorActivation(door, actor)
     -- TODO: Implement lockpicking minigame
     local Door4 = types.ESM4Door
@@ -16,6 +19,12 @@ local function ESM4DoorActivation(door, actor)
         return -- C++ (MWClass::ESM4Door) plays the open/close animation and sound
     end
     core.sound.playSound3d(Door4.record(door).openSound, actor)
+    if trace then
+        local okC, cell = pcall(Door4.destCell, door)
+        print(('[door] %s (%s): teleporting %s to %s at %s'):format(door.recordId, tostring(door.id),
+            tostring(actor.recordId), okC and tostring(cell and (cell.name ~= '' and cell.name or cell.id)) or tostring(cell),
+            tostring(Door4.destPosition(door))))
+    end
     local ok, err = pcall(function()
         actor:teleport(Door4.destCell(door), Door4.destPosition(door), Door4.destRotation(door))
     end)
@@ -327,6 +336,11 @@ end
 table.insert(handlersPerType[types.ESM4Door], ESM4LockActivation)
 
 local function onActivate(obj, actor)
+    if trace then
+        print(('[activate] %s (%s) by %s: paused=%s inContainer=%s seated=%s'):format(obj.recordId, tostring(obj.id),
+            tostring(actor.recordId), tostring(world.isWorldPaused()), tostring(obj.parentContainer ~= nil),
+            tostring(seatedActors[actor.id] ~= nil)))
+    end
     if world.isWorldPaused() then
         return
     end

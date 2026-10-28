@@ -61,10 +61,17 @@ local function state()
 end
 
 local function typeName(obj)
+    local found = '?'
     for name, t in pairs(types) do
-        if type(t) == 'table' and t == obj.type then return name end
+        if type(t) == 'table' and type(t.objectIsInstance) == 'function' then
+            local ok, is = pcall(t.objectIsInstance, obj)
+            -- the most specific type: ESM4Door rather than Lockable or Item
+            if ok and is and (found == '?' or #name > #found) and name ~= 'Lockable' and name ~= 'Item' then
+                found = name
+            end
+        end
     end
-    return '?'
+    return found
 end
 
 -- What the crosshair is on, as the activation ray sees it (up to 400 units)
