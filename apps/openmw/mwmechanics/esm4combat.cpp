@@ -899,6 +899,8 @@ namespace MWMechanics::ESM4Combat
             if (!player.getClass().getCreatureStats(player).isDead())
                 candidates.push_back(player);
             const osg::Vec3f from = at + osg::Vec3f(0, 0, 8);
+            Log(Debug::Info) << "ESM4 explosion " << explosion->mEditorId << " at " << at.x() << " " << at.y() << " "
+                             << at.z() << ", radius " << radius << ", damage " << baseDamage;
             for (const MWWorld::Ptr& candidate : candidates)
             {
                 if (candidate != player && isDead(candidate))
@@ -916,7 +918,11 @@ namespace MWMechanics::ESM4Combat
                         MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
                             | MWPhysics::CollisionType_Door);
                     if (wall.mHit)
+                    {
+                        Log(Debug::Info) << "ESM4 explosion blocked from " << candidate.getCellRef().getRefId()
+                                         << " at " << distance;
                         continue;
+                    }
                 }
                 // 1 - (d/R)^2: no full-damage core (FalloutNV.exe 0x647920)
                 const float falloff = 1.f - (distance / radius) * (distance / radius);
@@ -1119,6 +1125,10 @@ namespace MWMechanics::ESM4Combat
         projectile.mProjectile = data;
         projectile.mPosition = origin;
         projectile.mVelocity = throwVelocity(attacker, *data, origin, targetPosition);
+        Log(Debug::Info) << "ESM4 launch " << data->mEditorId << " from " << origin.x() << " " << origin.y() << " "
+                         << origin.z() << " at " << targetPosition.x() << " " << targetPosition.y() << " "
+                         << targetPosition.z() << ", speed " << projectile.mVelocity.length() << ", gravity "
+                         << data->mData.gravity << ", timer " << data->mData.explosionTimer;
         if (!data->mModel.empty())
         {
             osg::ref_ptr<osg::Node> model = MWBase::Environment::get().getResourceSystem()->getSceneManager()->getInstance(
@@ -1138,8 +1148,11 @@ namespace MWMechanics::ESM4Combat
         if (weapon == nullptr || !isExplosiveProjectile(*weapon) || isDead(attacker)
             || ESM4Actors::get().isActing(attacker))
             return false;
-        if (ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
-            ESM4Actors::get().playAction(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
+        // Thrown weapons have their own throw sequence; launchers fire like guns
+        const std::string prefix(animPrefix(*weapon));
+        if (ESM4Actors::get().playAction(attacker, prefix + "attackthrow.kf") <= 0.f
+            && ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
+            ESM4Actors::get().playAction(attacker, prefix + "attackright.kf");
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
                 attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
