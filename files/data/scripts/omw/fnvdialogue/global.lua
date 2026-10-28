@@ -2383,6 +2383,8 @@ end
 -- ---------------------------------------------------------------- activation
 
 I.Activation.addHandlerForType(types.ESM4NPC, function(npc, actor)
+    -- a dead NPC is looted: the engine opens it as a container (MWClass::ESM4Npc::activate)
+    if isDead(npc) then return end
     if types.Player.objectIsInstance(actor) then
         startDialogue(npc, actor)
         return false
