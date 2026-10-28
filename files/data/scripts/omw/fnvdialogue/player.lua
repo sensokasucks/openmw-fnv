@@ -27,6 +27,9 @@ local window = nil -- the line
 local choices = nil -- the answers
 local open = false
 local closingByScript = false
+-- Opened, and the UiModeChanged for its Interface mode not seen yet (see UiModeChanged)
+local openPending = false
+local openPendingSince = 0
 
 local function destroyWindow()
     if window then
@@ -164,6 +167,8 @@ local function show(data)
     destroyWindow()
     if not open then
         setOpen(true)
+        openPending = I.UI.getMode() ~= 'Interface'
+        openPendingSince = core.getRealTime()
         I.UI.setMode('Interface', { windows = {} })
         if data.speakerObject then dialogueCamera.start(data.speakerObject) end
     end
@@ -211,6 +216,8 @@ return {
     engineHandlers = {
         onFrame = function(dt)
             dialogueCamera.update(core.getRealFrameDuration())
+            -- in case the change to Interface mode never comes as an event
+            if openPending and core.getRealTime() - openPendingSince > 1 then openPending = false end
             if open and continueAt ~= nil and core.getRealTime() >= continueAt then
                 local ok, talking = pcall(core.sound.isSayActive, closeSpeaker)
                 if not (ok and talking) then
@@ -244,8 +251,11 @@ return {
             close()
         end,
         UiModeChanged = function(data)
-            -- Escape or another window closed the dialogue
-            if open and not closingByScript and data.newMode ~= 'Interface' then
+            -- Escape or another window closed the dialogue. UiModeChanged comes a frame or two late, so the
+            -- close of a conversation that ended just before this one opened is ignored (as in fnvpipboy).
+            if data.newMode == 'Interface' then
+                openPending = false
+            elseif open and not closingByScript and not openPending then
                 setOpen(false)
                 destroyWindow()
                 core.sendGlobalEvent('FNVDialogueClose')
