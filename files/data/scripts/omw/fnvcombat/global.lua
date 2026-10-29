@@ -694,6 +694,7 @@ local function scanPickups(s)
     if types.ESM4NPC.objectIsInstance(actor) then s.weapons = combat.getActorWeapons(actor) end
     if actor.cell == nil or not types.ESM4NPC.objectIsInstance(actor) or types.ESM4Weapon == nil then return end
     local bar = ownDps(s) * (1 + gmst('fPickupWeaponMinDPSImprovementPercent', 0.5))
+    if s.disarmed ~= nil then bar = math.min(bar, s.disarmed.dps) end
     local minDist, maxDist = pickupBand(s)
     if unarmed then minDist, maxDist = minDist * gmst('fDisarmedPickupWeaponDistanceMult', 2),
         maxDist * gmst('fDisarmedPickupWeaponDistanceMult', 2) end
@@ -1066,6 +1067,8 @@ local function losAlly(s)
     return best
 end
 
+local checkDisarm -- below, with the weapon drops
+
 local function replan(s, distance, los)
     if s.refreshWeaponsUntil then
         s.weapons = combat.getActorWeapons(s.actor)
@@ -1084,6 +1087,7 @@ local function replan(s, distance, los)
     -- and a failed search is forgotten with the pass (only the failed spots are remembered, for 3 s)
     if coverWanted(s) and not s.inCoverLoop and s.cover == nil then findCover(s) end
     if coverWanted(s) and s.cover ~= nil then locations[#locations + 1] = P.L.COVER end
+    checkDisarm(s)
     scanCombatItems(s)
     scanPickups(s)
     local item = combatItem(s)
@@ -1543,25 +1547,65 @@ local function useCombatItem(s, step)
     return 'done'
 end
 
--- A dying NPC drops the weapon in its hands beside it with iDeathDropWeaponChance (100 in the ESM), where the
--- living can pick it up; the weapon's visible copy on the body goes with it.
-local function dropWeaponOnDeath(target)
-    if not types.ESM4NPC.objectIsInstance(target) or target.cell == nil then return end
-    if math.random(0, 99) >= gmst('iDeathDropWeaponChance', 0) then return end
+-- The NPC drops the weapon in its hands beside it, where the living can pick it up; the weapon's visible copy on
+-- the body goes with it. @return the weapon record dropped, or nil
+local function dropHeldWeapon(target)
+    if not types.ESM4NPC.objectIsInstance(target) or target.cell == nil then return nil end
     local weapon = combat.getActorWeapon(target)
-    if weapon == nil or weapon.type == PW.HAND_TO_HAND then return end
+    if weapon == nil or weapon.type == PW.HAND_TO_HAND then return nil end
     local ok, item = pcall(function() return types.Actor.inventory(target):find(weapon.id) end)
-    if not ok or item == nil then return end
+    if not ok or item == nil then return nil end
     local angle = math.random() * 2 * math.pi
     local at = target.position + util.vector3(math.cos(angle) * 40, math.sin(angle) * 40, 8)
     local okDrop = pcall(function()
         local one = item.count > 1 and item:split(1) or item
         one:teleport(target.cell, at, { rotation = util.transform.rotateZ(math.random() * 2 * math.pi) })
     end)
-    if okDrop then
-        pcall(combat.equipWeapon, target, nil)
-        print(('[combat] %s (%s) drops %s'):format(target.recordId, tostring(target.id), tostring(weapon.editorId)))
+    if not okDrop then return nil end
+    pcall(combat.equipWeapon, target, nil)
+    print(('[combat] %s (%s) drops %s'):format(target.recordId, tostring(target.id), tostring(weapon.editorId)))
+    return weapon
+end
+
+-- A dying NPC drops the weapon in its hands with iDeathDropWeaponChance (100 in the ESM).
+local function dropWeaponOnDeath(target)
+    if math.random(0, 99) >= gmst('iDeathDropWeaponChance', 0) then return end
+    dropHeldWeapon(target)
+end
+
+-- Disarm (ghidra-findings-6, hook 0x97f6d0): an NPC whose weapon arm is crippled (the left counts too for a
+-- two-handed weapon) drops what it holds. It remembers the weapon's damage a second, and its search for a weapon to
+-- pick up starts fCombatDisarmedFindBetterWeaponInitialTime 1 s later with a bar of min(1.5 x what it has left,
+-- that), so the dropped weapon itself qualifies, over twice the reach (fDisarmedPickupWeaponDistanceMult). [The
+-- original's other causes, a disarming hit and a weapon breaking, have no counterpart here yet.]
+local TWO_HANDED_ANIM_TYPES = { [2] = true, [5] = true, [6] = true, [8] = true, [9] = true }
+checkDisarm = function(s)
+    local actor = s.actor
+    if not types.ESM4NPC.objectIsInstance(actor) then return end
+    local right = (stats.get(actor, 'RightAttackCondition') or 1) <= 0
+    local left = (stats.get(actor, 'LeftAttackCondition') or 1) <= 0
+    local held = s.inHand
+    if held ~= nil and held.type ~= PW.HAND_TO_HAND then
+        -- a newly crippled arm (one crippled already when the weapon was taken up is lived with)
+        local twoHanded = TWO_HANDED_ANIM_TYPES[held.animType or 0] == true
+        local crippledNow = (right and not s.rightArmCrippled) or (twoHanded and left and not s.leftArmCrippled)
+        if crippledNow then
+            local lostDps = weaponDps(actor, held)
+            if dropHeldWeapon(actor) ~= nil then
+                s.disarmed = { dps = lostDps, at = simTime }
+                s.inHand, s.gun = nil, nil
+                s.equippedType, s.drawnType = PW.HAND_TO_HAND, PW.HAND_TO_HAND
+                s.refreshWeaponsUntil = simTime + 1.5
+                s.nextPickupScan = simTime + gmst('fCombatDisarmedFindBetterWeaponInitialTime', 1)
+                s.replanAt = simTime
+                print(('[combat] %s (%s) is disarmed: %s arm crippled'):format(actor.recordId, tostring(actor.id),
+                    right and 'right' or 'left'))
+            end
+        end
+    elseif s.disarmed ~= nil and held ~= nil then
+        s.disarmed = nil
     end
+    s.rightArmCrippled, s.leftArmCrippled = right, left
 end
 
 -- CombatProcedureActivateObject (FalloutNV.exe 0x9ca760): the pickup idle (PickUpGroundObject_0.3) and the item
