@@ -488,6 +488,22 @@ namespace MWMechanics::ESM4Physical
                             settleAtBody(actor, *animation);
                             state.mSettled = true;
                         }
+                        // The get-up sequence starts from a lying pose of its own, placed from the actor: the actor
+                        // turns and moves so that pose lies where the body does
+                        if (state.mRagdoll && animation != nullptr)
+                            if (const auto alignment = animation->getGetUpAlignment())
+                            {
+                                MWBase::World& world = *MWBase::Environment::get().getWorld();
+                                osg::Vec3f rotation = actor.getRefData().getPosition().asRotationVec3();
+                                rotation.z() += alignment->first;
+                                world.rotateObject(actor, rotation);
+                                const osg::Vec3f position
+                                    = actor.getRefData().getPosition().asVec3() + alignment->second;
+                                const MWWorld::Ptr moved = world.moveObject(actor, position);
+                                animation = getAnimation(moved);
+                                if (animation != nullptr)
+                                    animation->applyRagdollPose();
+                            }
                         float length = 0.f;
                         if (animation != nullptr)
                             length = animation->playGetUp();

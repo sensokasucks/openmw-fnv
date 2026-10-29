@@ -66,6 +66,8 @@ namespace MWPhysics
         // Bodies lying this long are frozen whatever Bullet thinks (a limb wedged in a wall jitters forever)
         constexpr float sMaxSimulated = 12.f;
         constexpr float sProxyRadius = 1024.f;
+        // How far a body's centre may be under the terrain before it is put back on top
+        constexpr float sMaxUnderground = 4.f;
         constexpr float sProxyCheckEvery = 0.5f;
 
         osg::Matrixf toOsg(const btTransform& transform)
@@ -247,6 +249,7 @@ namespace MWPhysics
             bone.mNifIndex = static_cast<int>(nifIndex);
             // Bits 8-12 of the 32-bit filter (layer, flags, group)
             bone.mBodyPart = nifBody.mBody->mHavokFilter.mFlags & 0x1f;
+            bone.mBind = nifBody.mNode->mTransform;
             const Nif::bhkRigidBodyCInfo& info = nifBody.mBody->mInfo;
             bone.mMass = info.mMass > 0.01f ? info.mMass : 1.f;
             bone.mFriction = info.mFriction;
@@ -279,6 +282,12 @@ namespace MWPhysics
             info.m_angularDamping = bone.mAngularDamping;
             bone.mBody = std::make_unique<btRigidBody>(info);
             bone.mBody->setSleepingThresholds(sLinearSleep, sAngularSleep);
+            // Swept collision so a small, fast part (a hand, a foot) doesn't pass through the ground in one step
+            btVector3 centre;
+            btScalar radius = 0.f;
+            bone.mShape->getBoundingSphere(centre, radius);
+            bone.mBody->setCcdMotionThreshold(radius * 0.5f);
+            bone.mBody->setCcdSweptSphereRadius(radius * 0.4f);
             bone.mBody->setDeactivationTime(0.f);
             bone.mBody->setUserPointer(ragdoll.get());
         }
@@ -434,6 +443,14 @@ namespace MWPhysics
 
     void Ragdoll::seedFromBones()
     {
+        if (!mBones.empty() && mRoot != nullptr)
+        {
+            // Which way the pelvis faces, for isFaceUp: the actor's forward (+Y) in the pelvis bone's frame
+            const btTransform rootWorld = toBullet(worldMatrixOf(*mRoot));
+            const btTransform pelvisWorld = toBullet(worldMatrixOf(*mBones.front().mNode));
+            const btVector3 forward = rootWorld.getBasis() * btVector3(0, 1, 0);
+            mForward = (pelvisWorld.getBasis().transpose() * forward).normalized();
+        }
         for (Bone& bone : mBones)
         {
             const btTransform boneWorld = toBullet(worldMatrixOf(*bone.mNode));
@@ -627,6 +644,23 @@ namespace MWPhysics
         }
         if (mAge > sMaxSimulated)
             mRestTime = std::max(mRestTime, sRestSettle * sRestWindows);
+        // A body whose centre went well through the terrain (a light limb pressed in by the joints or a fast fall;
+        // the heightfield then pushes it further down from below) comes back up onto the surface. A hand or foot
+        // lying on the ground has its centre a unit or two under it, which is left alone
+        for (Bone& bone : mBones)
+        {
+            btTransform transform = bone.mBody->getWorldTransform();
+            const std::optional<float> ground = mWorld->getTerrainHeight(transform.getOrigin());
+            if (!ground || *ground - transform.getOrigin().z() <= sMaxUnderground)
+                continue;
+            transform.getOrigin().setZ(*ground);
+            bone.mBody->setWorldTransform(transform);
+            bone.mMotion->setWorldTransform(transform);
+            btVector3 velocity = bone.mBody->getLinearVelocity();
+            if (velocity.z() < 0.f)
+                velocity.setZ(0.f);
+            bone.mBody->setLinearVelocity(velocity);
+        }
         applyToBones();
         if (isAtRest())
             freeze();
@@ -673,11 +707,19 @@ namespace MWPhysics
     {
         if (mBones.empty())
             return true;
-        // Bip01 Pelvis: its local X points up the spine and Z forward out of the belly (Gamebryo bipeds), so a body
-        // on its back has that axis pointing up
+        // The first body is "Bip01 NonAccum" or the pelvis, whose axes differ by skeleton: the belly is where the
+        // actor's forward was in that body's frame when it went down
         const btTransform pelvis = mBones.front().mBody->getWorldTransform() * mBones.front().mBoneToBody.inverse();
-        const btVector3 forward = pelvis.getBasis().getColumn(2);
-        return forward.z() > 0.f;
+        return (pelvis.getBasis() * mForward).z() > 0.f;
+    }
+
+    void Ragdoll::restoreBindPose()
+    {
+        for (const Bone& bone : mBones)
+        {
+            bone.mNode->setRotation(bone.mBind.mRotation);
+            bone.mNode->setTranslation(bone.mBind.mTranslation);
+        }
     }
 
     std::map<std::string, btTransform, std::less<>> Ragdoll::getPose() const
@@ -768,14 +810,14 @@ namespace MWPhysics
     {
         struct CollectStatics : btBroadphaseAabbCallback
         {
-            std::vector<const btCollisionObject*> mFound;
+            std::vector<std::pair<const btCollisionObject*, int>> mFound;
             bool process(const btBroadphaseProxy* proxy) override
             {
                 const auto* object = static_cast<const btCollisionObject*>(proxy->m_clientObject);
                 if (object != nullptr
                     && (proxy->m_collisionFilterGroup
                         & (CollisionType_World | CollisionType_HeightMap | CollisionType_Door)))
-                    mFound.push_back(object);
+                    mFound.emplace_back(object, proxy->m_collisionFilterGroup);
                 return true;
             }
         };
@@ -787,7 +829,7 @@ namespace MWPhysics
         const btVector3 extent(radius, radius, radius);
         CollectStatics callback;
         mPhysics.aabbTest(centre - extent, centre + extent, callback);
-        for (const btCollisionObject* source : callback.mFound)
+        for (const auto& [source, group] : callback.mFound)
         {
             auto found = mProxies.find(source);
             if (found != mProxies.end())
@@ -809,7 +851,9 @@ namespace MWPhysics
                 if (const auto* object = dynamic_cast<const Object*>(holder))
                     proxy.mShapeInstance = object->getShapeInstance();
             proxy.mLastUsed = mTime;
-            mWorld->addRigidBody(proxy.mBody.get(), CollisionType_World, CollisionType_Actor);
+            // The terrain keeps its group, so getTerrainHeight can find it alone
+            mWorld->addRigidBody(proxy.mBody.get(),
+                (group & CollisionType_HeightMap) ? CollisionType_HeightMap : CollisionType_World, CollisionType_Actor);
             mProxies.emplace(source, std::move(proxy));
         }
         // Proxies nothing has needed for a while go
@@ -823,6 +867,19 @@ namespace MWPhysics
             else
                 ++it;
         }
+    }
+
+    std::optional<float> RagdollWorld::getTerrainHeight(const btVector3& point) const
+    {
+        const btVector3 from(point.x(), point.y(), point.z() + 4096.f);
+        const btVector3 to(point.x(), point.y(), point.z() - 4096.f);
+        btCollisionWorld::ClosestRayResultCallback callback(from, to);
+        callback.m_collisionFilterGroup = CollisionType_Actor;
+        callback.m_collisionFilterMask = CollisionType_HeightMap;
+        mWorld->rayTest(from, to, callback);
+        if (!callback.hasHit())
+            return std::nullopt;
+        return static_cast<float>(callback.m_hitPointWorld.z());
     }
 
     void RagdollWorld::onCollisionObjectRemoved(const btCollisionObject* object)

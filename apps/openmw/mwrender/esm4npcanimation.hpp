@@ -135,6 +135,10 @@ namespace MWRender
         std::optional<osg::Vec3f> getRagdollPosition() const;
         // Poses the bones from the (frozen) ragdoll again, after the actor was moved to where it lies
         void applyRagdollPose();
+        // How far the actor must turn (radians, as its z rotation) and move for the get-up sequence's first, lying
+        // frame to lie along the ragdoll's spine with its pelvis on the ragdoll's; nullopt without a ragdoll or a
+        // get-up sequence
+        std::optional<std::pair<float, osg::Vec3f>> getGetUpAlignment() const;
         // The ragdoll lets go of the bones; a living actor is down and plays its get-up next (playGetUp)
         void endRagdoll();
         // A placed corpse takes the pose its reference carries (ESM4 XRGD/XRGB) as a frozen ragdoll. False without a
@@ -235,8 +239,10 @@ namespace MWRender
         void spawnLimbGore(const ESM4::BodyPartData::BodyPart& part, const osg::Vec3f& direction, std::uint32_t seed);
 
         // The skeleton's get-up sequence (idleanims/getup.kf and its variants), or the lying death pose when it has
-        // none; the second is true for a get-up sequence (which starts lying down and ends standing).
-        std::optional<std::pair<VFS::Path::Normalized, bool>> findGetUpSequence() const;
+        // none; the second is true for a get-up sequence (which starts lying down and ends standing). Given how the
+        // body lies, the face-up or face-down get-up comes first (the IDLE tree's GetUpFaceUp / GetUpFaceDown).
+        std::optional<std::pair<VFS::Path::Normalized, bool>> findGetUpSequence(
+            std::optional<bool> faceUp = std::nullopt) const;
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);

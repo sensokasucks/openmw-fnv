@@ -69,6 +69,7 @@ namespace MWPhysics
             const void* mEntity = nullptr; // the NIF record, to match constraints
             int mNifIndex = -1; // among the skeleton's bodies in NIF tree order (a placed pose's entry)
             int mBodyPart = -1; // the biped part in the body's collision filter (bits 8-12)
+            Nif::NiTransform mBind; // the bone's local transform in the skeleton
         };
 
         // A bone's local transform in a placed corpse's pose (ESM4 XRGD), relative to its parent node
@@ -106,8 +107,11 @@ namespace MWPhysics
         void applyToBones();
         // Where the pelvis (the first body) is in the world
         osg::Vec3f getRootPosition() const;
-        // Whether the body lies on its back: the pelvis bone's forward axis points up
+        // Whether the body lies on its back: the way the pelvis faced when the body went down now points up
         bool isFaceUp() const;
+        // The bones with bodies back in the skeleton's pose (a sequence that doesn't drive one, e.g. a get-up with
+        // no "Bip01 NonAccum" track, would leave it where the ragdoll left it)
+        void restoreBindPose();
         const std::vector<Bone>& getBones() const { return mBones; }
         // World transforms of the bodies, by bone name (to save a pose)
         std::map<std::string, btTransform, std::less<>> getPose() const;
@@ -143,6 +147,7 @@ namespace MWPhysics
         btVector3 mWindowCentre;
         float mRestTime = 0.f;
         float mAge = 0.f;
+        btVector3 mForward{ 0, 1, 0 }; // the actor's forward in the pelvis body's frame, when it went down
     };
 
     // The dynamics world the ragdolls fall in. OpenMW's own physics is a collision world without dynamics, so the
@@ -164,6 +169,8 @@ namespace MWPhysics
         void updateStaticProxies(const osg::Vec3f& position, float radius);
         // The physics system is dropping this collision object: its proxy goes too
         void onCollisionObjectRemoved(const btCollisionObject* object);
+        // The height of the mirrored terrain at the point, if it has any there
+        std::optional<float> getTerrainHeight(const btVector3& point) const;
 
         std::size_t getActiveCount() const;
         // At most this many ragdolls simulate at once; the oldest freeze where they lie

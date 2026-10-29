@@ -1,6 +1,7 @@
 #include "esm4npcanimation.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include <components/esm4/loadarma.hpp>
@@ -16,6 +17,7 @@
 #include <span>
 
 #include <osg/Material>
+#include <osg/Math>
 #include <osg/MatrixTransform>
 #include <osg/io_utils>
 #include <osg/Texture2D>
@@ -25,6 +27,7 @@
 #include <components/misc/mathutil.hpp>
 #include <components/misc/constants.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/nifosg/controller.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 #include <components/misc/strings/algorithm.hpp>
 #include <components/resource/imagemanager.hpp>
@@ -1151,7 +1154,8 @@ namespace MWRender
                             << bone->getNumParents() << " for " << mPtr.toString();
     }
 
-    std::optional<std::pair<VFS::Path::Normalized, bool>> ESM4NpcAnimation::findGetUpSequence() const
+    std::optional<std::pair<VFS::Path::Normalized, bool>> ESM4NpcAnimation::findGetUpSequence(
+        std::optional<bool> faceUp) const
     {
         const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
         const std::string_view skeleton = skeletonPath.value();
@@ -1163,6 +1167,12 @@ namespace MWRender
         static constexpr std::string_view getUpFiles[] = { "getup.kf", "specialidle_getupfaceup.kf",
             "specialidle_getup.kf", "getupleft.kf", "mtspecialidle_getupleft.kf", "specialidle_getupleft.kf" };
         static constexpr std::string_view poseFiles[] = { "deathpose1.kf", "deathpose2.kf" };
+        // The IDLE tree's GetUpFaceUp and GetUpFaceDown (FalloutNV.esm: humans MT_KnockDownFaceUp.kf and
+        // MT_KnockDownFaceDown.kf, the only human get-ups; creatures SpecialIdle_GetUpFaceUp.kf and the like)
+        static constexpr std::string_view faceUpFiles[] = { "mt_knockdownfaceup.kf", "specialidle_getupfaceup.kf",
+            "mtspecialidle_knockdownfaceup.kf" };
+        static constexpr std::string_view faceDownFiles[] = { "mt_knockdownfacedown.kf",
+            "specialidle_getupfacedown.kf", "mtspecialidle_knockdownfacedown.kf" };
         const VFS::Manager& vfs = *mResourceSystem->getVFS();
         auto findFile = [&](std::span<const std::string_view> names) -> std::optional<VFS::Path::Normalized> {
             for (std::string_view name : names)
@@ -1173,6 +1183,13 @@ namespace MWRender
             }
             return std::nullopt;
         };
+        if (faceUp)
+        {
+            if (const std::optional<VFS::Path::Normalized> getUp = findFile(*faceUp ? faceUpFiles : faceDownFiles))
+                return std::make_pair(*getUp, true);
+            if (const std::optional<VFS::Path::Normalized> getUp = findFile(*faceUp ? faceDownFiles : faceUpFiles))
+                return std::make_pair(*getUp, true);
+        }
         if (const std::optional<VFS::Path::Normalized> getUp = findFile(getUpFiles))
             return std::make_pair(*getUp, true);
         if (const std::optional<VFS::Path::Normalized> pose = findFile(poseFiles))
@@ -1207,7 +1224,7 @@ namespace MWRender
             return 0.f;
         mDown = true;
         mInAction = false;
-        const auto sequence = findGetUpSequence();
+        const auto sequence = findGetUpSequence(true);
         if (!sequence)
             return 0.f;
         // The fall: the get-up sequence backwards, holding its lying first frame (a death pose is lying already)
@@ -1220,9 +1237,11 @@ namespace MWRender
     {
         if (mDead || !mDown)
             return 0.f;
+        // Which way up the body lies picks the sequence (asked before the ragdoll lets go)
+        const bool faceUp = isRagdollFaceUp();
         if (mRagdollPosing)
             endRagdoll();
-        const auto sequence = findGetUpSequence();
+        const auto sequence = findGetUpSequence(faceUp);
         if (!sequence || !sequence->second)
             return 0.f;
         // The get-up sequence forwards, from lying to standing, holding its last frame until standUp
@@ -1378,11 +1397,114 @@ namespace MWRender
             mRagdoll->applyToBones();
     }
 
+    std::optional<std::pair<float, osg::Vec3f>> ESM4NpcAnimation::getGetUpAlignment() const
+    {
+        if (mRagdoll == nullptr || !mRagdoll->isStarted() || !mRagdollPosing)
+            return std::nullopt;
+        const auto sequence = findGetUpSequence(isRagdollFaceUp());
+        if (!sequence || !sequence->second)
+            return std::nullopt;
+        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes
+            = mResourceSystem->getKeyframeManager()->get(sequence->first);
+        const NodeMap& nodeMap = getNodeMap();
+        const auto pelvisFound = nodeMap.find(std::string_view("Bip01 Pelvis"));
+        const auto headFound = nodeMap.find(std::string_view("Bip01 Head"));
+        if (pelvisFound == nodeMap.end() || headFound == nodeMap.end())
+            return std::nullopt;
+        const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
+        const auto& bones = mRagdoll->getBones();
+        osg::Node* rootParent = nullptr;
+        // A bone in the skeleton root's space at the sequence's first frame: its own track and its parents' up to
+        // Bip01, bound as playKeyframesFONV binds them; a bone the sequence doesn't drive is in the skeleton's pose
+        // (bodies are put back by endRagdoll)
+        auto atStart = [&](osg::Node* node) -> std::optional<osg::Matrixf> {
+            osg::Matrixf matrix;
+            while (node != nullptr)
+            {
+                auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node);
+                if (transform == nullptr)
+                    return std::nullopt;
+                const std::string& name = transform->getName();
+                osg::Vec3f translation = transform->getMatrix().getTrans();
+                osg::Quat rotation = transform->getMatrix().getRotate();
+                if (auto bone = std::find_if(
+                        bones.begin(), bones.end(), [&](const auto& b) { return b.mNode == transform; });
+                    bone != bones.end())
+                {
+                    translation = bone->mBind.mTranslation;
+                    rotation = bone->mBind.toMatrix().getRotate();
+                }
+                else if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
+                {
+                    translation = rest->second.mTranslation;
+                    rotation = rest->second.mRotation;
+                }
+                std::string track = name;
+                if (name == "Bip01" && !hasAccumRootTrack)
+                    track = "Bip01 NonAccum";
+                else if (name == "Bip01 NonAccum" && !hasAccumRootTrack)
+                    track.clear();
+                if (!track.empty())
+                    if (auto found = keyframes->mKeyframeControllers.find(track);
+                        found != keyframes->mKeyframeControllers.end())
+                        if (const auto* controller
+                            = dynamic_cast<const NifOsg::KeyframeController*>(found->second.get()))
+                        {
+                            const auto start = controller->getTransformation(0.f);
+                            if (start.mTranslation)
+                                translation = *start.mTranslation;
+                            if (start.mRotation)
+                                rotation = *start.mRotation;
+                        }
+                matrix = matrix * osg::Matrixf::rotate(rotation) * osg::Matrixf::translate(translation);
+                if (name == "Bip01")
+                {
+                    rootParent = node->getNumParents() > 0 ? node->getParent(0) : nullptr;
+                    return matrix;
+                }
+                node = node->getNumParents() > 0 ? node->getParent(0) : nullptr;
+            }
+            return std::nullopt;
+        };
+        const std::optional<osg::Matrixf> pelvisAtStart = atStart(pelvisFound->second.get());
+        const std::optional<osg::Matrixf> headAtStart = atStart(headFound->second.get());
+        if (!pelvisAtStart || !headAtStart || rootParent == nullptr)
+            return std::nullopt;
+        auto worldOf = [](osg::Node& node) -> std::optional<osg::Matrixf> {
+            const osg::NodePathList paths = node.getParentalNodePaths(); // (the paths end at the node itself)
+            if (paths.empty())
+                return std::nullopt;
+            return osg::computeLocalToWorld(paths[0]);
+        };
+        const auto pelvisWorld = worldOf(*pelvisFound->second);
+        const auto headWorld = worldOf(*headFound->second);
+        const auto rootWorld = worldOf(*rootParent);
+        if (!pelvisWorld || !headWorld || !rootWorld)
+            return std::nullopt;
+        // Headings as the actor's z rotation measures them: 0 along +Y, growing towards +X
+        auto heading = [](const osg::Vec3f& v) { return std::atan2(v.x(), v.y()); };
+        // The sequence's spine (pelvis to head) as it would lie with the actor turned as it is, and the body's
+        const osg::Vec3f spineAtStart
+            = osg::Matrixf::transform3x3(headAtStart->getTrans() - pelvisAtStart->getTrans(), *rootWorld);
+        const osg::Vec3f spine = headWorld->getTrans() - pelvisWorld->getTrans();
+        const float turn = std::remainder(heading(spine) - heading(spineAtStart), 2.f * osg::PIf);
+        // Then where the sequence's pelvis would be once turned, against where the body's lies
+        osg::Vec3f pelvisOffset = osg::Matrixf::transform3x3(pelvisAtStart->getTrans(), *rootWorld);
+        const float c = std::cos(turn);
+        const float sn = std::sin(turn);
+        pelvisOffset = osg::Vec3f(pelvisOffset.x() * c + pelvisOffset.y() * sn,
+            -pelvisOffset.x() * sn + pelvisOffset.y() * c, pelvisOffset.z());
+        osg::Vec3f move = pelvisWorld->getTrans() - (rootWorld->getTrans() + pelvisOffset);
+        move.z() = 0.f;
+        return std::make_pair(turn, move);
+    }
+
     void ESM4NpcAnimation::endRagdoll()
     {
         if (mRagdoll == nullptr || !mRagdollPosing)
             return;
         mRagdoll->freeze();
+        mRagdoll->restoreBindPose();
         mRagdollPosing = false;
         // Bodies seeded again from whatever pose the bones hold when it next starts
         mRagdoll.reset();
