@@ -835,9 +835,10 @@ local function bestWeapons(s, distance)
             if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
         end
     end
-    -- an NPC always has its fists (so a gun without rounds loses to them); creatures fight with their own attacks
+    -- an NPC always has its fists, scored so that only a gun without rounds (score / 10000) loses to them (run 33: a
+    -- knife settler boxed when they scored its melee damage); creatures fight with their own attacks
     if best[PW.HAND_TO_HAND] == nil and types.ESM4NPC.objectIsInstance(s.actor) then
-        best[PW.HAND_TO_HAND] = { score = math.max(stats.get(s.actor, 'MeleeDamage') or 1, 1) }
+        best[PW.HAND_TO_HAND] = { score = 0.01 }
     end
     if next(best) == nil then best[PW.HAND_TO_HAND] = { score = 1 } end
     return best
@@ -1008,7 +1009,9 @@ local function worldState(s, distance, los)
         if fact == P_F.HAS_WEAPON_TYPE then return best[param] ~= nil and 1 or 0 end
         if fact == P_F.WANTS_TO_FLEE then return s.fleeing and 1 or 0 end
         -- the original never writes USED_COMBAT_ITEM; the goal stops once the cooldown re-arms
-        if fact == P_F.HAS_COMBAT_ITEM then return (param ~= nil and param == s.restoreItem) and 1 or 0 end
+        if fact == P_F.HAS_COMBAT_ITEM then
+            return (param ~= nil and (param == s.restoreItem or param == s.buffItem)) and 1 or 0
+        end
         -- a weapon to pick up is never "used": the USE goal passes it by, ACTIVATE fetches it
         if fact == P_F.USED_COMBAT_ITEM then return (s.pickup and param == s.pickup.key) and 1 or 0 end
         if fact == P_F.EXECUTION_FLAGS then
@@ -1082,7 +1085,24 @@ end
 
 local checkDisarm -- below, with the weapon drops
 
+-- A weapon put in the hands that is not there a moment later (dropped, taken by a script) leaves the NPC with
+-- its fists until the next plan.
+local function checkEquipped(s)
+    if s.equipCheckAt == nil or simTime < s.equipCheckAt or s.inHand == nil then return end
+    s.equipCheckAt = nil
+    if not types.ESM4NPC.objectIsInstance(s.actor) then return end
+    local held = combat.getActorWeapon(s.actor)
+    if held ~= nil and held.id == s.inHand.id then return end
+    print(('[combat] %s (%s) has no %s to hold'):format(s.actor.recordId, tostring(s.actor.id),
+        tostring(s.inHand.editorId)))
+    s.inHand, s.gun = nil, nil
+    s.equippedType, s.drawnType = PW.HAND_TO_HAND, PW.HAND_TO_HAND
+    s.weapons = combat.getActorWeapons(s.actor)
+    s.replanAt = simTime
+end
+
 local function replan(s, distance, los)
+    checkEquipped(s)
     if s.refreshWeaponsUntil then
         s.weapons = combat.getActorWeapons(s.actor)
         if simTime > s.refreshWeaponsUntil then s.refreshWeaponsUntil = nil end
@@ -1152,6 +1172,9 @@ local function equipType(s, weaponType)
         if s.inHand == nil or s.inHand.id ~= b.weapon.id then
             combat.equipWeapon(actor, b.weapon.id)
             s.inHand = b.weapon
+            -- the equip lands a frame later; checked then (run 33: a weapon just dropped was "equipped" from a
+            -- stale list and the NPC stood attacking with nothing in hand)
+            s.equipCheckAt = simTime + 0.3
         end
         combat.drawWeapon(actor, true)
     elseif types.ESM4NPC.objectIsInstance(actor) then
@@ -1610,7 +1633,7 @@ checkDisarm = function(s)
                 s.equippedType, s.drawnType = PW.HAND_TO_HAND, PW.HAND_TO_HAND
                 s.refreshWeaponsUntil = simTime + 1.5
                 s.nextPickupScan = simTime + gmst('fCombatDisarmedFindBetterWeaponInitialTime', 1)
-                s.replanAt = simTime
+                s.replanAt = simTime + 0.3 -- (the drop lands a frame later; a plan now would still list the weapon)
                 print(('[combat] %s (%s) is disarmed: %s arm crippled'):format(actor.recordId, tostring(actor.id),
                     right and 'right' or 'left'))
             end
