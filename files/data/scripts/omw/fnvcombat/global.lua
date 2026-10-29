@@ -54,6 +54,8 @@ if combat == nil or types.ESM4Creature == nil then
 end
 local stats = core.obscript.stats
 local ai = core.obscript.ai
+-- The actors' physical state (posture, limbs): a knocked-down actor fights again once it stands (core.obscript.physical)
+local physical = core.obscript and core.obscript.physical
 
 local TICK_EVERY = 0.2 -- seconds between AI updates
 local GIVE_UP_DISTANCE = 6000 -- combat ends when the target gets this far
@@ -1774,6 +1776,17 @@ local function fight(s)
         stopCombat(actor, 'target dead or gone')
         return
     end
+    -- Knocked down, getting up or unconscious: the plan is dropped and nothing is done until it stands again
+    -- (the posture event then forces a new plan)
+    if physical ~= nil and not physical.canAct(actor) then
+        if s.plan ~= nil then
+            print(('[combat] %s (%s) is %s: plan dropped'):format(actor.recordId, tostring(actor.id),
+                physical.getPosture(actor)))
+        end
+        s.plan, s.step, s.stepState, s.planText = nil, nil, nil, nil
+        s.fireNow = nil
+        return
+    end
     local offset = target.position - actor.position
     local distance = util.vector2(offset.x, offset.y):length()
     if distance > GIVE_UP_DISTANCE or actor.cell.worldSpaceId ~= target.cell.worldSpaceId then
@@ -1950,6 +1963,22 @@ return {
         actors = function() return tracked end,
     },
     eventHandlers = {
+        -- From the engine (core.obscript.physical): an actor's posture changed. Back on its feet, a fighter plans
+        -- afresh; its attackers re-plan too, since a target on the ground is not where it was.
+        FNVPhysical_Posture = function(e)
+            local actor = e.actor
+            if actor == nil or not actor:isValid() then return end
+            local s = fighting[actor.id]
+            if s ~= nil and e.posture == 'standing' and e.previous ~= 'staggering' then
+                s.replanAt = 0
+                print(('[combat] %s (%s) is up again: new plan'):format(actor.recordId, tostring(actor.id)))
+            end
+            if e.posture == 'knockedDown' or e.posture == 'unconscious' then
+                for _, other in pairs(fighting) do
+                    if other.target == actor then other.replanAt = 0 end
+                end
+            end
+        end,
         -- From the player script: { attacker, weapon = record id, origin = vec3, direction = vec3 }
         FNVCombat_Fire = function(e)
             local player = e.attacker
@@ -1994,6 +2023,10 @@ return {
             end
             if target ~= nil and target:isValid() and isActor(target) then
                 if fighting[target.id] then fighting[target.id].lastHitAt = simTime end
+                if e.knockedDown then
+                    print(('[combat] %s (%s) is knocked down by %s (%.0f damage)'):format(target.recordId,
+                        tostring(target.id), tostring(e.attacker.recordId), e.damage or 0))
+                end
                 scriptEvent(target, 'OnHit', e.attacker)
                 if e.killed then
                     scriptEvent(target, 'OnDeath', e.attacker)

@@ -965,6 +965,12 @@ namespace MWRender
     {
         if (mDead)
             return;
+        if (mDown)
+        {
+            // taken up again by standUp
+            mLocomotion = locomotion;
+            return;
+        }
         if (locomotion == mLocomotion && !force)
             return;
         mLocomotion = locomotion;
@@ -978,7 +984,7 @@ namespace MWRender
 
     float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion, bool once)
     {
-        if (mDead)
+        if (mDead || mDown)
             return 0.f;
         const VFS::Path::Normalized path = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model));
         if (!mResourceSystem->getVFS()->exists(path))
@@ -999,7 +1005,7 @@ namespace MWRender
 
     void ESM4NpcAnimation::resumeLocomotion()
     {
-        if (!mInAction || mDead)
+        if (!mInAction || mDead || mDown)
             return;
         mInAction = false;
         playLocomotion();
@@ -1007,7 +1013,7 @@ namespace MWRender
 
     float ESM4NpcAnimation::playActionFONV(std::string_view file)
     {
-        if (mDead)
+        if (mDead || mDown)
             return 0.f;
         // Attacks sit next to the skeleton, idles in idleanims/
         const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
@@ -1037,7 +1043,7 @@ namespace MWRender
         if (direction == mDirection)
             return;
         mDirection = direction;
-        if (mLocomotion != Locomotion::Idle && !mInAction && !mDead)
+        if (mLocomotion != Locomotion::Idle && !mInAction && !mDead && !mDown)
             playLocomotion();
     }
 
@@ -1070,7 +1076,7 @@ namespace MWRender
         if (file == mIdleSequence)
             return;
         mIdleSequence = file;
-        if (mLocomotion == Locomotion::Idle && !mInAction && !mDead)
+        if (mLocomotion == Locomotion::Idle && !mInAction && !mDead && !mDown)
             playLocomotion();
     }
 
@@ -1113,19 +1119,13 @@ namespace MWRender
                             << bone->getNumParents() << " for " << mPtr.toString();
     }
 
-    void ESM4NpcAnimation::playDeath(bool instant)
+    std::optional<std::pair<VFS::Path::Normalized, bool>> ESM4NpcAnimation::findGetUpSequence() const
     {
-        if (mDead)
-            return;
-        mDead = true;
-        showWeapon({});
-        // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
-        // lays it down; humans have death poses.
         const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
         const std::string_view skeleton = skeletonPath.value();
         const std::size_t slash = skeleton.find_last_of('/');
         if (slash == std::string_view::npos)
-            return;
+            return std::nullopt;
         const std::string idles = std::string(skeleton.substr(0, slash)) + "/idleanims/";
         // Get-up sequences start lying down; death poses are the lying pose itself.
         static constexpr std::string_view getUpFiles[] = { "getup.kf", "specialidle_getupfaceup.kf",
@@ -1141,16 +1141,67 @@ namespace MWRender
             }
             return std::nullopt;
         };
-        const std::optional<VFS::Path::Normalized> getUp = findFile(getUpFiles);
-        const std::optional<VFS::Path::Normalized> pose = getUp ? std::nullopt : findFile(poseFiles);
-        if (!getUp && !pose)
+        if (const std::optional<VFS::Path::Normalized> getUp = findFile(getUpFiles))
+            return std::make_pair(*getUp, true);
+        if (const std::optional<VFS::Path::Normalized> pose = findFile(poseFiles))
+            return std::make_pair(*pose, false);
+        return std::nullopt;
+    }
+
+    void ESM4NpcAnimation::playDeath(bool instant)
+    {
+        if (mDead)
+            return;
+        mDead = true;
+        mDown = false;
+        showWeapon({});
+        // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
+        // lays it down; humans have death poses.
+        const auto sequence = findGetUpSequence();
+        if (!sequence)
         {
             Log(Debug::Verbose) << "No death sequence for " << mPtr.getCellRef().getRefId();
             return;
         }
-        const auto source = std::make_shared<OnceTimeSource>(getUp.has_value(), instant);
-        source->mDuration
-            = playKeyframesFONV(getUp ? *getUp : *pose, source, false, instant ? 0.f : sDefaultBlendTime);
+        const auto source = std::make_shared<OnceTimeSource>(sequence->second, instant);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false, instant ? 0.f : sDefaultBlendTime);
+    }
+
+    float ESM4NpcAnimation::playKnockdown()
+    {
+        if (mDead || mDown)
+            return 0.f;
+        mDown = true;
+        mInAction = false;
+        const auto sequence = findGetUpSequence();
+        if (!sequence)
+            return 0.f;
+        // The fall: the get-up sequence backwards, holding its lying first frame (a death pose is lying already)
+        const auto source = std::make_shared<OnceTimeSource>(sequence->second, false);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false);
+        return source->mDuration;
+    }
+
+    float ESM4NpcAnimation::playGetUp()
+    {
+        if (mDead || !mDown)
+            return 0.f;
+        const auto sequence = findGetUpSequence();
+        if (!sequence || !sequence->second)
+            return 0.f;
+        // The get-up sequence forwards, from lying to standing, holding its last frame until standUp
+        const auto source = std::make_shared<OnceTimeSource>(false, false);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false);
+        return source->mDuration;
+    }
+
+    void ESM4NpcAnimation::standUp()
+    {
+        if (mDead || !mDown)
+            return;
+        mDown = false;
+        mInAction = false;
+        playLocomotion();
     }
 
     bool ESM4NpcAnimation::isFemale() const

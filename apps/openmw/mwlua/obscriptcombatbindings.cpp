@@ -84,7 +84,7 @@ namespace MWLua
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
         // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB), corpse (the target
-        // was already dead), explosion (a blast) }
+        // was already dead), explosion (a blast), knockedDown (the hit knocked the target down, see physical) }
         // Melee, unarmed and creature blows send it too, with melee = true (weapon nil when unarmed).
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon,
             const Combat::HitResult& hit, bool melee = false)
@@ -110,6 +110,8 @@ namespace MWLua
                     data["corpse"] = true;
                 if (hit.mExplosion)
                     data["explosion"] = true;
+                if (hit.mKnockedDown)
+                    data["knockedDown"] = true;
                 context.mLuaEvents->addGlobalEvent(
                     { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
             });

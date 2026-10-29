@@ -75,6 +75,7 @@
 #include "object.hpp"
 #include "obscriptaibindings.hpp"
 #include "obscriptcombatbindings.hpp"
+#include "obscriptphysicalbindings.hpp"
 #include "obscriptdialoguebindings.hpp"
 #include "obscriptradiobindings.hpp"
 #include "obscripteffectbindings.hpp"
@@ -823,6 +824,7 @@ namespace MWLua
         api["ai"] = initObScriptAIBindings(context);
         api["stats"] = initObScriptStatsBindings(context);
         api["combat"] = initObScriptCombatBindings(context);
+        api["physical"] = initObScriptPhysicalBindings(context);
         api["effects"] = initObScriptEffectBindings(context);
         api["radio"] = initObScriptRadioBindings(context);
 

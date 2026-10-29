@@ -64,7 +64,7 @@ add_openmw_dir (mwlua
     mwscriptbindings camerabindings vfsbindings uibindings soundbindings inputbindings nearbybindings dialoguebindings
     postprocessingbindings stats recordstore debugbindings corebindings worldbindings worker landbindings magicbindings factionbindings
     classbindings itemdata inputprocessor animationbindings birthsignbindings racebindings markupbindings weatherbindings regionbindings 
-    obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptcombatbindings obscriptstatsbindings obscripteffectbindings obscriptradiobindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
+    obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptcombatbindings obscriptphysicalbindings obscriptstatsbindings obscripteffectbindings obscriptradiobindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
     types/bodypart types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
     types/potion types/ingredient types/misc types/repair types/armor types/light types/static
     types/clothing types/levelledlist types/terminal types/furniture types/idlemarker types/note magictypebindings
@@ -104,7 +104,7 @@ add_openmw_dir (mwmechanics
     aicast aiescort aiface aiactivate aicombat recharge repair enchanting pathfinding pathgrid security spellcasting spellresistance
     disease pickpocket levelledlist combat steering obstacle autocalcspell difficultyscaling aicombataction summoning
     character actors objects aistate weaponpriority spellpriority weapontype spellutil
-    spelleffects esm4navigation esm4actors esm4combat esm4gore
+    spelleffects esm4navigation esm4actors esm4combat esm4gore esm4physical
     )
 
 add_openmw_dir (mwstate

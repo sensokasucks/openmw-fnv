@@ -42,10 +42,16 @@ namespace MWMechanics::ESM4Combat
         int mLimb = -1; // body part hit (ESM4::BodyPartData::PartType), see ESM4Gore
         bool mCorpse = false; // the target was already dead: no health is taken, its limbs can still come off
         bool mExplosion = false; // the hit is an explosion's blast
+        bool mKnockedDown = false; // the hit knocked the target off its feet (MWMechanics::ESM4Physical)
     };
 
-    // Damages the target's health; kills it when health runs out. Returns the health taken.
-    float hit(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker, float damage);
+    // Damages the target's health; kills it when health runs out. Returns the health taken. With a result, the
+    // hit rolls for a knockdown (ESM4Physical::rollKnockdown) along the result's direction, and a killing blow
+    // leaves its impulse (fDeathForce*, ranged for shots and blasts) on the body for the ragdoll.
+    float hit(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker, float damage, HitResult* result = nullptr,
+        bool ranged = false);
+    // Drops the attacker's melee blows still in the air (it was knocked down).
+    void cancelAttacks(const MWWorld::Ptr& attacker);
 
     // Called when a melee weapon, unarmed or creature blow lands: attacker, weapon (nullptr unarmed), result.
     using BlowListener = std::function<void(const MWWorld::Ptr&, const ESM4::Weapon*, const HitResult&)>;
@@ -159,8 +165,8 @@ namespace MWMechanics::ESM4Combat
     // Plays the weapon's reload sequence; returns how long it takes (the weapon's reload time if longer).
     float reload(const MWWorld::Ptr& actor);
 
-    // Lays the actor down and stops it moving.
-    void kill(const MWWorld::Ptr& actor, bool instant = false);
+    // Lays the actor down and stops it moving. impulse: direction x force of the killing blow, for the body.
+    void kill(const MWWorld::Ptr& actor, bool instant = false, const osg::Vec3f& impulse = osg::Vec3f());
 
     // Unarmed or creature attack (one of the actor's attack sequences). Partway through, the target takes the
     // attacker's damage if it is still within reach. False if the actor can't attack now.

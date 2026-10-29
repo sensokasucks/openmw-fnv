@@ -50,6 +50,7 @@
 #include "creaturestats.hpp"
 #include "esm4actors.hpp"
 #include "esm4gore.hpp"
+#include "esm4physical.hpp"
 #include "esm4navigation.hpp"
 #include "movement.hpp"
 
@@ -328,17 +329,30 @@ namespace MWMechanics::ESM4Combat
         return std::max(damage, minimum);
     }
 
-    float hit(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker, float damage)
+    float hit(const MWWorld::Ptr& target, const MWWorld::Ptr& attacker, float damage, HitResult* result, bool ranged)
     {
         if (!canBeHit(target) || isDead(target) || damage <= 0.f)
             return 0.f;
+        const float healthBefore = Stats::getCurrent(target, Stats::Health);
         Stats::damage(target, Stats::Health, damage);
         Log(Debug::Verbose) << "ESM4 hit " << target.getCellRef().getRefId() << " for " << damage << ", health "
                             << Stats::getCurrent(target, Stats::Health) << "/"
                             << Stats::getPermanent(target, Stats::Health);
+        const osg::Vec3f direction = result != nullptr ? result->mDirection : osg::Vec3f();
+        const float force = ESM4Physical::getDeathForce(damage, ranged);
         if (isDead(target))
-            kill(target);
+            kill(target, false, direction * force);
+        else if (result != nullptr && ESM4Physical::rollKnockdown(target, damage, healthBefore, false))
+            result->mKnockedDown = ESM4Physical::knockDown(target, direction, force);
         return damage;
+    }
+
+    void cancelAttacks(const MWWorld::Ptr& attacker)
+    {
+        if (attacker.isEmpty())
+            return;
+        const ESM::RefNum refNum = attacker.getCellRef().getRefNum();
+        std::erase_if(sPendingHits, [&](const PendingHit& blow) { return blow.mAttacker == refNum; });
     }
 
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
@@ -421,7 +435,7 @@ namespace MWMechanics::ESM4Combat
         // A corpse takes no more health, but its limbs still give way (scripts/omw/fnvgore)
         result.mCorpse = isDead(result.mTarget);
         if (!result.mCorpse)
-            result.mDamage = hit(result.mTarget, attacker, damage);
+            result.mDamage = hit(result.mTarget, attacker, damage, &result, true);
         else
             Log(Debug::Verbose) << "ESM4 shot corpse " << result.mTarget.getCellRef().getRefId() << " limb "
                                 << result.mLimb << " for " << damage;
@@ -1010,7 +1024,7 @@ namespace MWMechanics::ESM4Combat
                 }
                 else
                 {
-                    result.mDamage = hit(candidate, attacker, damage);
+                    result.mDamage = hit(candidate, attacker, damage, &result, true);
                     ESM4Gore::damageAllLimbs(candidate, damage);
                     result.mKilled = isDead(candidate);
                 }
@@ -1463,7 +1477,7 @@ namespace MWMechanics::ESM4Combat
             }
             else
             {
-                result.mDamage = hit(target, attacker, damage);
+                result.mDamage = hit(target, attacker, damage, &result, false);
                 result.mKilled = isDead(target);
             }
             if (sBlowListener)
@@ -1484,9 +1498,11 @@ namespace MWMechanics::ESM4Combat
         sProjectiles.clear();
     }
 
-    void kill(const MWWorld::Ptr& actor, bool instant)
+    void kill(const MWWorld::Ptr& actor, bool instant, const osg::Vec3f& impulse)
     {
         ESM4Actors::get().stop(actor);
+        cancelAttacks(actor);
+        ESM4Physical::setDead(actor, impulse);
         MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
             animation->playDeath(instant);

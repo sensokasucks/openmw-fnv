@@ -2,6 +2,7 @@
 
 #include "esm4actors.hpp"
 #include "esm4combat.hpp"
+#include "esm4physical.hpp"
 #include "esm4gore.hpp"
 
 #include <cassert>
@@ -330,6 +331,7 @@ namespace MWMechanics
         mObjects.update(duration, paused);
         ESM4Actors::get().update(duration, paused);
         ESM4Combat::update(duration, paused);
+        ESM4Physical::update(duration, paused);
     }
 
     void MechanicsManager::processChangedSettings(const Settings::CategorySettingVector& changed)
@@ -1853,6 +1855,7 @@ namespace MWMechanics
         mActors.clear();
         ESM4Actors::get().clear();
         ESM4Combat::clear();
+        ESM4Physical::clear();
         ESM4Gore::clear();
         mStolenItems.clear();
         mClassSelected = false;

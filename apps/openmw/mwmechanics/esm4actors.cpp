@@ -9,6 +9,7 @@
 #include <components/debug/debuglog.hpp>
 #include <components/esm/refid.hpp>
 #include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadbptd.hpp>
 #include <components/esm4/loadweap.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -27,6 +28,8 @@
 #include "../mwworld/worldmodel.hpp"
 
 #include "esm4combat.hpp"
+#include "esm4gore.hpp"
+#include "esm4physical.hpp"
 
 namespace MWMechanics
 {
@@ -60,6 +63,11 @@ namespace MWMechanics
         constexpr float sAvoidMovingSpeed = 20.f; // units per second above which a blocker counts as moving
         constexpr int sAvoidMaxDetours = 8;
         constexpr float sAvoidEyeHeight = 64.f;
+
+        // Falls: a drop deeper than this isn't a step down but a fall under gravity (the Havok proxy's step
+        // height is not located; the Morrowind controller's sStepSizeDown is 62)
+        constexpr float sStepDown = 64.f;
+        constexpr float sGravity = 8.96f * 69.99125109f; // Constants::GravityConst x UnitsPerMeter
 
         std::optional<ESM::FormId> getCellFormId(const MWWorld::Ptr& ptr)
         {
@@ -133,9 +141,33 @@ namespace MWMechanics
         return instance;
     }
 
+    void ESM4Actors::landFromFall(const MWWorld::Ptr& ptr, State& state, float groundZ)
+    {
+        const float height = state.mFallFrom ? *state.mFallFrom - groundZ : 0.f;
+        state.mFallFrom.reset();
+        state.mFallSpeed = 0.f;
+        using MWWorld::ESM4GameSettings::getFloat;
+        const float minHeight = getFloat("fJumpFallHeightMin", 256.f);
+        if (height <= minHeight || ESM4Combat::isDead(ptr))
+            return;
+        const float damage = std::pow(height - minHeight, getFloat("fJumpFallHeightExponent", 2.f))
+            * getFloat("fJumpFallHeightMult", 0.025f);
+        if (damage <= 0.f)
+            return;
+        Log(Debug::Verbose) << "ESM4 AI: " << ptr.getCellRef().getRefNum().toString() << " falls " << height
+                            << " for " << damage;
+        const float legDamage = damage * getFloat("fFallLegDamageMult", 0.5f);
+        const int legChance = MWWorld::ESM4GameSettings::getInt("iFallLegDamageChance", 50);
+        std::uniform_int_distribution<int> roll(0, 99);
+        for (int leg : { ESM4::BodyPartData::Part_LeftLeg1, ESM4::BodyPartData::Part_RightLeg1 })
+            if (roll(mRandom) < legChance)
+                ESM4Gore::damageLimb(ptr, leg, legDamage, 1.f);
+        ESM4Combat::hit(ptr, MWWorld::Ptr(), damage);
+    }
+
     bool ESM4Actors::moveTo(const MWWorld::Ptr& ptr, const osg::Vec3f& target, const MoveOptions& options)
     {
-        if (ESM4Combat::isDead(ptr))
+        if (ESM4Combat::isDead(ptr) || !ESM4Physical::canAct(ptr))
             return false;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mUsePhase != UsePhase::None)
@@ -214,7 +246,7 @@ namespace MWMechanics
 
     void ESM4Actors::useFurniture(const MWWorld::Ptr& ptr, const FurnitureUse& use)
     {
-        if (ESM4Combat::isDead(ptr))
+        if (ESM4Combat::isDead(ptr) || !ESM4Physical::canAct(ptr))
             return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mUsePhase != UsePhase::None)
@@ -316,7 +348,7 @@ namespace MWMechanics
 
     void ESM4Actors::playIdle(const MWWorld::Ptr& ptr, const std::string& model)
     {
-        if (ESM4Combat::isDead(ptr))
+        if (ESM4Combat::isDead(ptr) || !ESM4Physical::canAct(ptr))
             return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mStatus == Status::Moving || state.mActionTime > 0.f || state.mUsePhase == UsePhase::Entering
@@ -354,7 +386,7 @@ namespace MWMechanics
     float ESM4Actors::playAction(const MWWorld::Ptr& ptr, std::string_view file)
     {
         MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
-        if (animation == nullptr || ESM4Combat::isDead(ptr))
+        if (animation == nullptr || ESM4Combat::isDead(ptr) || !ESM4Physical::canAct(ptr))
             return 0.f;
         const float length = animation->playActionFONV(file);
         if (length > 0.f)
@@ -370,7 +402,7 @@ namespace MWMechanics
 
     void ESM4Actors::face(const MWWorld::Ptr& ptr, float yaw)
     {
-        if (ESM4Combat::isDead(ptr))
+        if (ESM4Combat::isDead(ptr) || !ESM4Physical::canAct(ptr))
             return;
         State& state = mStates[ptr.getCellRef().getRefNum()];
         if (state.mStatus == Status::Moving || state.mUsePhase != UsePhase::None)
@@ -424,16 +456,9 @@ namespace MWMechanics
             }
         }
 
-        float legs = 1.f;
-        if (Stats::getCurrent(ptr, Stats::IgnoreCrippledLimbs) == 0)
-        {
-            const int crippled = (Stats::getCurrent(ptr, Stats::LeftMobilityCondition) <= 0 ? 1 : 0)
-                + (Stats::getCurrent(ptr, Stats::RightMobilityCondition) <= 0 ? 1 : 0);
-            if (crippled == 1)
-                legs = getFloat("fMoveOneCrippledLegSpeedMult");
-            else if (crippled == 2)
-                legs = getFloat("fMoveTwoCrippledLegsSpeedMult");
-        }
+        // The legs: one crippled slows, both more so (ESM4Physical::getMobility, the same multipliers the
+        // original applies here)
+        const float legs = ESM4Physical::getMobility(ptr).mSpeedMult;
 
         const float speed
             = Stats::getCurrent(ptr, Stats::SpeedMult) * 0.01f * getFloat("fMoveBaseSpeed") * legs * (1.f - penalty);
@@ -487,6 +512,13 @@ namespace MWMechanics
                     animation->resumeLocomotion();
             }
         }
+        // Knocked down or getting up: nothing moves until it stands again (knockDown stopped the move; this
+        // covers a knockdown mid-turn or mid-action)
+        if (!ESM4Physical::canAct(ptr))
+        {
+            state.mSpeed = 0.f;
+            return state.mStatus != Status::None || state.mTurnTo || state.mActionTime > 0.f;
+        }
         if (state.mStatus != Status::Moving)
         {
             if (state.mTurnTo && turnTowards(ptr, *state.mTurnTo, duration))
@@ -496,6 +528,9 @@ namespace MWMechanics
 
         MWBase::World& world = *MWBase::Environment::get().getWorld();
         MWRender::ESM4NpcAnimation* animation = getAnimation(ptr);
+        // Both legs crippled: a limp, however much the AI wants to run (the plan's "no running")
+        if (state.mOptions.mRun && !ESM4Physical::getMobility(ptr).mCanRun)
+            state.mOptions.mRun = false;
         {
             const float lookSpeed = state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr);
             if (avoidActors(ptr, state, lookSpeed > 1.f ? lookSpeed : sDefaultWalkSpeed, duration))
@@ -615,13 +650,35 @@ namespace MWMechanics
 
         if (!onCorridor)
         {
-            // Straight moves, and the straight end of a path beyond the navmesh, keep to the ground below
-            const osg::Vec3f up(0.f, 0.f, 128.f);
+            // Straight moves, and the straight end of a path beyond the navmesh, keep to the ground below; a drop
+            // deeper than a step is a fall under gravity, with the original's fall damage on landing
+            // (render-anim-physics.md 2: h over fJumpFallHeightMin, (h - min) ^ exponent x mult, legs with
+            // fFallLegDamageMult at iFallLegDamageChance)
+            const osg::Vec3f up(0.f, 0.f, sStepDown);
             const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(position + up,
-                position - up * 4.f, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
-            if (ground.mHit)
-                position.z() = ground.mHitPos.z();
+                position - osg::Vec3f(0.f, 0.f, 4096.f), MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            const float groundZ = ground.mHit ? ground.mHitPos.z() : position.z();
+            if (groundZ >= position.z() - sStepDown || !ground.mHit)
+            {
+                if (state.mFallFrom)
+                    landFromFall(ptr, state, groundZ);
+                position.z() = groundZ;
+            }
+            else
+            {
+                if (!state.mFallFrom)
+                {
+                    state.mFallFrom = position.z();
+                    state.mFallSpeed = 0.f;
+                }
+                state.mFallSpeed += sGravity * duration;
+                position.z() = std::max(groundZ, position.z() - state.mFallSpeed * duration);
+                if (position.z() <= groundZ)
+                    landFromFall(ptr, state, groundZ);
+            }
         }
+        else if (state.mFallFrom)
+            landFromFall(ptr, state, position.z());
 
         MWWorld::Ptr movedPtr = world.moveObject(ptr, position);
 

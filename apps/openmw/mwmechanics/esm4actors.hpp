@@ -127,6 +127,9 @@ namespace MWMechanics
             std::optional<float> mTurnTo;
             float mStuckTime = 0.f;
             float mActionTime = 0.f; // left of the one-off sequence playing
+            // Off the navmesh with nothing under its feet: falling at this speed from this height
+            float mFallSpeed = 0.f;
+            std::optional<float> mFallFrom;
 
             UsePhase mUsePhase = UsePhase::None;
             FurnitureUse mFurniture;
@@ -148,6 +151,8 @@ namespace MWMechanics
 
         // Returns false when the actor is done with this state (stopped, arrived and turned).
         bool updateActor(const MWWorld::Ptr& ptr, State& state, float duration);
+        // The end of a fall: the original's fall damage for the height dropped.
+        void landFromFall(const MWWorld::Ptr& ptr, State& state, float groundZ);
         // Looks ahead along the path for other actors (and the player) in the way, as the original does: after
         // being blocked for a moment it waits for someone standing still and goes around someone moving. True
         // while the actor waits.

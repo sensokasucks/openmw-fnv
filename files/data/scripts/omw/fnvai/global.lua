@@ -58,6 +58,8 @@ local stats = core.obscript.stats
 local furniture = require('scripts.omw.fnvai.furniture')
 local dlg = core.obscript.dialogue
 local combat = core.obscript.combat
+-- The actors' physical state: a knocked-down actor's package waits until it stands again (core.obscript.physical)
+local physical = core.obscript.physical
 
 -- PlayerRef is form 0x14 of whichever file is loaded first, so only the low 24 bits tell
 local function isPlayerRef(formId)
@@ -2280,6 +2282,16 @@ return {
                         b.sent = true
                         ai.moveTo(npc, b.to, { tolerance = 24, direct = true })
                     end
+                elseif physical ~= nil and not physical.canAct(npc) then
+                    -- knocked down, getting up or unconscious: the package waits where it is (any move or
+                    -- furniture use was stopped by the engine)
+                    local s = states[id]
+                    if s ~= nil and not s.down then
+                        s.down = true
+                        furniture.release(s)
+                        s.door = nil
+                    end
+                    publish(id, npc, s)
                 elseif I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(npc) then
                     -- fighting (scripts/omw/fnvcombat) runs over the package, like the original's runtime Combat
                     -- package; the package waits and goes on afterwards
@@ -2306,6 +2318,13 @@ return {
                         if s.package ~= nil then
                             log(('%s goes back to %s'):format(npc.recordId, s.package.editorId))
                         end
+                    end
+                    if s.down then
+                        -- up again after a knockdown: the package picks up from the start of its step
+                        s.down = nil
+                        s.phase = nil
+                        s.pending = nil
+                        s.nextEvaluation = simTime
                     end
                     -- in conversation with the player the package waits (the world keeps
                     -- running while talking), and picks up where it was afterwards

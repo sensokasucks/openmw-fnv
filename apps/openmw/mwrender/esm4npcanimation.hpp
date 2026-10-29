@@ -108,6 +108,15 @@ namespace MWRender
         void playDeath(bool instant);
         bool isDead() const { return mDead; }
 
+        // FO3/FONV knockdown (MWMechanics::ESM4Physical): the actor falls (the get-up sequence run backwards, in
+        // place of the ragdoll until F3) and stays down until playGetUp, which stands it up again over the returned
+        // seconds; standUp then hands the body back to the locomotion. Locomotion, idles and actions are ignored
+        // while down. Each returns the length of the sequence played, 0 when the skeleton has none.
+        float playKnockdown();
+        float playGetUp();
+        void standUp();
+        bool isDown() const { return mDown; }
+
         // Ground speed of the current locomotion sequence (units per second), 0 when standing or unknown.
         float getLocomotionSpeed() const;
         // Playback rate of the walk and run loops: the actor's speed over getLocomotionSpeed.
@@ -148,6 +157,7 @@ namespace MWRender
         Locomotion mLocomotion = Locomotion::Idle;
         Direction mDirection = Direction::Forward;
         bool mDead = false;
+        bool mDown = false; // knocked down or getting up (playKnockdown)
         bool mInAction = false;
         std::string mIdleSequence;
         osg::ref_ptr<osg::Node> mWeapon;
@@ -197,6 +207,10 @@ namespace MWRender
         void hideLimbs(const ESM4::BodyPartData& data, std::uint32_t lost);
         void spawnSeveredLimb(const ESM4::BodyPartData::BodyPart& part, const osg::Vec3f& direction, std::uint32_t seed);
         void spawnLimbGore(const ESM4::BodyPartData::BodyPart& part, const osg::Vec3f& direction, std::uint32_t seed);
+
+        // The skeleton's get-up sequence (idleanims/getup.kf and its variants), or the lying death pose when it has
+        // none; the second is true for a get-up sequence (which starts lying down and ends standing).
+        std::optional<std::pair<VFS::Path::Normalized, bool>> findGetUpSequence() const;
 
         void insertPart(std::string_view model);
         osg::ref_ptr<osg::Node> attachPart(std::string_view model);
