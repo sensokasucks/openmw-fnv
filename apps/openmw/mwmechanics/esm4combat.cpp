@@ -292,6 +292,23 @@ namespace MWMechanics::ESM4Combat
         return Stats::getPermanent(actor, Stats::Health) > 0 && Stats::getCurrent(actor, Stats::Health) <= 0;
     }
 
+    bool ensureStartsDead(const MWWorld::Ptr& actor)
+    {
+        if (!canBeHit(actor) || actor == getPlayer())
+            return false;
+        if (isDead(actor))
+            return true;
+        if (!actor.getCellRef().startsDead() || Stats::getPermanent(actor, Stats::Health) <= 0.f)
+            return false;
+        Stats::damage(actor, Stats::Health, Stats::getCurrent(actor, Stats::Health));
+        ESM4Actors::get().stop(actor, true);
+        cancelAttacks(actor);
+        MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
+        ESM4Physical::setDead(actor, osg::Vec3f(), std::nullopt, true);
+        Log(Debug::Verbose) << "ESM4 placed corpse " << actor.getCellRef().getRefId();
+        return true;
+    }
+
     namespace
     {
         // fDamageSkillBase + fDamageSkillMult x the attacker's skill with the weapon

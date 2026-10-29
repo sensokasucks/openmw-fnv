@@ -90,7 +90,7 @@ namespace MWRender
         mSkeletonPath = VFS::Path::Normalized(model);
         setObjectRoot(model, true, true, false);
         updateParts();
-        if (MWMechanics::ESM4Combat::isDead(mPtr))
+        if (MWMechanics::ESM4Combat::ensureStartsDead(mPtr))
         {
             // A corpse the designers placed lies the way they posed it; others take the death pose
             if (!applyPlacedPose())

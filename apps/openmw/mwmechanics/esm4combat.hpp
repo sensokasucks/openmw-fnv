@@ -22,6 +22,9 @@ namespace MWMechanics::ESM4Combat
     // Actors that take damage: the player, ESM4 NPCs and creatures.
     bool canBeHit(const MWWorld::Ptr& actor);
     bool isDead(const MWWorld::Ptr& actor);
+    // A placed corpse (CellRef::startsDead) that still has its health is put to death on the spot, with no
+    // sequence or ragdoll (the animation then poses it). Called as the actor is first shown. True when it is dead.
+    bool ensureStartsDead(const MWWorld::Ptr& actor);
 
     // Damage of one projectile of the weapon in the attacker's hands, before the target's armor: base damage scaled
     // by the attacker's weapon skill and the weapon's condition (0-1).

@@ -73,6 +73,22 @@ namespace MWWorld
             return std::visit(Visitor(), mCellRef.mVariant);
         }
 
+        // A placed FO3/FNV actor the designers put down dead: the "starts dead" record flag, or a ragdoll pose
+        // (FalloutNV.esm sets no flag on its corpses, only XRGD)
+        bool startsDead() const
+        {
+            struct Visitor
+            {
+                bool operator()(const ESM::CellRef&) { return false; }
+                bool operator()(const ESM4::Reference&) { return false; }
+                bool operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return (ref.mFlags & ESM4::Rec_StartDead) != 0 || !ref.mRagdollPose.empty();
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Linked reference (ESM4 XLKR, GetLinkedRef); zero if none.
         ESM::FormId getLinkedRef() const
         {
