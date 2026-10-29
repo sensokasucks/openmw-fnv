@@ -305,7 +305,8 @@ namespace MWMechanics::ESM4Combat
         cancelAttacks(actor);
         MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         ESM4Physical::setDead(actor, osg::Vec3f(), std::nullopt, true);
-        Log(Debug::Verbose) << "ESM4 placed corpse " << actor.getCellRef().getRefId();
+        Log(Debug::Verbose) << "ESM4 placed corpse " << actor.getCellRef().getRefId() << " ref "
+                            << actor.getCellRef().getRefNum().toString();
         return true;
     }
 
