@@ -54,6 +54,7 @@ namespace MWPhysics
         // vibrates at 1-4 rad/s and 5-20 units/s in single frames while drifting under a unit a second
         constexpr float sRestDistance = 3.f; // game units the pelvis and the centre of mass may move per window
         constexpr float sRestWindowStart = 1.f; // seconds before the first window
+        constexpr int sRestWindows = 2; // still windows in a row: one would freeze a flopping limb a frame early
 
         // Once the body has slowed to this, its damping goes up so the limbs settle instead of jittering
         constexpr float sSettleSpeed = 40.f;
@@ -542,7 +543,7 @@ namespace MWPhysics
             return false;
         if (!mActive)
             return true;
-        return mRestTime >= sRestSettle;
+        return mRestTime >= sRestSettle * sRestWindows;
     }
 
     void Ragdoll::freeze()
@@ -591,14 +592,14 @@ namespace MWPhysics
             {
                 const bool still = (pelvis - mWindowPelvis).length2() < sRestDistance * sRestDistance
                     && (centre - mWindowCentre).length2() < sRestDistance * sRestDistance;
-                mRestTime = still ? sRestSettle : 0.f;
+                mRestTime = still ? mRestTime + sRestSettle : 0.f;
                 mWindowPelvis = pelvis;
                 mWindowCentre = centre;
                 mWindowTime = 0.f;
             }
         }
         if (mAge > sMaxSimulated)
-            mRestTime = std::max(mRestTime, sRestSettle);
+            mRestTime = std::max(mRestTime, sRestSettle * sRestWindows);
         applyToBones();
         if (isAtRest())
             freeze();
