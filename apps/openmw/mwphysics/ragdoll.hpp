@@ -124,6 +124,10 @@ namespace MWPhysics
         bool mStarted = false;
         bool mActive = false;
         bool mSettling = false; // the body has slowed and its damping is up
+        bool mWindowValid = false; // the rest window's start positions are set
+        float mWindowTime = 0.f;
+        btVector3 mWindowPelvis;
+        btVector3 mWindowCentre;
         float mRestTime = 0.f;
         float mAge = 0.f;
     };

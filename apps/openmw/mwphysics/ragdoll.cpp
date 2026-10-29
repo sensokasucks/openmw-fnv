@@ -50,8 +50,11 @@ namespace MWPhysics
         // second while the pelvis creeps at 1..3 units per second, so tighter limits never let it rest
         // ...judged on the pelvis and the mass-weighted mean of the body, since a light limb wedged against the
         // ground jitters at 20 units/s and several rad/s long after the body lies still
-        constexpr float sRestLinearSpeed = 8.f; // game units per second (0.11 m/s)
-        constexpr float sRestAngularSpeed = 1.f; // rad/s, the pelvis
+        // ...and on distance moved over the window rather than instantaneous speed: a lying pelvis rocks and
+        // vibrates at 1-4 rad/s and 5-20 units/s in single frames while drifting under a unit a second
+        constexpr float sRestDistance = 3.f; // game units the pelvis and the centre of mass may move per window
+        constexpr float sRestWindowStart = 1.f; // seconds before the first window
+
         // Once the body has slowed to this, its damping goes up so the limbs settle instead of jittering
         constexpr float sSettleSpeed = 40.f;
         constexpr float sSettledLinearDamping = 0.6f;
@@ -452,6 +455,8 @@ namespace MWPhysics
         mActive = true;
         mRestTime = 0.f;
         mAge = 0.f;
+        mWindowValid = false;
+        mWindowTime = 0.f;
     }
 
     void Ragdoll::removeFromWorld()
@@ -558,21 +563,40 @@ namespace MWPhysics
             meanSpeed += bone.mMass * static_cast<float>(bone.mBody->getLinearVelocity().length());
         }
         meanSpeed = totalMass > 0.f ? meanSpeed / totalMass : 0.f;
-        const btRigidBody& pelvis = *mBones.front().mBody;
-        const float pelvisSpeed = static_cast<float>(pelvis.getLinearVelocity().length());
-        const float pelvisSpin = static_cast<float>(pelvis.getAngularVelocity().length());
+        btVector3 centre(0, 0, 0);
+        for (const Bone& bone : mBones)
+            centre += bone.mBody->getWorldTransform().getOrigin() * bone.mMass;
+        if (totalMass > 0.f)
+            centre /= totalMass;
+        const btVector3 pelvis = mBones.front().mBody->getWorldTransform().getOrigin();
         if (!mSettling && mAge >= sMinSimulated && meanSpeed < sSettleSpeed)
         {
             mSettling = true;
             for (Bone& bone : mBones)
                 bone.mBody->setDamping(sSettledLinearDamping, sSettledAngularDamping);
         }
-        const bool still = mAge >= sMinSimulated && pelvisSpeed < sRestLinearSpeed && meanSpeed < sRestLinearSpeed
-            && pelvisSpin < sRestAngularSpeed;
-        if (still)
-            mRestTime += dt;
-        else
-            mRestTime = 0.f;
+        // Every window, the body is at rest when neither the pelvis nor the centre of mass has moved much since
+        // the last one
+        if (mAge >= sRestWindowStart)
+        {
+            mWindowTime += dt;
+            if (!mWindowValid)
+            {
+                mWindowPelvis = pelvis;
+                mWindowCentre = centre;
+                mWindowValid = true;
+                mWindowTime = 0.f;
+            }
+            else if (mWindowTime >= sRestSettle)
+            {
+                const bool still = (pelvis - mWindowPelvis).length2() < sRestDistance * sRestDistance
+                    && (centre - mWindowCentre).length2() < sRestDistance * sRestDistance;
+                mRestTime = still ? sRestSettle : 0.f;
+                mWindowPelvis = pelvis;
+                mWindowCentre = centre;
+                mWindowTime = 0.f;
+            }
+        }
         if (mAge > sMaxSimulated)
             mRestTime = std::max(mRestTime, sRestSettle);
         applyToBones();
