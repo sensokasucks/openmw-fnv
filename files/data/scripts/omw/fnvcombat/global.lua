@@ -1106,6 +1106,7 @@ end
 
 local function replan(s, distance, los)
     checkEquipped(s)
+    checkDisarm(s) -- (before the weapons are ranked, so a plan made now no longer counts a weapon just dropped)
     if s.refreshWeaponsUntil then
         s.weapons = combat.getActorWeapons(s.actor)
         if simTime > s.refreshWeaponsUntil then s.refreshWeaponsUntil = nil end
@@ -1131,7 +1132,6 @@ local function replan(s, distance, los)
     -- and a failed search is forgotten with the pass (only the failed spots are remembered, for 3 s)
     if coverWanted(s) and not s.inCoverLoop and s.cover == nil then findCover(s) end
     if coverWanted(s) and s.cover ~= nil then locations[#locations + 1] = P.L.COVER end
-    checkDisarm(s)
     scanCombatItems(s)
     scanPickups(s)
     local item = combatItem(s)
