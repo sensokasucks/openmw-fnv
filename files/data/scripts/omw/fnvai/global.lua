@@ -959,8 +959,11 @@ local function follow(npc, s, pkg)
     if leaderMoving or distance > keep + matchZone * 0.5 then
         local recalc = math.min(0.75 * radius, gmstFloat('fAIMoveDistanceToRecalcFollowPath', 300))
         -- (a new path at most twice a second while the old one is still being walked)
+        -- (and before the order to where the leader was runs out while the leader walks on: arriving there would
+        -- stop the follower for a tick, a visible hitch every few steps)
         if s.followFrom == nil or status ~= 'moving'
-            or ((leader.position - s.followFrom):length() > recalc and simTime - (s.goSince or 0) >= 0.5) then
+            or ((leader.position - s.followFrom):length() > recalc and simTime - (s.goSince or 0) >= 0.5)
+            or (leaderMoving and distance > radius and nearlyAt(npc, s.followFrom, radius + 48)) then
             if distance > radius then
                 s.followFrom = leader.position
                 -- straight at the leader where the navmesh has no route (across exterior cell borders)

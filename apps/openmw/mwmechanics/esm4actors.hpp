@@ -123,6 +123,7 @@ namespace MWMechanics
             std::size_t mCorridorIndex = 0;
             MoveOptions mOptions;
             osg::Vec3f mTarget;
+            float mSpeed = 0.f; // units per second it moves at now (picks up and loses pace, see updateActor)
             std::optional<float> mTurnTo;
             float mStuckTime = 0.f;
             float mActionTime = 0.f; // left of the one-off sequence playing

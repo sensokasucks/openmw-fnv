@@ -36,6 +36,15 @@ namespace MWMechanics
         constexpr float sDefaultWalkSpeed = 90.f;
         constexpr float sDefaultRunSpeed = 300.f;
         const float sTurnSpeed = static_cast<float>(osg::PI) * 1.5f; // radians per second (osg::PI is not constexpr everywhere)
+        // Movement smoothing (updateActor): pace is picked up at 3 x the pace a second, at least this, so any pace
+        // is reached in about a third of a second; the slowest it creeps into a goal; a corner counts as rounded
+        // this close; the actor turns on the spot before setting off when the way is more than this off; and
+        // the tightest curve it rounds a corner on while moving.
+        constexpr float sMinAcceleration = 200.f;
+        constexpr float sCreepSpeed = 20.f;
+        constexpr float sCornerRadius = 24.f;
+        const float sTurnInPlaceAngle = static_cast<float>(osg::PI) / 3.f;
+        constexpr float sMinTurnRadius = 16.f;
 
         // Actor avoidance (FalloutNV.exe 0x9e5690, 0x9e5ae0, 0x9e0a00; the :Pathfinding INI defaults)
         constexpr float sAvoidCheckInterval = 0.1f; // seconds between looks ahead
@@ -104,11 +113,11 @@ namespace MWMechanics
         }
 
         // Turns the actor towards yaw; true once it faces it.
-        bool turnTowards(const MWWorld::Ptr& ptr, float yaw, float duration)
+        bool turnTowards(const MWWorld::Ptr& ptr, float yaw, float duration, float turnSpeed = sTurnSpeed)
         {
             osg::Vec3f rot = ptr.getRefData().getPosition().asRotationVec3();
             const float diff = wrapAngle(yaw - rot.z());
-            const float step = sTurnSpeed * duration;
+            const float step = turnSpeed * duration;
             const bool done = std::abs(diff) <= step;
             rot.x() = 0.f;
             rot.y() = 0.f;
@@ -491,6 +500,7 @@ namespace MWMechanics
             const float lookSpeed = state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr);
             if (avoidActors(ptr, state, lookSpeed > 1.f ? lookSpeed : sDefaultWalkSpeed, duration))
             {
+                state.mSpeed = 0.f;
                 if (animation != nullptr)
                     animation->setLocomotion(MWRender::ESM4NpcAnimation::Locomotion::Idle);
                 return true;
@@ -500,56 +510,92 @@ namespace MWMechanics
         }
         const auto locomotion = state.mOptions.mRun ? MWRender::ESM4NpcAnimation::Locomotion::Run
                                                     : MWRender::ESM4NpcAnimation::Locomotion::Walk;
+        // The pace asked for: the formula speed times the caller's multiplier
         float speed = state.mOptions.mRun ? sDefaultRunSpeed : sDefaultWalkSpeed;
+        float animationSpeed = 0.f;
         if (animation != nullptr)
         {
-            animation->setLocomotion(locomotion);
-            const float animationSpeed = animation->getLocomotionSpeed();
+            animationSpeed = animation->getLocomotionSpeed();
             if (ptr.getType() == ESM::REC_NPC_4)
-            {
                 // NPC speed comes from the formula; the walk or run loop is played faster or slower to keep pace
                 speed = (state.mOptions.mRun ? getRunSpeed(ptr) : getWalkSpeed(ptr)) * state.mOptions.mSpeedMult;
-                animation->setLocomotionRate(animationSpeed > 1.f ? speed / animationSpeed : 1.f);
-            }
             else
             {
                 if (animationSpeed > 1.f)
                     speed = animationSpeed;
                 speed *= state.mOptions.mSpeedMult;
-                animation->setLocomotionRate(state.mOptions.mSpeedMult);
             }
         }
         else
             speed *= state.mOptions.mSpeedMult;
 
         osg::Vec3f position = ptr.getRefData().getPosition().asVec3();
-        float remaining = speed * duration;
         // Close enough to the goal counts as there (attackers stop at arm's length)
         const osg::Vec2f toGoal(state.mTarget.x() - position.x(), state.mTarget.y() - position.y());
         if (toGoal.length() <= state.mOptions.mTolerance)
             state.mNextPoint = state.mPath.mPoints.size();
-        else if (state.mNextPoint + 1 == state.mPath.mPoints.size())
-            remaining = std::min(remaining, toGoal.length() - state.mOptions.mTolerance);
-        osg::Vec3f direction;
-        while (remaining > 0.f && state.mNextPoint < state.mPath.mPoints.size())
+        // Corners reached, or passed while rounding them, are done with
+        while (state.mNextPoint + 1 < state.mPath.mPoints.size())
         {
             const osg::Vec3f& point = state.mPath.mPoints[state.mNextPoint];
-            osg::Vec3f delta = point - position;
-            delta.z() = 0.f;
-            const float distance = delta.length();
-            if (distance > 1e-3f)
-                direction = delta / distance;
-            if (distance <= remaining)
-            {
-                position.x() = point.x();
-                position.y() = point.y();
-                remaining -= distance;
+            const osg::Vec3f& next = state.mPath.mPoints[state.mNextPoint + 1];
+            const osg::Vec2f to(point.x() - position.x(), point.y() - position.y());
+            const osg::Vec2f leg(next.x() - point.x(), next.y() - point.y());
+            if (to.length() <= sCornerRadius || to * leg < 0.f)
                 ++state.mNextPoint;
-            }
             else
+                break;
+        }
+
+        osg::Vec3f moved = position;
+        if (state.mNextPoint < state.mPath.mPoints.size())
+        {
+            // The actor walks the way it faces and turns towards the next corner as it goes, picking up and losing
+            // pace instead of jumping to it (a new order while moving keeps the pace), slowing into the goal and
+            // turning on the spot first when the way is far off to the side: a walk that reads as one movement
+            // rather than a point sliding along the route.
+            const osg::Vec3f& point = state.mPath.mPoints[state.mNextPoint];
+            const osg::Vec2f to(point.x() - position.x(), point.y() - position.y());
+            float pathLeft = to.length();
+            for (std::size_t i = state.mNextPoint + 1; i < state.mPath.mPoints.size(); ++i)
+                pathLeft += osg::Vec2f(state.mPath.mPoints[i].x() - state.mPath.mPoints[i - 1].x(),
+                    state.mPath.mPoints[i].y() - state.mPath.mPoints[i - 1].y())
+                                .length();
+            pathLeft = std::max(pathLeft - state.mOptions.mTolerance, 0.f);
+            const float accel = std::max(3.f * speed, sMinAcceleration);
+            float targetSpeed = std::min(speed, std::max(std::sqrt(2.f * accel * pathLeft), sCreepSpeed));
+            const float desiredYaw = std::atan2(to.x(), to.y());
+            const float heading = ptr.getRefData().getPosition().rot[2];
+            if (std::abs(wrapAngle(desiredYaw - heading)) > sTurnInPlaceAngle && state.mSpeed < 0.5f * speed)
+                targetSpeed = 0.f;
+            if (targetSpeed > state.mSpeed)
+                state.mSpeed = std::min(targetSpeed, state.mSpeed + accel * duration);
+            else
+                state.mSpeed = std::max(targetSpeed, state.mSpeed - accel * duration);
+            // (turning quicker when fast, so the curve it rounds a corner on stays within a stride)
+            turnTowards(ptr, desiredYaw, duration, std::max(sTurnSpeed, state.mSpeed / sMinTurnRadius));
+            const float yaw = ptr.getRefData().getPosition().rot[2];
+            float remaining = state.mSpeed * duration;
+            if (state.mNextPoint + 1 == state.mPath.mPoints.size())
+                remaining = std::min(remaining, std::max(toGoal.length() - state.mOptions.mTolerance, 0.f));
+            moved.x() += std::sin(yaw) * remaining;
+            moved.y() += std::cos(yaw) * remaining;
+        }
+        else
+            state.mSpeed = 0.f;
+        position = moved;
+
+        if (animation != nullptr)
+        {
+            const bool standing = state.mSpeed < 1.f;
+            animation->setLocomotion(standing ? MWRender::ESM4NpcAnimation::Locomotion::Idle : locomotion);
+            if (!standing)
             {
-                position += direction * remaining;
-                remaining = 0.f;
+                // the loop is played at the pace actually moved
+                if (ptr.getType() == ESM::REC_NPC_4)
+                    animation->setLocomotionRate(animationSpeed > 1.f ? state.mSpeed / animationSpeed : 1.f);
+                else
+                    animation->setLocomotionRate(speed > 1.f ? state.mOptions.mSpeedMult * state.mSpeed / speed : 1.f);
             }
         }
 
@@ -577,15 +623,13 @@ namespace MWMechanics
                 position.z() = ground.mHitPos.z();
         }
 
-        MWWorld::Ptr moved = world.moveObject(ptr, position);
-        if (direction.length2() > 0.f)
-            turnTowards(moved, std::atan2(direction.x(), direction.y()), duration);
+        MWWorld::Ptr movedPtr = world.moveObject(ptr, position);
 
         if (state.mNextPoint >= state.mPath.mPoints.size())
         {
             state.mStatus = Status::Arrived;
             state.mTurnTo = state.mOptions.mFinalYaw;
-            setLocomotion(moved, MWRender::ESM4NpcAnimation::Locomotion::Idle);
+            setLocomotion(movedPtr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
         }
         return true;
     }
