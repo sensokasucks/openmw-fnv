@@ -296,9 +296,34 @@ local function approach(s, actor, target, reach, aroundObstacles)
     end
 end
 
+-- Ammunition (the original, and ghidra-findings-6): an NPC's rounds are never spent, but a gun is of use to it only
+-- while it carries at least one round of a type the gun takes; without any, the gun scores as unusable, and a gun it
+-- would pick up needs its ammunition with it (on the same corpse) or lying within reach, which it fetches first.
+local function hasAmmoFor(actor, weapon)
+    local ammoTypes = weapon.ammoTypes
+    if ammoTypes == nil or #ammoTypes == 0 or not types.ESM4NPC.objectIsInstance(actor) then return true end
+    local ok, inventory = pcall(types.Actor.inventory, actor)
+    if not ok or inventory == nil then return true end
+    for _, ammo in ipairs(ammoTypes) do
+        local okCount, n = pcall(inventory.countOf, inventory, ammo.id)
+        if okCount and (n or 0) > 0 then return true end
+    end
+    return false
+end
+
+-- (weapon records from getWeapon carry no isGun or type; ammunition types alone tell)
+local function takesAmmo(weapon)
+    return weapon.ammoTypes ~= nil and #weapon.ammoTypes > 0
+end
+
 -- Fires at the rate the weapon allows, with a short pause between shots as FNV NPCs take; reloads an empty clip.
 local function shootAt(s, actor, target)
     local gun = s.gun
+    -- (a gun without a round of its ammunition on hand does not fire; the plan drops it at the next replan)
+    if takesAmmo(gun) and not hasAmmoFor(actor, gun) then
+        s.replanAt = math.min(s.replanAt or math.huge, simTime)
+        return
+    end
     if gun.clipSize > 0 and s.clip <= 0 then
         combat.reload(actor)
         s.clip = gun.clipSize
@@ -519,25 +544,6 @@ local function weaponDps(actor, weapon)
     if weapon.type == PW.MINE then dps = 0 end
     if weapon.type == PW.MELEE then dps = dps * gmst('fPickupWeaponMeleeWeaponDPSMult', 0.5) end
     return math.max(dps, 0.01)
-end
-
--- Ammunition (the original, and ghidra-findings-6): an NPC's rounds are never spent, but a gun is of use to it only
--- while it carries at least one round of a type the gun takes; without any, the gun scores as unusable, and a gun it
--- would pick up needs its ammunition with it (on the same corpse) or lying within reach, which it fetches first.
-local function hasAmmoFor(actor, weapon)
-    local ammoTypes = weapon.ammoTypes
-    if ammoTypes == nil or #ammoTypes == 0 or not types.ESM4NPC.objectIsInstance(actor) then return true end
-    local ok, inventory = pcall(types.Actor.inventory, actor)
-    if not ok or inventory == nil then return true end
-    for _, ammo in ipairs(ammoTypes) do
-        local okCount, n = pcall(inventory.countOf, inventory, ammo.id)
-        if okCount and (n or 0) > 0 then return true end
-    end
-    return false
-end
-
-local function takesAmmo(weapon)
-    return weapon.isGun and weapon.ammoTypes ~= nil and #weapon.ammoTypes > 0
 end
 
 local function styleRange(s, weapon)
@@ -767,12 +773,15 @@ local function scanPickups(s)
         local reach = minDist + (maxDist - minDist) * math.max(over - 1, 0) / (gmst('fPickupWeaponDistanceMinMaxDPSMult', 5) - 1)
         if distance > reach then return end
         if not carried and simTime < (pickupBlocked[obj.id] or 0) then return end
-        local target, forGun = obj, nil
+        local target, forGun, ammoName = obj, nil, nil
         if ammoNeeded then
             -- the rounds first (the original fills its ammunition slot before the weapon slot)
             target = nearestAmmo(rec, reach)
             if target == nil then return end
             forGun = rec.editorId
+            for _, ammo in ipairs(rec.ammoTypes) do
+                if ammo.id == target.recordId then ammoName = ammo.editorId end
+            end
             where = target.position
             distance = (where - actor.position):length()
         elseif carried then
@@ -783,7 +792,7 @@ local function scanPickups(s)
         if rank > bestRank then
             bestRank = rank
             best = { obj = target, holder = (not ammoNeeded) and holder or nil, position = where,
-                key = 'pickup:' .. tostring(target.id), editorId = ammoNeeded and target.recordId or rec.editorId,
+                key = 'pickup:' .. tostring(target.id), editorId = ammoNeeded and (ammoName or target.recordId) or rec.editorId,
                 forGun = forGun, dps = dps }
         end
     end
@@ -825,6 +834,10 @@ local function bestWeapons(s, distance)
             local score = weaponScore(s, weapon, t, distance)
             if best[t] == nil or score > best[t].score then best[t] = { weapon = weapon, score = score } end
         end
+    end
+    -- an NPC always has its fists (so a gun without rounds loses to them); creatures fight with their own attacks
+    if best[PW.HAND_TO_HAND] == nil and types.ESM4NPC.objectIsInstance(s.actor) then
+        best[PW.HAND_TO_HAND] = { score = math.max(stats.get(s.actor, 'MeleeDamage') or 1, 1) }
     end
     if next(best) == nil then best[PW.HAND_TO_HAND] = { score = 1 } end
     return best
