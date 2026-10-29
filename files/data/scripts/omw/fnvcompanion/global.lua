@@ -142,7 +142,11 @@ local function bringTestCompanion(player)
     local yaw = player.rotation:getYaw()
     local ahead = util.vector3(math.sin(yaw), math.cos(yaw), 0) * 150
     npc:teleport(player.cell, player.position + ahead, { rotation = util.transform.rotateZ(yaw + math.pi) })
-    local info = dlg.getInfo('FormId:0x147789')
+    -- the recruit INFO is in FalloutNV.esm, like VeronicaREF, whose top byte says where that file loads (run on
+    -- Sen's PC: 0x02, so 0x147789 alone was not found and she was never hired)
+    local refHex = tostring(formId):match('0x(%x+)')
+    local esm = refHex and math.floor(tonumber(refHex, 16) / 0x1000000) or 0
+    local info = dlg.getInfo(('FormId:0x%x'):format(esm * 0x1000000 + 0x147789))
     if I.FNVDialogue and I.FNVDialogue.runResultScript then
         if info ~= nil then
             I.FNVDialogue.runResultScript(info.scriptBegin, 'INFO 0x147789 (companion console) begin', npc)
@@ -150,8 +154,11 @@ local function bringTestCompanion(player)
         end
         I.FNVDialogue.runResultScript('set VDialogueVeronica.bWarn2Done to 1', 'companion console', npc)
     end
-    if info == nil and I.FNVAI and I.FNVAI.setTeammate then I.FNVAI.setTeammate(npc, true) end
-    log(('companion: %s brought to the player and hired'):format(npc.recordId))
+    if info == nil then
+        log('companion: recruit INFO 0x147789 not found; only made a teammate, she will not follow')
+        if I.FNVAI and I.FNVAI.setTeammate then I.FNVAI.setTeammate(npc, true) end
+    end
+    log(('companion: %s brought to the player and hired (%s)'):format(npc.recordId, info and info.id or 'no INFO'))
 end
 
 return {
