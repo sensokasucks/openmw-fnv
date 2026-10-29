@@ -723,16 +723,25 @@ namespace MWMechanics
         state.mBlockerPosition = obstaclePosition;
         const bool player = obstacle == world.getPlayerPtr();
 
-        // Someone standing at the goal: close enough counts as there
+        // Someone standing at the goal is who the actor is walking up to (a follower's leader, a conversation
+        // partner), not something in the way: no waiting or detour, and close enough counts as there. (Run 29:
+        // judging "close enough" by the look-ahead hit stopped a follower dead 220 units from the player.)
         const bool lastLeg = state.mNextPoint + 1 == state.mPath.mPoints.size();
-        if (lastLeg && pointDistance <= obstacleDistance + 2 * sAvoidActorRadius + state.mOptions.mTolerance)
+        if (lastLeg)
         {
-            state.mNextPoint = state.mPath.mPoints.size();
-            state.mStatus = Status::Arrived;
-            state.mTurnTo = state.mOptions.mFinalYaw;
-            state.mBlockedTime = 0.f;
-            setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
-            return false;
+            const osg::Vec2f obstacleToGoal(state.mTarget.x() - obstaclePosition.x(), state.mTarget.y() - obstaclePosition.y());
+            if (obstacleToGoal.length() <= 2 * sAvoidActorRadius + state.mOptions.mTolerance)
+            {
+                if (pointDistance <= 2 * sAvoidActorRadius + state.mOptions.mTolerance)
+                {
+                    state.mNextPoint = state.mPath.mPoints.size();
+                    state.mStatus = Status::Arrived;
+                    state.mTurnTo = state.mOptions.mFinalYaw;
+                    setLocomotion(ptr, MWRender::ESM4NpcAnimation::Locomotion::Idle);
+                }
+                state.mBlockedTime = 0.f;
+                return false;
+            }
         }
 
         // Blocked time counts double for a blocker standing still
