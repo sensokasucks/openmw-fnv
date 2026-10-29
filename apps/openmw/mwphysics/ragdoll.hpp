@@ -14,6 +14,7 @@
 #include <LinearMath/btTransform.h>
 
 #include <components/nif/niffile.hpp>
+#include <components/nif/niftypes.hpp>
 #include <components/resource/bulletshape.hpp>
 
 class btBroadphaseInterface;
@@ -66,6 +67,16 @@ namespace MWPhysics
             float mLinearDamping = 0.05f;
             float mAngularDamping = 0.85f;
             const void* mEntity = nullptr; // the NIF record, to match constraints
+            int mNifIndex = -1; // among the skeleton's bodies in NIF tree order (a placed pose's entry)
+            int mBodyPart = -1; // the biped part in the body's collision filter (bits 8-12)
+        };
+
+        // A bone's local transform in a placed corpse's pose (ESM4 XRGD), relative to its parent node
+        struct PlacedBone
+        {
+            int mBodyPart = -1;
+            Nif::Matrix3 mRotation;
+            osg::Vec3f mTranslation;
         };
 
         // Builds the ragdoll of a skeleton for the bones under skeletonRoot (matched by name), scaled by scale (the
@@ -77,9 +88,11 @@ namespace MWPhysics
         // Lets the body go from the pose the bones are in. The impulse (kg x game units per second) goes to the
         // body nearest hitPosition, or the pelvis without one.
         void start(const osg::Vec3f& impulse, const std::optional<osg::Vec3f>& hitPosition);
-        // Lets the body go into a given pose: world transforms per bone name (a placed corpse's XRGD pose); bones
-        // not named keep their skeleton pose. Frozen at once.
-        void startFrozen(const std::map<std::string, btTransform, std::less<>>& pose);
+        // Puts the body into a placed corpse's pose, frozen at once (FalloutNV.exe 0x004d9dc0): entry i is the local
+        // transform of the i-th body's bone in NIF tree order. The root bone (Bip01, the first body's parent) sits at
+        // the reference's origin, turned by rootRotation if given. False, and nothing posed, if the pose doesn't fit
+        // the skeleton (entry count or body parts differ, as the game checks).
+        bool startPlaced(const std::vector<PlacedBone>& pose, const Nif::Matrix3* rootRotation);
         bool isStarted() const { return mStarted; }
         // Simulated right now
         bool isActive() const { return mActive; }

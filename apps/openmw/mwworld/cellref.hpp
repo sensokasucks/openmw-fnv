@@ -73,6 +73,21 @@ namespace MWWorld
             return std::visit(Visitor(), mCellRef.mVariant);
         }
 
+        // The Euler rotation of the skeleton's Bip01 for that pose (ESM4 XRGB); nullptr if the reference has none
+        const float* getRagdollRootRotation() const
+        {
+            struct Visitor
+            {
+                const float* operator()(const ESM::CellRef&) { return nullptr; }
+                const float* operator()(const ESM4::Reference&) { return nullptr; }
+                const float* operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return ref.mHasRagdollRootRotation ? ref.mRagdollRootRotation : nullptr;
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // A placed FO3/FNV actor the designers put down dead: the "starts dead" record flag, or a ragdoll pose
         // (FalloutNV.esm sets no flag on its corpses, only XRGD)
         bool startsDead() const

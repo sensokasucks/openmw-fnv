@@ -101,7 +101,7 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
                 break;
             case ESM::fourCC("XRGD"): // ragdoll pose
             {
-                constexpr std::size_t entrySize = 28; // u8 bone, 3 pad, vec3 pos, vec3 rot
+                constexpr std::size_t entrySize = 28; // u8 body part, 3 pad (garbage), vec3 pos, vec3 rot
                 if (subHdr.dataSize % entrySize != 0)
                 {
                     reader.skipSubRecordData();
@@ -113,13 +113,21 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
                 {
                     std::uint8_t raw[4];
                     reader.get(raw);
-                    mRagdollPose[i].mBone = raw[0];
+                    mRagdollPose[i].mBodyPart = raw[0];
                     reader.get(mRagdollPose[i].mPosition);
                     reader.get(mRagdollPose[i].mRotation);
                 }
                 break;
             }
-            case ESM::fourCC("XRGB"): // ragdoll biped
+            case ESM::fourCC("XRGB"): // ragdoll biped rotation
+                if (subHdr.dataSize == sizeof(mRagdollRootRotation))
+                {
+                    reader.get(mRagdollRootRotation);
+                    mHasRagdollRootRotation = true;
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XHRS"): // horse formId
             // TES5
             case ESM::fourCC("XAPD"): // activation parent

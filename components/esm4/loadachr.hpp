@@ -63,15 +63,21 @@ namespace ESM4
 
         std::int32_t mCount = 1;
 
-        // XRGD (FO3/FONV): the ragdoll pose of a placed dead actor, one entry per ragdoll bone (per community
-        // docs: bone index, padding, position, rotation; layout not verified against the engine)
+        // XRGD (FO3/FONV): the ragdoll pose of a placed dead actor (FalloutNV.exe ExtraRagDollData, loader 0x004d94a0,
+        // applied by 0x004d9dc0): one 28-byte entry per skeleton node with a Havok body, in NIF tree order (pre-order).
+        // Each is that node's local transform, relative to its parent node, in game units; the rotation is
+        // NiMatrix3::FromEulerAnglesXYZ (radians). mBodyPart is the body's biped part (its collision filter
+        // bits 8-12), which the game checks against the skeleton before posing.
         struct RagdollBone
         {
-            std::uint8_t mBone;
+            std::uint8_t mBodyPart;
             float mPosition[3];
             float mRotation[3];
         };
         std::vector<RagdollBone> mRagdollPose;
+        // XRGB: the Euler rotation of the skeleton root's first child (Bip01) for that pose
+        bool mHasRagdollRootRotation = false;
+        float mRagdollRootRotation[3] = { 0.f, 0.f, 0.f };
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

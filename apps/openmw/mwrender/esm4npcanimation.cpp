@@ -57,6 +57,27 @@ namespace MWRender
 {
     namespace
     {
+        // NiMatrix3::FromEulerAnglesXYZ (FalloutNV.exe 0x00a59540): Rx * Ry * Rz in Gamebryo's row-major layout,
+        // each the transpose of the usual right-handed rotation
+        Nif::Matrix3 fromEulerAnglesXYZ(const float* angles)
+        {
+            const float cx = std::cos(angles[0]), sx = std::sin(angles[0]);
+            const float cy = std::cos(angles[1]), sy = std::sin(angles[1]);
+            const float cz = std::cos(angles[2]), sz = std::sin(angles[2]);
+            const float rx[3][3] = { { 1, 0, 0 }, { 0, cx, sx }, { 0, -sx, cx } };
+            const float ry[3][3] = { { cy, 0, -sy }, { 0, 1, 0 }, { sy, 0, cy } };
+            const float rz[3][3] = { { cz, sz, 0 }, { -sz, cz, 0 }, { 0, 0, 1 } };
+            float ryz[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    ryz[i][j] = ry[i][0] * rz[0][j] + ry[i][1] * rz[1][j] + ry[i][2] * rz[2][j];
+            Nif::Matrix3 result;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    result.mValues[i][j] = rx[i][0] * ryz[0][j] + rx[i][1] * ryz[1][j] + rx[i][2] * ryz[2][j];
+            return result;
+        }
+
         class FaceCallback : public SceneUtil::NodeCallback<FaceCallback>
         {
         public:
@@ -1272,42 +1293,41 @@ namespace MWRender
 
     bool ESM4NpcAnimation::applyPlacedPose()
     {
-        static const bool enabled = [] {
-            const char* value = std::getenv("OPENMW_FNV_XRGD");
-            return value != nullptr && *value != '\0' && std::string_view(value) != "0";
-        }();
-        if (!enabled)
-            return false;
         const auto* pose = mPtr.getCellRef().getRagdollPose();
         if (pose == nullptr || !ensureRagdoll())
             return false;
-        // Hypothesis (community docs): position relative to the reference along the world axes, rotation as
-        // Euler angles (radians) about X, Y, Z, per ragdoll bone in skeleton order, for the rigid bodies
-        const osg::Vec3f origin = mPtr.getRefData().getPosition().asVec3();
-        const auto& bones = mRagdoll->getBones();
-        std::map<std::string, btTransform, std::less<>> transforms;
+        // Each entry is a bone's local transform in NIF tree order (FalloutNV.exe 0x004d9dc0)
+        std::vector<MWPhysics::Ragdoll::PlacedBone> placed;
+        placed.reserve(pose->size());
         for (const ESM4::ActorCharacter::RagdollBone& entry : *pose)
         {
-            if (entry.mBone >= bones.size())
-                continue;
-            const osg::Quat rotation(entry.mRotation[0], osg::Vec3f(1, 0, 0), entry.mRotation[1], osg::Vec3f(0, 1, 0),
-                entry.mRotation[2], osg::Vec3f(0, 0, 1));
-            btTransform transform(btQuaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()),
-                btVector3(origin.x() + entry.mPosition[0], origin.y() + entry.mPosition[1],
-                    origin.z() + entry.mPosition[2]));
-            transforms[bones[entry.mBone].mName] = transform;
-            Log(Debug::Verbose) << "XRGD " << mPtr.getCellRef().getRefId() << " bone " << int(entry.mBone) << " ("
-                                << bones[entry.mBone].mName << ") at " << entry.mPosition[0] << " "
-                                << entry.mPosition[1] << " " << entry.mPosition[2] << " rot " << entry.mRotation[0]
-                                << " " << entry.mRotation[1] << " " << entry.mRotation[2];
+            MWPhysics::Ragdoll::PlacedBone& bone = placed.emplace_back();
+            bone.mBodyPart = entry.mBodyPart;
+            bone.mRotation = fromEulerAnglesXYZ(entry.mRotation);
+            bone.mTranslation = osg::Vec3f(entry.mPosition[0], entry.mPosition[1], entry.mPosition[2]);
         }
-        if (transforms.empty())
+        const float* rootAngles = mPtr.getCellRef().getRagdollRootRotation();
+        const Nif::Matrix3 rootRotation = rootAngles != nullptr ? fromEulerAnglesXYZ(rootAngles) : Nif::Matrix3();
+        if (!mRagdoll->startPlaced(placed, rootAngles != nullptr ? &rootRotation : nullptr))
+        {
+            Log(Debug::Verbose) << "XRGD pose of " << mPtr.getCellRef().getRefId() << " (" << pose->size()
+                                << " entries) doesn't fit " << mSkeletonPath << " (" << mRagdoll->getBones().size()
+                                << " bodies)";
+            mRagdoll.reset();
             return false;
+        }
+        for (const auto& bone : mRagdoll->getBones())
+        {
+            const ESM4::ActorCharacter::RagdollBone& entry = (*pose)[bone.mNifIndex];
+            Log(Debug::Verbose) << "XRGD " << mPtr.getCellRef().getRefId() << " " << bone.mName << " part "
+                                << int(entry.mBodyPart) << " local " << entry.mPosition[0] << " " << entry.mPosition[1]
+                                << " " << entry.mPosition[2] << " euler " << entry.mRotation[0] << " "
+                                << entry.mRotation[1] << " " << entry.mRotation[2];
+        }
         for (auto& [node, callback] : mLoopCallbacks)
             node->removeUpdateCallback(callback);
         mLoopCallbacks.clear();
         mRagdollPosing = true;
-        mRagdoll->startFrozen(transforms);
         return true;
     }
 

@@ -137,8 +137,8 @@ namespace MWRender
         void applyRagdollPose();
         // The ragdoll lets go of the bones; a living actor is down and plays its get-up next (playGetUp)
         void endRagdoll();
-        // A placed corpse takes the pose its reference carries (ESM4 XRGD) as a frozen ragdoll. False without a
-        // pose or a ragdoll. Experimental: the XRGD layout is from community docs (OPENMW_FNV_XRGD=1 turns it on).
+        // A placed corpse takes the pose its reference carries (ESM4 XRGD/XRGB) as a frozen ragdoll. False without a
+        // pose or a ragdoll, or if the pose doesn't fit the skeleton.
         bool applyPlacedPose();
 
         // Ground speed of the current locomotion sequence (units per second), 0 when standing or unknown.

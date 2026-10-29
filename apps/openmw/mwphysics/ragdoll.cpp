@@ -220,8 +220,9 @@ namespace MWPhysics
 
         const float havokScale = NifBullet::havokScaleFor(skeleton.getBethVersion());
         std::map<const void*, std::size_t> boneByEntity;
-        for (const NifBody& nifBody : bodies)
+        for (std::size_t nifIndex = 0; nifIndex < bodies.size(); ++nifIndex)
         {
+            const NifBody& nifBody = bodies[nifIndex];
             auto found = std::find_if(ragdoll->mNodes.begin(), ragdoll->mNodes.end(),
                 [&](const Node& n) { return Misc::StringUtils::ciEqual(n.mNode->getName(), nifBody.mNode->mName); });
             if (found == ragdoll->mNodes.end())
@@ -243,6 +244,9 @@ namespace MWPhysics
             bone.mNode = found->mNode;
             bone.mShape.reset(shape.release());
             bone.mEntity = nifBody.mBody;
+            bone.mNifIndex = static_cast<int>(nifIndex);
+            // Bits 8-12 of the 32-bit filter (layer, flags, group)
+            bone.mBodyPart = nifBody.mBody->mHavokFilter.mFlags & 0x1f;
             const Nif::bhkRigidBodyCInfo& info = nifBody.mBody->mInfo;
             bone.mMass = info.mMass > 0.01f ? info.mMass : 1.f;
             bone.mFriction = info.mFriction;
@@ -520,21 +524,44 @@ namespace MWPhysics
         applyToBones();
     }
 
-    void Ragdoll::startFrozen(const std::map<std::string, btTransform, std::less<>>& pose)
+    bool Ragdoll::startPlaced(const std::vector<PlacedBone>& pose, const Nif::Matrix3* rootRotation)
     {
-        if (mStarted)
-            return;
+        if (mStarted || mNodes.empty())
+            return false;
+        for (const Bone& bone : mBones)
+        {
+            if (bone.mNifIndex < 0 || static_cast<std::size_t>(bone.mNifIndex) >= pose.size())
+                return false;
+            if (pose[bone.mNifIndex].mBodyPart != bone.mBodyPart)
+            {
+                Log(Debug::Verbose) << "Ragdoll: placed pose entry " << bone.mNifIndex << " is body part "
+                                    << pose[bone.mNifIndex].mBodyPart << ", " << bone.mName << " is "
+                                    << bone.mBodyPart;
+                return false;
+            }
+        }
+        // The pose is in the bones' local space: the game saves Bip01's rotation alone (XRGB) and its first body
+        // (Bip01 NonAccum) always at Bip01's origin, and the corpses' references lie at the floor, so Bip01 sits at
+        // the reference
+        const auto rootBody = std::find_if(
+            mNodes.begin(), mNodes.end(), [&](const Node& node) { return node.mNode == mBones.front().mNode; });
+        if (rootBody != mNodes.end() && rootBody->mParent >= 0)
+        {
+            NifOsg::MatrixTransform& root = *mNodes[rootBody->mParent].mNode;
+            root.setTranslation(osg::Vec3f());
+            if (rootRotation != nullptr)
+                root.setRotation(*rootRotation);
+        }
+        for (const Bone& bone : mBones)
+        {
+            const PlacedBone& placed = pose[bone.mNifIndex];
+            bone.mNode->setRotation(placed.mRotation);
+            bone.mNode->setTranslation(placed.mTranslation);
+        }
         mStarted = true;
         seedFromBones();
-        for (Bone& bone : mBones)
-        {
-            auto found = pose.find(bone.mName);
-            if (found == pose.end())
-                continue;
-            bone.mBody->setWorldTransform(found->second);
-            bone.mMotion->setWorldTransform(found->second);
-        }
         applyToBones();
+        return true;
     }
 
     bool Ragdoll::isAtRest() const
