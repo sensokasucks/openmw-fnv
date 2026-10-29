@@ -521,6 +521,25 @@ local function weaponDps(actor, weapon)
     return math.max(dps, 0.01)
 end
 
+-- Ammunition (the original, and ghidra-findings-6): an NPC's rounds are never spent, but a gun is of use to it only
+-- while it carries at least one round of a type the gun takes; without any, the gun scores as unusable, and a gun it
+-- would pick up needs its ammunition with it (on the same corpse) or lying within reach, which it fetches first.
+local function hasAmmoFor(actor, weapon)
+    local ammoTypes = weapon.ammoTypes
+    if ammoTypes == nil or #ammoTypes == 0 or not types.ESM4NPC.objectIsInstance(actor) then return true end
+    local ok, inventory = pcall(types.Actor.inventory, actor)
+    if not ok or inventory == nil then return true end
+    for _, ammo in ipairs(ammoTypes) do
+        local okCount, n = pcall(inventory.countOf, inventory, ammo.id)
+        if okCount and (n or 0) > 0 then return true end
+    end
+    return false
+end
+
+local function takesAmmo(weapon)
+    return weapon.isGun and weapon.ammoTypes ~= nil and #weapon.ammoTypes > 0
+end
+
 local function styleRange(s, weapon)
     local range = weapon.maxRange or 0
     if range <= 0 then return 1500 end
@@ -536,6 +555,7 @@ local function weaponScore(s, weapon, weaponType, distance)
     elseif weaponType == PW.GRENADE then
         if distance > (weapon.throwRange or 0) then score = score / 10000 end
     end
+    if takesAmmo(weapon) and not hasAmmoFor(s.actor, weapon) then score = score / 10000 end
     local restriction = s.style and s.style.weaponRestrictions or 0
     local melee = weaponType == PW.MELEE or weaponType == PW.HAND_TO_HAND
     if (restriction == 1 and not melee) or (restriction == 2 and melee) then score = score / 10000 end
@@ -603,7 +623,8 @@ end
 -- more than fPickupWeaponMinDPSImprovementPercent (1.5 x) the actor's best, melee weapons at half. The reach is a
 -- band set by what the actor holds (ranged 512-2048, melee 256-1024, fists 256-2048), doubled while unarmed,
 -- stretching with score over bar up to fPickupWeaponDistanceMinMaxDPSMult 5 [band formula inferred]. Candidates
--- rank by dps x 10000 / max(distance, 64). Containers and ammo on hand are not modelled yet (NPC ammo is endless).
+-- rank by dps x 10000 / max(distance, 64). A gun that needs rounds the actor lacks is taken with the rounds on its
+-- corpse, or the rounds lying within reach are fetched first (see hasAmmoFor); containers are not modelled yet.
 local PICKUP_IDLE = 'characters/_male/idleanims/pickupgroundobject_0.3.kf'
 local PICKUP_TAKE_AT = 0.3
 local PICKUP_REACH = 32 + ACTOR_RADIUS + 16 -- fPickupItemDistanceFudge + the two radii
@@ -612,7 +633,8 @@ local pickupBlocked = {} -- ref id -> until (unreachable or gone)
 local function ownDps(s)
     local best = math.max(stats.get(s.actor, 'MeleeDamage') or 1, 1) -- fists, once a second
     for _, weapon in ipairs(s.weapons or {}) do
-        if weapon.type ~= PW.GRENADE and weapon.type ~= PW.MINE then
+        if weapon.type ~= PW.GRENADE and weapon.type ~= PW.MINE
+            and not (takesAmmo(weapon) and not hasAmmoFor(s.actor, weapon)) then
             best = math.max(best, weaponDps(s.actor, weapon))
         end
     end
@@ -641,27 +663,7 @@ local function scanPickups(s)
     if unarmed then minDist, maxDist = minDist * gmst('fDisarmedPickupWeaponDistanceMult', 2),
         maxDist * gmst('fDisarmedPickupWeaponDistanceMult', 2) end
     local best, bestRank = nil, 0
-    local function consider(obj, holder)
-        if not obj:isValid() or obj.count <= 0 then return end
-        local rec = combat.getWeapon(obj.recordId)
-        if rec == nil then return end
-        local dps = weaponDps(actor, rec)
-        if dps <= bar then return end
-        local where = holder and holder.position or obj.position
-        local distance = (where - actor.position):length()
-        -- the band opens with the margin over the bar: fully at fPickupWeaponDistanceMinMaxDPSMult 5 x
-        local over = math.min(dps / bar, gmst('fPickupWeaponDistanceMinMaxDPSMult', 5))
-        local reach = minDist + (maxDist - minDist) * math.max(over - 1, 0) / (gmst('fPickupWeaponDistanceMinMaxDPSMult', 5) - 1)
-        if distance > reach then return end
-        if simTime < (pickupBlocked[obj.id] or 0) then return end
-        if s.threat and (where - s.threat):length() <= 128 then return end
-        local rank = dps * 10000 / math.max(distance, 64)
-        if rank > bestRank then
-            bestRank = rank
-            best = { obj = obj, holder = holder, position = where, key = 'pickup:' .. tostring(obj.id),
-                editorId = rec.editorId, dps = dps }
-        end
-    end
+    local looseAmmo -- the ammunition lying around, gathered when a gun first needs it
     local cells = { actor.cell }
     if actor.cell.isExterior then
         for dx = -1, 1 do
@@ -672,6 +674,86 @@ local function scanPickups(s)
                 end
             end
         end
+    end
+    -- the nearest ammunition for the gun lying within reach, or nil
+    local function nearestAmmo(rec, reach)
+        if looseAmmo == nil then
+            looseAmmo = {}
+            if types.ESM4Ammunition ~= nil then
+                for _, cell in ipairs(cells) do
+                    local ok, list = pcall(cell.getAll, cell, types.ESM4Ammunition)
+                    for _, obj in ipairs(ok and list or {}) do looseAmmo[#looseAmmo + 1] = obj end
+                end
+            end
+        end
+        local nearest, nearestDistance
+        for _, obj in ipairs(looseAmmo) do
+            if obj:isValid() and obj.count > 0 and simTime >= (pickupBlocked[obj.id] or 0) then
+                for _, ammo in ipairs(rec.ammoTypes) do
+                    if ammo.id == obj.recordId then
+                        local d = (obj.position - actor.position):length()
+                        if d <= reach and (nearestDistance == nil or d < nearestDistance) then
+                            nearest, nearestDistance = obj, d
+                        end
+                    end
+                end
+            end
+        end
+        return nearest
+    end
+    local function holderHasAmmo(holder, rec)
+        local okItems, items = pcall(function() return types.Actor.inventory(holder):getAll() end)
+        for _, item in ipairs(okItems and items or {}) do
+            for _, ammo in ipairs(rec.ammoTypes) do
+                if ammo.id == item.recordId and item.count > 0 then return true end
+            end
+        end
+        return false
+    end
+    -- obj: the weapon (loose, on the corpse `holder`, or `carried` already); the pickup is the weapon, or the
+    -- ammunition it needs first
+    local function consider(obj, holder, carried)
+        if not carried and (not obj:isValid() or obj.count <= 0) then return end
+        local rec = carried and obj or combat.getWeapon(obj.recordId)
+        if rec == nil then return end
+        local dps = weaponDps(actor, rec)
+        if dps <= bar then return end
+        local where = carried and actor.position or holder and holder.position or obj.position
+        local distance = (where - actor.position):length()
+        local ammoNeeded = takesAmmo(rec) and not hasAmmoFor(actor, rec)
+        if ammoNeeded and holder ~= nil and not carried then
+            -- a corpse's gun comes with the rounds on the corpse, or stays
+            if not holderHasAmmo(holder, rec) then return end
+            ammoNeeded = false
+        end
+        -- the band opens with the margin over the bar: fully at fPickupWeaponDistanceMinMaxDPSMult 5 x
+        local over = math.min(dps / bar, gmst('fPickupWeaponDistanceMinMaxDPSMult', 5))
+        local reach = minDist + (maxDist - minDist) * math.max(over - 1, 0) / (gmst('fPickupWeaponDistanceMinMaxDPSMult', 5) - 1)
+        if distance > reach then return end
+        if not carried and simTime < (pickupBlocked[obj.id] or 0) then return end
+        local target, forGun = obj, nil
+        if ammoNeeded then
+            -- the rounds first (the original fills its ammunition slot before the weapon slot)
+            target = nearestAmmo(rec, reach)
+            if target == nil then return end
+            forGun = rec.editorId
+            where = target.position
+            distance = (where - actor.position):length()
+        elseif carried then
+            return
+        end
+        if s.threat and (where - s.threat):length() <= 128 then return end
+        local rank = dps * 10000 / math.max(distance, 64)
+        if rank > bestRank then
+            bestRank = rank
+            best = { obj = target, holder = (not ammoNeeded) and holder or nil, position = where,
+                key = 'pickup:' .. tostring(target.id), editorId = ammoNeeded and target.recordId or rec.editorId,
+                forGun = forGun, dps = dps }
+        end
+    end
+    -- rounds for a gun it carries dry
+    for _, weapon in ipairs(s.weapons or {}) do
+        if takesAmmo(weapon) then consider(weapon, nil, true) end
     end
     for _, cell in ipairs(cells) do
         local ok, loose = pcall(cell.getAll, cell, types.ESM4Weapon)
@@ -688,9 +770,9 @@ local function scanPickups(s)
     end
     if best and (s.pickupLogged ~= best.key) then
         s.pickupLogged = best.key
-        print(('[combat] %s (%s) wants to pick up %s (%.1f dps over %.1f) %.0f away%s'):format(actor.recordId,
-            tostring(actor.id), tostring(best.editorId), best.dps, bar, (best.position - actor.position):length(),
-            best.holder and (' from ' .. tostring(best.holder.recordId)) or ''))
+        print(('[combat] %s (%s) wants to pick up %s%s (%.1f dps over %.1f) %.0f away%s'):format(actor.recordId,
+            tostring(actor.id), tostring(best.editorId), best.forGun and (' for ' .. best.forGun) or '', best.dps, bar,
+            (best.position - actor.position):length(), best.holder and (' from ' .. tostring(best.holder.recordId)) or ''))
     end
     s.pickup = best
 end
