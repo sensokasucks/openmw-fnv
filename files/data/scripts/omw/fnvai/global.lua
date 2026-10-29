@@ -931,11 +931,16 @@ local function follow(npc, s, pkg)
         keep * gmstFloat('fFollowStopZoneMinMult', 0.5))
     local matchZone = gmstFloat('fFollowMatchSpeedZoneWidth', 128)
     -- the leader's speed, from where it was at the last update
-    local leaderSpeed = 0
+    -- (kept from the last update when none has passed, or a second call in the same tick would see it standing
+    -- and order a walk up to the full follow distance)
+    local leaderSpeed = s.leaderSpeed or 0
     if s.leaderSeen ~= nil and simTime > s.leaderSeen.time then
         leaderSpeed = (leader.position - s.leaderSeen.position):length() / (simTime - s.leaderSeen.time)
     end
-    s.leaderSeen = { position = leader.position, time = simTime }
+    if s.leaderSeen == nil or simTime > s.leaderSeen.time then
+        s.leaderSeen = { position = leader.position, time = simTime }
+        s.leaderSpeed = leaderSpeed
+    end
     local walk = math.max(walkSpeed(npc), 1)
     local leaderMoving = leaderSpeed > 10
     local leaderRuns = leaderSpeed > walk * 1.3

@@ -732,7 +732,9 @@ namespace MWMechanics
             const osg::Vec2f obstacleToGoal(state.mTarget.x() - obstaclePosition.x(), state.mTarget.y() - obstaclePosition.y());
             if (obstacleToGoal.length() <= 2 * sAvoidActorRadius + state.mOptions.mTolerance)
             {
-                if (pointDistance <= 2 * sAvoidActorRadius + state.mOptions.mTolerance)
+                // (run 30: with a wide tolerance, judging it by the goal's distance still stopped a follower at
+                // 220; it is there once it touches whoever stands there)
+                if (obstacleDistance <= 2 * sAvoidActorRadius + 8.f)
                 {
                     state.mNextPoint = state.mPath.mPoints.size();
                     state.mStatus = Status::Arrived;
