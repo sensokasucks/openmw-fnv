@@ -808,6 +808,12 @@ namespace Nif
             mBodyFlags = nif->get<uint16_t>();
     }
 
+    void bhkRigidBody::post(Reader& nif)
+    {
+        bhkEntity::post(nif);
+        postRecordList(nif, mConstraints);
+    }
+
     void bhkAabbPhantom::read(NIFStream* nif)
     {
         bhkPhantom::read(nif);
