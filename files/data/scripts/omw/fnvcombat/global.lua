@@ -838,7 +838,10 @@ local function bestWeapons(s, distance)
     -- an NPC always has its fists, scored so that only a gun without rounds (score / 10000) loses to them (run 33: a
     -- knife settler boxed when they scored its melee damage); creatures fight with their own attacks
     if best[PW.HAND_TO_HAND] == nil and types.ESM4NPC.objectIsInstance(s.actor) then
-        best[PW.HAND_TO_HAND] = { score = 0.01 }
+        -- (under a ranged-only style the fists are restricted like any melee weapon, so a restricted knife still
+        -- beats them)
+        local restriction = s.style and s.style.weaponRestrictions or 0
+        best[PW.HAND_TO_HAND] = { score = restriction == 2 and 0.01 / 10000 or 0.01 }
     end
     if next(best) == nil then best[PW.HAND_TO_HAND] = { score = 1 } end
     return best
@@ -1631,6 +1634,12 @@ checkDisarm = function(s)
                 s.disarmed = { dps = lostDps, at = simTime }
                 s.inHand, s.gun = nil, nil
                 s.equippedType, s.drawnType = PW.HAND_TO_HAND, PW.HAND_TO_HAND
+                -- off the list at once (the drop itself lands a frame later)
+                local left = {}
+                for _, w in ipairs(s.weapons or {}) do
+                    if w.id ~= held.id then left[#left + 1] = w end
+                end
+                s.weapons = left
                 s.refreshWeaponsUntil = simTime + 1.5
                 s.nextPickupScan = simTime + gmst('fCombatDisarmedFindBetterWeaponInitialTime', 1)
                 s.replanAt = simTime + 0.3 -- (the drop lands a frame later; a plan now would still list the weapon)
