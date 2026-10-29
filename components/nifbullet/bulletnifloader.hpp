@@ -26,6 +26,8 @@ namespace Nif
     struct NiNode;
     struct NiGeometry;
     struct Parent;
+    struct bhkShape;
+    struct bhkRigidBody;
 }
 
 namespace NifBullet
@@ -63,6 +65,17 @@ namespace NifBullet
         void handleRoot(Nif::FileView nif, const Nif::NiAVObject& node, HandleNodeArgs args);
         void handleNode(const Nif::NiAVObject& node, const Nif::Parent* parent, HandleNodeArgs args);
         void handleGeometry(const Nif::NiGeometry& nifNode, const Nif::Parent* parent, HandleNodeArgs args);
+
+        // Bethesda Havok collision (bhkCollisionObject on the nodes, FO3/FNV/Skyrim): walks the tree and adds the
+        // rigid bodies' shapes, scaled from Havok units by havokScale. True when any shape was found, in which case
+        // the rendered geometry is not used for collision.
+        bool handleBhkTree(const Nif::NiAVObject& node, const Nif::Parent* parent, HandleNodeArgs args, float havokScale);
+        void handleBhkBody(const Nif::NiAVObject& node, const Nif::bhkRigidBody& body, bool transformed,
+            const Nif::Parent* parent, const HandleNodeArgs& args, float havokScale);
+        // A Bullet shape for a bhk shape record, nullptr for the kinds we don't build (phantoms, planes,
+        // compressed meshes) and for the collision layers that are not solid (triggers, pick volumes, ragdolls)
+        std::unique_ptr<btCollisionShape> makeBhkShape(const Nif::bhkShape& shape, float havokScale, int layer);
+        bool mBhkFound{ false };
 
         std::unique_ptr<btCompoundShape, Resource::DeleteCollisionShape> mCompoundShape;
         std::unique_ptr<btCompoundShape, Resource::DeleteCollisionShape> mAvoidCompoundShape;

@@ -15,6 +15,7 @@
 #include <BulletCollision/CollisionShapes/btCompoundShape.h>
 #include <BulletCollision/CollisionShapes/btConeShape.h>
 #include <BulletCollision/CollisionShapes/btBoxShape.h>
+#include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletCollision/CollisionShapes/btSphereShape.h>
 #include <BulletCollision/CollisionShapes/btStaticPlaneShape.h>
 
@@ -598,7 +599,13 @@ namespace MWPhysics
         auto compound = std::make_unique<btCompoundShape>();
         btTransform transform = btTransform::getIdentity();
         transform.setOrigin(btVector3(0, 0, halfExtents.z()));
-        compound->addChildShape(transform, new btBoxShape(Misc::Convert::toBullet(halfExtents)));
+        // An upright capsule, as the original's bhkCharControllerShape, when the extents allow one (as tall as it
+        // is wide at least); a box otherwise (a long low creature)
+        const float radius = std::min(halfExtents.x(), halfExtents.y());
+        if (halfExtents.z() > radius && std::abs(halfExtents.x() - halfExtents.y()) < 1.f)
+            compound->addChildShape(transform, new btCapsuleShapeZ(radius, 2.f * (halfExtents.z() - radius)));
+        else
+            compound->addChildShape(transform, new btBoxShape(Misc::Convert::toBullet(halfExtents)));
         shape->mCollisionShape.reset(compound.release());
         shape->mCollisionBox.mExtents = halfExtents;
         shape->mCollisionBox.mCenter = osg::Vec3f(0, 0, halfExtents.z());
