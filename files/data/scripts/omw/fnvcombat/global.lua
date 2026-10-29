@@ -568,7 +568,7 @@ end
 -- scored; RESTORE is the one whose Self-range Health effects (archetypes 0 Value Modifier, 34 Value And Parts)
 -- add up to the most magnitude x max(duration, 1), detrimental effects counting against. Food counts, Buffout
 -- outranks a Super Stimpak outranks a Stimpak. BUFF (Chameleon, the Stealth Boy) is blocked by the combat style
--- flag 0x100, which every vanilla style but the Marked Men's sets [style flags are not read yet, so never].
+-- flag 0x100, which every vanilla style but the Marked Men's sets (see buffScore).
 local ITEM_SCAN_EVERY = 5
 local AV_HEALTH = 16
 local MGEF_DETRIMENTAL = 0x4
@@ -593,29 +593,64 @@ local function restoreScore(recordId)
     return score
 end
 
+-- BUFF (ghidra-findings-5): the same sum over the Self-range Chameleon effects (archetype 12): the Stealth Boy.
+local MGEF_CHAMELEON = 12
+local CSTY_NO_STEALTH_BOY = 0x100 -- "Cannot Use Stealthboy", set on every vanilla style but the Marked Men's
+local buffScores = {}
+local function buffScore(recordId)
+    local cached = buffScores[recordId]
+    if cached ~= nil then return cached end
+    local score = 0
+    local potion = effectsApi and effectsApi.getPotion(recordId)
+    for _, e in ipairs(potion and potion.effects or {}) do
+        if e.range == 0 then
+            local mgef = effectsApi.getMagicEffect(e.effect)
+            if mgef and mgef.archetype == MGEF_CHAMELEON then score = score + e.magnitude * math.max(e.duration, 1) end
+        end
+    end
+    buffScores[recordId] = score
+    return score
+end
+
+local function mayUseStealthBoy(s)
+    local flags = s.style and s.style.flags
+    -- (a style without flags is read as a vanilla one, which forbids it)
+    return flags ~= nil and flags % (CSTY_NO_STEALTH_BOY * 2) < CSTY_NO_STEALTH_BOY
+end
+
 local function scanCombatItems(s)
     if simTime < (s.nextItemScan or 0) then return end
     s.nextItemScan = simTime + ITEM_SCAN_EVERY
-    s.restoreItem = nil
+    s.restoreItem, s.buffItem = nil, nil
     if types.ESM4Potion == nil then return end
     -- getAll takes no ESM4 type filter yet
     local ok, items = pcall(function() return types.Actor.inventory(s.actor):getAll() end)
     if not ok then return end
-    local best = 0
+    local best, bestBuff = 0, 0
+    local stealthBoy = mayUseStealthBoy(s)
     for _, item in ipairs(items) do
-        local score = types.ESM4Potion.objectIsInstance(item) and restoreScore(item.recordId) or 0
-        if score > best then best, s.restoreItem = score, item.recordId end
+        if types.ESM4Potion.objectIsInstance(item) then
+            local score = restoreScore(item.recordId)
+            if score > best then best, s.restoreItem = score, item.recordId end
+            if stealthBoy then
+                local buff = buffScore(item.recordId)
+                if buff > bestBuff then bestBuff, s.buffItem = buff, item.recordId end
+            end
+        end
     end
 end
 
 -- The item the planner's USE_COMBAT_ITEM goal is about: the healing item once its cooldown has run out and health
 -- is below iAICombatRestoreHealthPercentage (60). The original re-arms both slots with fCombatItemBuffTimer 45 s
 -- (its restore case falls through into the buff case, so fCombatItemRestoreTimer 3 never applies); kept as is.
+-- The BUFF item (a Stealth Boy) goes whenever the cooldown has run out, with no condition on health.
 local function combatItem(s)
-    if s.restoreItem == nil or simTime < (s.itemCooldownUntil or 0) then return nil end
-    local health, max = stats.get(s.actor, 'Health'), stats.getPermanent(s.actor, 'Health')
-    if max <= 0 or health / max * 100 >= gmst('iAICombatRestoreHealthPercentage', 60) then return nil end
-    return s.restoreItem
+    if simTime < (s.itemCooldownUntil or 0) then return nil end
+    if s.restoreItem ~= nil then
+        local health, max = stats.get(s.actor, 'Health'), stats.getPermanent(s.actor, 'Health')
+        if max > 0 and health / max * 100 < gmst('iAICombatRestoreHealthPercentage', 60) then return s.restoreItem end
+    end
+    return s.buffItem
 end
 
 -- Weapons to pick up (ghidra-findings-6): every fCombatFindBetterWeaponTime 5 s (2.5 s while unarmed) the loose
