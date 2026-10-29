@@ -63,6 +63,7 @@ namespace MWPhysics
 {
     class RayCastingResult;
     class RayCastingInterface;
+    class RagdollWorld;
 }
 
 namespace MWRender
@@ -498,6 +499,8 @@ namespace MWBase
         virtual float getSunPercentage() const = 0;
 
         virtual float getPhysicsFrameRateDt() const = 0;
+        // The dynamics world FO3/FNV ragdolls fall in (MWPhysics::RagdollWorld)
+        virtual MWPhysics::RagdollWorld& getRagdollWorld() = 0;
 
         virtual bool findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result) = 0;
 

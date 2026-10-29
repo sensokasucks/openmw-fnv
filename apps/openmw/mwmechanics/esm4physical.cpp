@@ -10,6 +10,8 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwclass/esm4stats.hpp"
+#include "../mwphysics/collisiontype.hpp"
+#include "../mwphysics/raycasting.hpp"
 #include "../mwrender/esm4npcanimation.hpp"
 #include "../mwworld/cellref.hpp"
 #include "../mwworld/esm4gamesettings.hpp"
@@ -33,6 +35,11 @@ namespace MWMechanics::ESM4Physical
         // When the skeleton has no fall or get-up sequence the phases still take a moment
         constexpr float sDefaultFallTime = 0.8f;
         constexpr float sDefaultGetUpTime = 1.2f;
+        // A ragdoll that hasn't settled in this long gets up anyway
+        constexpr float sMaxRagdollWait = 10.f;
+        // The original's force (fDeathForce*, 20..85) as the ragdoll's impulse: Havok N s to kg x game units per
+        // second, with a body of around 10 kg per part this throws it a metre or two
+        constexpr float sImpulsePerForce = 69.99125109f;
 
         std::map<ESM::RefNum, State> sStates;
         PostureListener sPostureListener;
@@ -60,6 +67,23 @@ namespace MWMechanics::ESM4Physical
                                 << postureName(previous) << " -> " << postureName(posture);
             if (sPostureListener)
                 sPostureListener(actor, previous, posture);
+        }
+
+        // Moves the actor's reference to where its ragdoll lies (the pelvis, on the ground below it), facing the
+        // way it did, and poses the frozen body from there again
+        void settleAtBody(const MWWorld::Ptr& actor, MWRender::ESM4NpcAnimation& animation)
+        {
+            const std::optional<osg::Vec3f> pelvis = animation.getRagdollPosition();
+            if (!pelvis)
+                return;
+            MWBase::World& world = *MWBase::Environment::get().getWorld();
+            osg::Vec3f position = *pelvis;
+            const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(position,
+                position - osg::Vec3f(0.f, 0.f, 256.f), MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            position.z() = ground.mHit ? ground.mHitPos.z() : actor.getRefData().getPosition().asVec3().z();
+            const MWWorld::Ptr moved = world.moveObject(actor, position);
+            if (MWRender::ESM4NpcAnimation* movedAnimation = getAnimation(moved))
+                movedAnimation->applyRagdollPose();
         }
 
         // The condition actor value a body part's state comes from
@@ -279,7 +303,13 @@ namespace MWMechanics::ESM4Physical
         return forceMin + (forceMax - forceMin) * t;
     }
 
-    bool knockDown(const MWWorld::Ptr& actor, const osg::Vec3f& direction, float force, bool unconscious)
+    float impulseScale()
+    {
+        return sImpulsePerForce;
+    }
+
+    bool knockDown(const MWWorld::Ptr& actor, const osg::Vec3f& direction, float force, bool unconscious,
+        const std::optional<osg::Vec3f>& hitPosition)
     {
         if (!isActor(actor) || ESM4Combat::isDead(actor))
             return false;
@@ -296,12 +326,19 @@ namespace MWMechanics::ESM4Physical
         // Whatever it was doing stops: the move, the attack, the idle
         ESM4Actors::get().stop(actor);
         ESM4Combat::cancelAttacks(actor);
-        float fall = 0.f;
-        if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
-            fall = animation->playKnockdown();
-        if (fall <= 0.f)
-            fall = sDefaultFallTime;
-        state.mTimer = fall + sLyingTime;
+        MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        state.mRagdoll = animation != nullptr
+            && animation->startRagdoll(state.mImpulse * sImpulsePerForce + osg::Vec3f(0.f, 0.f, 0.f), hitPosition);
+        if (state.mRagdoll)
+            state.mTimer = sMaxRagdollWait;
+        else
+        {
+            float fall = animation != nullptr ? animation->playKnockdown() : 0.f;
+            if (fall <= 0.f)
+                fall = sDefaultFallTime;
+            state.mTimer = fall + sLyingTime;
+        }
         setPosture(actor, state, unconscious ? Posture::Unconscious : Posture::KnockedDown);
         return true;
     }
@@ -329,14 +366,27 @@ namespace MWMechanics::ESM4Physical
         it->second.mTimer = std::min(it->second.mTimer, 0.5f);
     }
 
-    void setDead(const MWWorld::Ptr& actor, const osg::Vec3f& impulse)
+    bool setDead(const MWWorld::Ptr& actor, const osg::Vec3f& impulse, const std::optional<osg::Vec3f>& hitPosition,
+        bool instant)
     {
         if (!isActor(actor))
-            return;
+            return false;
         State& state = sStates[actor.getCellRef().getRefNum()];
         state.mImpulse = impulse;
         state.mTimer = 0.f;
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        if (!instant && animation != nullptr)
+        {
+            // A body already falling as a ragdoll (killed while knocked down) just stays down
+            if (animation->isRagdollActive())
+                state.mRagdoll = true;
+            else
+                state.mRagdoll = animation->startRagdoll(impulse * sImpulsePerForce, hitPosition);
+        }
+        else
+            state.mRagdoll = false;
         setPosture(actor, state, Posture::Dead);
+        return state.mRagdoll;
     }
 
     void setBleed(const MWWorld::Ptr& actor, float level)
@@ -375,6 +425,17 @@ namespace MWMechanics::ESM4Physical
             }
             if (state.mPosture == Posture::Dead)
             {
+                // A corpse that has come to rest is moved to where its body lies, so looting and distances work
+                // on the body rather than where it stood
+                if (state.mRagdoll && !state.mSettled)
+                {
+                    MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+                    if (animation != nullptr && animation->isRagdollAtRest())
+                    {
+                        settleAtBody(actor, *animation);
+                        state.mSettled = true;
+                    }
+                }
                 ++it;
                 continue;
             }
@@ -396,18 +457,39 @@ namespace MWMechanics::ESM4Physical
                     break;
                 case Posture::KnockedDown:
                 case Posture::Unconscious:
+                {
                     state.mTimer -= duration;
-                    if (state.mTimer <= 0.f && !(state.mPosture == Posture::Unconscious && state.mUnconscious))
+                    MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+                    // A ragdoll waits until the body has come to rest (knock state 2), or long enough
+                    bool wantsUp = state.mTimer <= 0.f;
+                    if (state.mRagdoll && animation != nullptr)
                     {
-                        // Wants to get up: the get-up sequence (the original picks it from the IDLE tree by the
-                        // pose it lies in; the skeleton's own get-up file stands in for that)
+                        if (!state.mSettled && animation->isRagdollAtRest())
+                        {
+                            settleAtBody(actor, *animation);
+                            state.mSettled = true;
+                            if (!state.mUnconscious)
+                                state.mTimer = std::min(state.mTimer, sLyingTime);
+                        }
+                        wantsUp = state.mTimer <= 0.f && (state.mSettled || state.mTimer < -sMaxRagdollWait);
+                    }
+                    if (wantsUp && !(state.mPosture == Posture::Unconscious && state.mUnconscious))
+                    {
+                        // Wants to get up (knock state 3): the get-up sequence (the original picks it from the IDLE
+                        // tree by the pose it lies in; the skeleton's own get-up file stands in for that)
+                        if (state.mRagdoll && animation != nullptr && !state.mSettled)
+                        {
+                            settleAtBody(actor, *animation);
+                            state.mSettled = true;
+                        }
                         float length = 0.f;
-                        if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
+                        if (animation != nullptr)
                             length = animation->playGetUp();
                         state.mTimer = length > 0.f ? length : sDefaultGetUpTime;
                         setPosture(actor, state, Posture::GettingUp);
                     }
                     break;
+                }
                 case Posture::GettingUp:
                     state.mTimer -= duration;
                     if (state.mTimer <= 0.f)
@@ -415,6 +497,9 @@ namespace MWMechanics::ESM4Physical
                         state.mTimer = 0.f;
                         if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
                             animation->standUp();
+                        MWBase::Environment::get().getWorld()->enableActorCollision(actor, true);
+                        state.mRagdoll = false;
+                        state.mSettled = false;
                         setPosture(actor, state, Posture::Standing);
                     }
                     break;

@@ -165,8 +165,10 @@ namespace MWMechanics::ESM4Combat
     // Plays the weapon's reload sequence; returns how long it takes (the weapon's reload time if longer).
     float reload(const MWWorld::Ptr& actor);
 
-    // Lays the actor down and stops it moving. impulse: direction x force of the killing blow, for the body.
-    void kill(const MWWorld::Ptr& actor, bool instant = false, const osg::Vec3f& impulse = osg::Vec3f());
+    // Lays the actor down and stops it moving. impulse: direction x force of the killing blow, for the body,
+    // hitPosition where it landed.
+    void kill(const MWWorld::Ptr& actor, bool instant = false, const osg::Vec3f& impulse = osg::Vec3f(),
+        const std::optional<osg::Vec3f>& hitPosition = std::nullopt);
 
     // Unarmed or creature attack (one of the actor's attack sequences). Partway through, the target takes the
     // attacker's damage if it is still within reach. False if the actor can't attack now.

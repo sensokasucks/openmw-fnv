@@ -3,6 +3,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <string_view>
 
 #include <osg/Vec3f>
@@ -53,6 +54,8 @@ namespace MWMechanics::ESM4Physical
         float mBleed = 0.f; // bleeding level, 0 none (the opt-in bleed effects raise it)
         float mTimer = 0.f; // seconds left in the current phase (lying, getting up, staggering)
         bool mUnconscious = false; // the knockdown leaves the actor out until wakeUp
+        bool mRagdoll = false; // the body is (or was) a ragdoll rather than a sequence
+        bool mSettled = false; // the reference has been moved to where the body lies
     };
 
     // What the limbs leave the actor able to do; the executor picks the gait from it and the pathing uses the
@@ -93,16 +96,24 @@ namespace MWMechanics::ESM4Physical
     // DamageMin)) with the melee (fDeathForce*) or ranged (fDeathForceRanged*) settings.
     float getDeathForce(float damage, bool ranged);
 
-    // Knocks the actor down: it drops (the ragdoll with the impulse once F3 is in; the fall sequence until then),
-    // lies a moment and gets up on its own, or stays down until wakeUp with unconscious. Any move, attack or
-    // idle stops. False for actors that can't be (dead, not an FO3/FONV actor, already down).
-    bool knockDown(const MWWorld::Ptr& actor, const osg::Vec3f& direction, float force, bool unconscious = false);
+    // Knocks the actor down: it drops as a ragdoll under the impulse of the blow (direction x force, in the
+    // original's units; the fall sequence when the skeleton has no ragdoll or ragdolls are off), lies until the
+    // body is at rest and gets up on its own, or stays down until wakeUp with unconscious. Any move, attack or
+    // idle stops. hitPosition: where the blow landed, for the ragdoll. False for actors that can't be (dead, not
+    // an FO3/FONV actor, already down).
+    bool knockDown(const MWWorld::Ptr& actor, const osg::Vec3f& direction, float force, bool unconscious = false,
+        const std::optional<osg::Vec3f>& hitPosition = std::nullopt);
     // Reels from a hit for a moment: no attacks until it is over (the modern brain's stumbles build on this).
     bool stagger(const MWWorld::Ptr& actor, float seconds);
     // An unconscious actor wants to get up.
     void wakeUp(const MWWorld::Ptr& actor);
-    // Death: the posture is Dead and the impulse of the blow is kept for the body. Called by ESM4Combat::kill.
-    void setDead(const MWWorld::Ptr& actor, const osg::Vec3f& impulse);
+    // Death: the posture is Dead and the body drops as a ragdoll under the blow's impulse (direction x force) when
+    // it has one, which the caller learns from the return; otherwise it plays its death sequence. Called by
+    // ESM4Combat::kill; instant for actors loaded dead.
+    bool setDead(const MWWorld::Ptr& actor, const osg::Vec3f& impulse,
+        const std::optional<osg::Vec3f>& hitPosition = std::nullopt, bool instant = false);
+    // Force (the original's death force units) to the ragdoll impulse (kg x game units per second)
+    float impulseScale();
     void setBleed(const MWWorld::Ptr& actor, float level);
 
     // Posture changes are reported (actor, previous, current) so the AI can re-plan after a get-up.

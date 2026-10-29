@@ -340,10 +340,12 @@ namespace MWMechanics::ESM4Combat
                             << Stats::getPermanent(target, Stats::Health);
         const osg::Vec3f direction = result != nullptr ? result->mDirection : osg::Vec3f();
         const float force = ESM4Physical::getDeathForce(damage, ranged);
+        const std::optional<osg::Vec3f> hitPosition
+            = result != nullptr ? std::optional<osg::Vec3f>(result->mPosition) : std::nullopt;
         if (isDead(target))
-            kill(target, false, direction * force);
+            kill(target, false, direction * force, hitPosition);
         else if (result != nullptr && ESM4Physical::rollKnockdown(target, damage, healthBefore, false))
-            result->mKnockedDown = ESM4Physical::knockDown(target, direction, force);
+            result->mKnockedDown = ESM4Physical::knockDown(target, direction, force, false, hitPosition);
         return damage;
     }
 
@@ -1498,13 +1500,15 @@ namespace MWMechanics::ESM4Combat
         sProjectiles.clear();
     }
 
-    void kill(const MWWorld::Ptr& actor, bool instant, const osg::Vec3f& impulse)
+    void kill(const MWWorld::Ptr& actor, bool instant, const osg::Vec3f& impulse,
+        const std::optional<osg::Vec3f>& hitPosition)
     {
         ESM4Actors::get().stop(actor);
         cancelAttacks(actor);
-        ESM4Physical::setDead(actor, impulse);
         MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
+        // The body drops as a ragdoll where it has one; the death sequence otherwise
+        const bool ragdoll = ESM4Physical::setDead(actor, impulse, hitPosition, instant);
         if (MWRender::ESM4NpcAnimation* animation = getAnimation(actor))
-            animation->playDeath(instant);
+            animation->playDeath(instant || ragdoll);
     }
 }

@@ -34,6 +34,11 @@ namespace osg
     class Callback;
 }
 
+namespace MWPhysics
+{
+    class Ragdoll;
+}
+
 namespace MWRender
 {
     class FaceMorphs;
@@ -117,6 +122,25 @@ namespace MWRender
         void standUp();
         bool isDown() const { return mDown; }
 
+        // FO3/FNV ragdoll (MWPhysics::Ragdoll, from the skeleton's Havok bodies): the body drops out of its pose
+        // under the blow's impulse (kg x units per second, at hitPosition when given) and the physics poses the
+        // bones until it comes to rest. The sequences stop; a knocked-down actor gets up again through endRagdoll.
+        // False when the skeleton has no ragdoll or ragdolls are off ("fnv ragdolls" setting).
+        bool startRagdoll(const osg::Vec3f& impulse, const std::optional<osg::Vec3f>& hitPosition);
+        bool hasRagdoll() const { return mRagdoll != nullptr; }
+        bool isRagdollActive() const;
+        bool isRagdollAtRest() const;
+        bool isRagdollFaceUp() const;
+        // Where the pelvis lies
+        std::optional<osg::Vec3f> getRagdollPosition() const;
+        // Poses the bones from the (frozen) ragdoll again, after the actor was moved to where it lies
+        void applyRagdollPose();
+        // The ragdoll lets go of the bones; a living actor is down and plays its get-up next (playGetUp)
+        void endRagdoll();
+        // A placed corpse takes the pose its reference carries (ESM4 XRGD) as a frozen ragdoll. False without a
+        // pose or a ragdoll. Experimental: the XRGD layout is from community docs (OPENMW_FNV_XRGD=1 turns it on).
+        bool applyPlacedPose();
+
         // Ground speed of the current locomotion sequence (units per second), 0 when standing or unknown.
         float getLocomotionSpeed() const;
         // Playback rate of the walk and run loops: the actor's speed over getLocomotionSpeed.
@@ -158,6 +182,8 @@ namespace MWRender
         Direction mDirection = Direction::Forward;
         bool mDead = false;
         bool mDown = false; // knocked down or getting up (playKnockdown)
+        std::unique_ptr<MWPhysics::Ragdoll> mRagdoll;
+        bool mRagdollPosing = false; // the ragdoll has the bones
         bool mInAction = false;
         std::string mIdleSequence;
         osg::ref_ptr<osg::Node> mWeapon;
@@ -238,6 +264,10 @@ namespace MWRender
         // Where a locomotion loop lives for this actor (locomotion/child, locomotion/male or female, locomotion,
         // next to the skeleton), or an empty path if it is nowhere
         VFS::Path::Normalized findLoopFONV(std::string_view file) const;
+        // Drops the sequence playing and puts its bones back at rest
+        void stopSequence();
+        // Builds the skeleton's ragdoll (MWPhysics::Ragdoll) if it has one and there is none yet
+        bool ensureRagdoll();
         // Binds the sequence's tracks to the skeleton, replacing the one played before, which it blends out of over
         // blendTime seconds (the original's fAnimationDefaultBlend) instead of snapping. Returns its length.
         float playKeyframesFONV(const VFS::Path::Normalized& path, std::shared_ptr<SceneUtil::ControllerSource> source,

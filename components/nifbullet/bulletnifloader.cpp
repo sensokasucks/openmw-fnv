@@ -39,41 +39,37 @@ namespace
 namespace NifBullet
 {
 
+    float havokScaleFor(std::uint32_t bethVersion)
+    {
+        return bethVersion >= 83 ? 69.969f : 6.9969f;
+    }
+
+    bool isSolidLayer(int layer)
+    {
+        switch (layer)
+        {
+            case 8: // BIPED (ragdoll bodies)
+            case 11: // WATER
+            case 12: // TRIGGER
+            case 14: // TRAP
+            case 15: // NONCOLLIDABLE
+            case 16: // CLOUDTRAP
+            case 18: // PORTAL
+            case 21: // ACOUSTIC_SPACE
+            case 22: // ACTORZONE
+            case 23: // PROJECTILEZONE
+            case 24: // GASTRAP
+            case 25: // SHELLCASING
+            case 29: // DEADBIP
+            case 30: // CHARCONTROLLER
+                return false;
+            default:
+                return layer < 31 || layer > 42; // AVOIDBOX .. DROPPINGPICK
+        }
+    }
+
     namespace
     {
-        // Havok units (meters) to game units: the community's bhkScaleFactor, 6.9969 for Oblivion, FO3 and FNV
-        // (Bethesda version below 83) and ten times that for Skyrim
-        float havokScaleFor(Nif::FileView nif)
-        {
-            return nif.getBethVersion() >= 83 ? 69.969f : 6.9969f;
-        }
-
-        // Collision layers (FalloutNV.exe layer name table) that are not solid for the world: triggers, zones,
-        // pick volumes, and the ragdoll and character controller shapes of skeletons
-        bool isSolidLayer(int layer)
-        {
-            switch (layer)
-            {
-                case 8: // BIPED (ragdoll bodies)
-                case 11: // WATER
-                case 12: // TRIGGER
-                case 14: // TRAP
-                case 15: // NONCOLLIDABLE
-                case 16: // CLOUDTRAP
-                case 18: // PORTAL
-                case 21: // ACOUSTIC_SPACE
-                case 22: // ACTORZONE
-                case 23: // PROJECTILEZONE
-                case 24: // GASTRAP
-                case 25: // SHELLCASING
-                case 29: // DEADBIP
-                case 30: // CHARCONTROLLER
-                    return false;
-                default:
-                    return layer < 31 || layer > 42; // AVOIDBOX .. DROPPINGPICK
-            }
-        }
-
         btVector3 toBullet(const osg::Vec4f& v, float scale)
         {
             return btVector3(v.x() * scale, v.y() * scale, v.z() * scale);
@@ -214,7 +210,7 @@ namespace NifBullet
             // The Bethesda Havok data (bhkCollisionObject on the nodes) is the collision the game plays with:
             // collision-only geometry, invisible walls, no collision on leaves and clutter the designers left out.
             // Only a file without any falls back on its rendered geometry.
-            if (handleBhkTree(node, nullptr, args, havokScaleFor(nif)))
+            if (handleBhkTree(node, nullptr, args, havokScaleFor(nif.getBethVersion())))
                 return;
             args.mGenerateCollision = true;
         }
@@ -492,7 +488,7 @@ namespace NifBullet
         const int layer = body.mHavokFilter.mLayer;
         if (!isSolidLayer(layer))
             return;
-        std::unique_ptr<btCollisionShape> shape = makeBhkShape(body.mShape.get(), havokScale, layer);
+        std::unique_ptr<btCollisionShape> shape = makeBhkShape(body.mShape.get(), havokScale, layer, false);
         if (shape == nullptr)
             return;
         // The body sits in the node's space (a bhkRigidBodyT with its own offset, which the shape keeps as its own
@@ -519,9 +515,10 @@ namespace NifBullet
         mBhkFound = true;
     }
 
-    std::unique_ptr<btCollisionShape> BulletNifLoader::makeBhkShape(
-        const Nif::bhkShape& shape, float havokScale, int layer)
+    std::unique_ptr<btCollisionShape> makeBhkShape(
+        const Nif::bhkShape& shape, float havokScale, int layer, bool anyLayer)
     {
+        const auto solid = [anyLayer](int l) { return anyLayer || isSolidLayer(l); };
         switch (shape.mRecordType)
         {
             case Nif::RC_bhkBoxShape:
@@ -599,7 +596,7 @@ namespace NifBullet
                 const auto& transformShape = static_cast<const Nif::bhkConvexTransformShape&>(shape);
                 if (transformShape.mShape.empty())
                     return nullptr;
-                std::unique_ptr<btCollisionShape> child = makeBhkShape(transformShape.mShape.get(), havokScale, layer);
+                std::unique_ptr<btCollisionShape> child = makeBhkShape(transformShape.mShape.get(), havokScale, layer, anyLayer);
                 if (child == nullptr)
                     return nullptr;
                 osg::Matrixf matrix = transformShape.mTransform;
@@ -623,9 +620,9 @@ namespace NifBullet
                     if (sub.empty())
                         continue;
                     const int subLayer = i < list.mHavokFilters.size() ? list.mHavokFilters[i].mLayer : layer;
-                    if (!isSolidLayer(subLayer))
+                    if (!solid(subLayer))
                         continue;
-                    if (std::unique_ptr<btCollisionShape> child = makeBhkShape(sub.get(), havokScale, subLayer))
+                    if (std::unique_ptr<btCollisionShape> child = makeBhkShape(sub.get(), havokScale, subLayer, anyLayer))
                         compound->addChildShape(btTransform::getIdentity(), child.release());
                 }
                 if (compound->getNumChildShapes() == 0)
@@ -638,7 +635,7 @@ namespace NifBullet
                 const auto& mopp = static_cast<const Nif::bhkMoppBvTreeShape&>(shape);
                 if (mopp.mShape.empty())
                     return nullptr;
-                return makeBhkShape(mopp.mShape.get(), havokScale, layer);
+                return makeBhkShape(mopp.mShape.get(), havokScale, layer, anyLayer);
             }
             case Nif::RC_bhkPackedNiTriStripsShape:
             {
@@ -651,15 +648,15 @@ namespace NifBullet
                 // The subshapes own runs of vertices in turn; a triangle belongs to the subshape of its vertices
                 const std::vector<Nif::hkSubPartData>& subshapes
                     = data.mSubshapes.empty() ? packed.mSubshapes : data.mSubshapes;
-                std::vector<bool> solid(data.mVertices.size(), true);
+                std::vector<bool> solidVertex(data.mVertices.size(), true);
                 if (!subshapes.empty())
                 {
                     std::size_t vertex = 0;
                     for (const Nif::hkSubPartData& sub : subshapes)
                     {
-                        const bool subSolid = isSolidLayer(sub.mHavokFilter.mLayer);
-                        for (std::uint32_t i = 0; i < sub.mNumVertices && vertex < solid.size(); ++i, ++vertex)
-                            solid[vertex] = subSolid;
+                        const bool subSolid = solid(sub.mHavokFilter.mLayer);
+                        for (std::uint32_t i = 0; i < sub.mNumVertices && vertex < solidVertex.size(); ++i, ++vertex)
+                            solidVertex[vertex] = subSolid;
                     }
                 }
                 const btVector3 scale(havokScale, havokScale, havokScale);
@@ -669,7 +666,7 @@ namespace NifBullet
                     const auto& t = triangle.mTriangle;
                     if (t[0] >= data.mVertices.size() || t[1] >= data.mVertices.size() || t[2] >= data.mVertices.size())
                         continue;
-                    if (!solid[t[0]] && !solid[t[1]] && !solid[t[2]])
+                    if (!solidVertex[t[0]] && !solidVertex[t[1]] && !solidVertex[t[2]])
                         continue;
                     mesh->addTriangle(Misc::Convert::toBullet(data.mVertices[t[0]]) * scale,
                         Misc::Convert::toBullet(data.mVertices[t[1]]) * scale,
@@ -693,7 +690,7 @@ namespace NifBullet
                     if (dataPtr.empty())
                         continue;
                     const int subLayer = i < strips.mHavokFilters.size() ? strips.mHavokFilters[i].mLayer : layer;
-                    if (!isSolidLayer(subLayer))
+                    if (!solid(subLayer))
                         continue;
                     const Nif::NiTriStripsData& data = dataPtr.get();
                     for (const std::vector<unsigned short>& strip : data.mStrips)

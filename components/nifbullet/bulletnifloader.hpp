@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -32,6 +33,18 @@ namespace Nif
 
 namespace NifBullet
 {
+    // Havok units (meters) to game units: the community's bhkScaleFactor, 6.9969 for Oblivion, FO3 and FNV
+    // (Bethesda version below 83) and ten times that for Skyrim
+    float havokScaleFor(std::uint32_t bethVersion);
+
+    // Collision layers (FalloutNV.exe layer name table) that are solid for the world; triggers, zones, pick
+    // volumes, water and the ragdoll and character controller shapes of skeletons are not
+    bool isSolidLayer(int layer);
+
+    // A Bullet shape for a bhk shape record, nullptr for the kinds not built (phantoms, planes, compressed meshes)
+    // and, unless anyLayer, for sub-shapes on layers that are not solid. Ragdoll bodies pass anyLayer.
+    std::unique_ptr<btCollisionShape> makeBhkShape(
+        const Nif::bhkShape& shape, float havokScale, int layer, bool anyLayer = false);
 
     /**
      *Load bulletShape from NIF files.
@@ -72,9 +85,6 @@ namespace NifBullet
         bool handleBhkTree(const Nif::NiAVObject& node, const Nif::Parent* parent, HandleNodeArgs args, float havokScale);
         void handleBhkBody(const Nif::NiAVObject& node, const Nif::bhkRigidBody& body, bool transformed,
             const Nif::Parent* parent, const HandleNodeArgs& args, float havokScale);
-        // A Bullet shape for a bhk shape record, nullptr for the kinds we don't build (phantoms, planes,
-        // compressed meshes) and for the collision layers that are not solid (triggers, pick volumes, ragdolls)
-        std::unique_ptr<btCollisionShape> makeBhkShape(const Nif::bhkShape& shape, float havokScale, int layer);
         bool mBhkFound{ false };
 
         std::unique_ptr<btCompoundShape, Resource::DeleteCollisionShape> mCompoundShape;

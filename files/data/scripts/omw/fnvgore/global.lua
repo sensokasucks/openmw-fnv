@@ -24,6 +24,7 @@ if combat == nil or combat.dismember == nil then
 end
 
 local LIMB = combat.LIMB
+local physical = core.obscript.physical
 
 -- Lost limbs of the actors this game, by object id: { lost = mask, exploded = mask }
 local lost = {}
@@ -142,6 +143,36 @@ return {
                 dismember(target, LIMB[name], e.explode == true)
             end
             say(('%s: %s %s'):format(e.explode and 'gib' or 'sever', target.recordId, table.concat(limbs, ', ')))
+        end,
+        -- The console's knockdown / stagger commands (scripts/omw/fnvgore/player.lua): { player, target, verb,
+        -- amount (force or seconds), from (the player's position: the blow comes from there) }
+        FNVPhysical_Console = function(e)
+            local function say(msg, isError)
+                if e.player then e.player:sendEvent(isError and 'OMWConsoleError' or 'OMWConsolePrint', msg) end
+            end
+            local target = e.target
+            if physical == nil then
+                say(e.verb .. ': no physical API in this build', true)
+                return
+            end
+            if target == nil or not target:isValid()
+                or not (types.ESM4NPC.objectIsInstance(target) or types.ESM4Creature.objectIsInstance(target)) then
+                say(e.verb .. ': select an NPC or a creature (click it in the console)', true)
+                return
+            end
+            if e.verb == 'stagger' then
+                physical.stagger(target, e.amount or 1.0)
+                say(('stagger: %s for %.1fs'):format(target.recordId, e.amount or 1.0))
+                return
+            end
+            local away = target.position - (e.from or target.position)
+            away = util.vector3(away.x, away.y, 0)
+            if away:length() < 1 then away = util.vector3(0, 1, 0) end
+            away = away:normalize() + util.vector3(0, 0, 0.6)
+            local force = e.amount or 35
+            physical.knockDown(target, away:normalize(), force)
+            say(('knockdown: %s, force %.0f (posture was %s)'):format(target.recordId, force,
+                physical.getPosture(target)))
         end,
     },
     engineHandlers = {

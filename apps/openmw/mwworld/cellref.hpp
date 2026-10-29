@@ -58,6 +58,21 @@ namespace MWWorld
             return std::visit(Visitor(), mCellRef.mVariant);
         }
 
+        // The ragdoll pose a placed dead FO3/FNV actor was given (ESM4 XRGD); nullptr for other references
+        const std::vector<ESM4::ActorCharacter::RagdollBone>* getRagdollPose() const
+        {
+            struct Visitor
+            {
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM::CellRef&) { return nullptr; }
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM4::Reference&) { return nullptr; }
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return ref.mRagdollPose.empty() ? nullptr : &ref.mRagdollPose;
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Linked reference (ESM4 XLKR, GetLinkedRef); zero if none.
         ESM::FormId getLinkedRef() const
         {

@@ -12,6 +12,7 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrace.hpp>
 
+#include <cstdlib>
 #include <span>
 
 #include <osg/Material>
@@ -28,6 +29,8 @@
 #include <components/misc/strings/algorithm.hpp>
 #include <components/resource/imagemanager.hpp>
 #include <components/resource/keyframemanager.hpp>
+#include <components/settings/values.hpp>
+#include <components/resource/niffilemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
 #include <components/sceneutil/attach.hpp>
@@ -41,6 +44,8 @@
 #include <components/vfs/manager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
+#include "../mwphysics/ragdoll.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "esm4facegen.hpp"
 #include "../mwclass/esm4creature.hpp"
@@ -86,7 +91,13 @@ namespace MWRender
         setObjectRoot(model, true, true, false);
         updateParts();
         if (MWMechanics::ESM4Combat::isDead(mPtr))
-            playDeath(true);
+        {
+            // A corpse the designers placed lies the way they posed it; others take the death pose
+            if (!applyPlacedPose())
+                playDeath(true);
+            else
+                mDead = true;
+        }
         showLostLimbs();
         if (mFace != nullptr && !mFace->empty() && mObjectRoot != nullptr)
         {
@@ -1155,6 +1166,8 @@ namespace MWRender
         mDead = true;
         mDown = false;
         showWeapon({});
+        if (mRagdollPosing)
+            return; // the ragdoll lays it down
         // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
         // lays it down; humans have death poses.
         const auto sequence = findGetUpSequence();
@@ -1169,7 +1182,7 @@ namespace MWRender
 
     float ESM4NpcAnimation::playKnockdown()
     {
-        if (mDead || mDown)
+        if (mDead || mDown || mRagdollPosing)
             return 0.f;
         mDown = true;
         mInAction = false;
@@ -1186,6 +1199,8 @@ namespace MWRender
     {
         if (mDead || !mDown)
             return 0.f;
+        if (mRagdollPosing)
+            endRagdoll();
         const auto sequence = findGetUpSequence();
         if (!sequence || !sequence->second)
             return 0.f;
@@ -1202,6 +1217,155 @@ namespace MWRender
         mDown = false;
         mInAction = false;
         playLocomotion();
+    }
+
+    void ESM4NpcAnimation::stopSequence()
+    {
+        for (auto& [node, callback] : mLoopCallbacks)
+        {
+            node->removeUpdateCallback(callback);
+            if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
+            {
+                // Rotation too: a furniture entry leaves "Bip01 NonAccum" turned around
+                if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
+                {
+                    transform->setRotation(rest->second.mRotation);
+                    transform->setTranslation(rest->second.mTranslation);
+                }
+                else
+                    transform->setRotation(transform->mRotationScale);
+            }
+        }
+        mLoopCallbacks.clear();
+    }
+
+    bool ESM4NpcAnimation::ensureRagdoll()
+    {
+        if (!Settings::game().mFnvRagdolls || mObjectRoot == nullptr || mSkeletonPath.empty())
+            return false;
+        if (mRagdoll != nullptr)
+            return true;
+        Nif::NIFFilePtr skeleton;
+        try
+        {
+            skeleton = mResourceSystem->getNifFileManager()->get(mSkeletonPath);
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "No ragdoll for " << mPtr.getCellRef().getRefId() << ": " << e.what();
+            return false;
+        }
+        if (skeleton == nullptr)
+            return false;
+        // The race height scales the whole skeleton on the actor's base node
+        float scale = 1.f;
+        if (const osg::Group* base = mPtr.getRefData().getBaseNode())
+            if (const osg::MatrixTransform* transform
+                = base->asTransform() ? base->asTransform()->asMatrixTransform() : nullptr)
+                scale = transform->getMatrix().getScale().x();
+        mRagdoll = MWPhysics::Ragdoll::create(
+            Nif::FileView(*skeleton), *mObjectRoot, scale, MWBase::Environment::get().getWorld()->getRagdollWorld());
+        if (mRagdoll == nullptr)
+            Log(Debug::Verbose) << "No ragdoll in " << mSkeletonPath << " for " << mPtr.getCellRef().getRefId();
+        return mRagdoll != nullptr;
+    }
+
+    bool ESM4NpcAnimation::applyPlacedPose()
+    {
+        static const bool enabled = [] {
+            const char* value = std::getenv("OPENMW_FNV_XRGD");
+            return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+        }();
+        if (!enabled)
+            return false;
+        const auto* pose = mPtr.getCellRef().getRagdollPose();
+        if (pose == nullptr || !ensureRagdoll())
+            return false;
+        // Hypothesis (community docs): position relative to the reference along the world axes, rotation as
+        // Euler angles (radians) about X, Y, Z, per ragdoll bone in skeleton order, for the rigid bodies
+        const osg::Vec3f origin = mPtr.getRefData().getPosition().asVec3();
+        const auto& bones = mRagdoll->getBones();
+        std::map<std::string, btTransform, std::less<>> transforms;
+        for (const ESM4::ActorCharacter::RagdollBone& entry : *pose)
+        {
+            if (entry.mBone >= bones.size())
+                continue;
+            const osg::Quat rotation(entry.mRotation[0], osg::Vec3f(1, 0, 0), entry.mRotation[1], osg::Vec3f(0, 1, 0),
+                entry.mRotation[2], osg::Vec3f(0, 0, 1));
+            btTransform transform(btQuaternion(rotation.x(), rotation.y(), rotation.z(), rotation.w()),
+                btVector3(origin.x() + entry.mPosition[0], origin.y() + entry.mPosition[1],
+                    origin.z() + entry.mPosition[2]));
+            transforms[bones[entry.mBone].mName] = transform;
+            Log(Debug::Verbose) << "XRGD " << mPtr.getCellRef().getRefId() << " bone " << int(entry.mBone) << " ("
+                                << bones[entry.mBone].mName << ") at " << entry.mPosition[0] << " "
+                                << entry.mPosition[1] << " " << entry.mPosition[2] << " rot " << entry.mRotation[0]
+                                << " " << entry.mRotation[1] << " " << entry.mRotation[2];
+        }
+        if (transforms.empty())
+            return false;
+        for (auto& [node, callback] : mLoopCallbacks)
+            node->removeUpdateCallback(callback);
+        mLoopCallbacks.clear();
+        mRagdollPosing = true;
+        mRagdoll->startFrozen(transforms);
+        return true;
+    }
+
+    bool ESM4NpcAnimation::startRagdoll(const osg::Vec3f& impulse, const std::optional<osg::Vec3f>& hitPosition)
+    {
+        if (mRagdoll != nullptr && mRagdoll->isStarted())
+            return false;
+        if (!ensureRagdoll())
+            return false;
+        // The pose the sequence left the bones in seeds the bodies; nothing poses them afterwards but the physics
+        for (auto& [node, callback] : mLoopCallbacks)
+            node->removeUpdateCallback(callback);
+        mLoopCallbacks.clear();
+        mLookTarget.reset();
+        mInAction = false;
+        mDown = !mDead;
+        mRagdollPosing = true;
+        showWeapon({});
+        mRagdoll->start(impulse, hitPosition);
+        return true;
+    }
+
+    bool ESM4NpcAnimation::isRagdollActive() const
+    {
+        return mRagdoll != nullptr && mRagdoll->isActive();
+    }
+
+    bool ESM4NpcAnimation::isRagdollAtRest() const
+    {
+        return mRagdoll != nullptr && mRagdoll->isStarted() && mRagdoll->isAtRest();
+    }
+
+    bool ESM4NpcAnimation::isRagdollFaceUp() const
+    {
+        return mRagdoll == nullptr || mRagdoll->isFaceUp();
+    }
+
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getRagdollPosition() const
+    {
+        if (mRagdoll == nullptr || !mRagdoll->isStarted())
+            return std::nullopt;
+        return mRagdoll->getRootPosition();
+    }
+
+    void ESM4NpcAnimation::applyRagdollPose()
+    {
+        if (mRagdoll != nullptr && mRagdollPosing)
+            mRagdoll->applyToBones();
+    }
+
+    void ESM4NpcAnimation::endRagdoll()
+    {
+        if (mRagdoll == nullptr || !mRagdollPosing)
+            return;
+        mRagdoll->freeze();
+        mRagdollPosing = false;
+        // Bodies seeded again from whatever pose the bones hold when it next starts
+        mRagdoll.reset();
     }
 
     bool ESM4NpcAnimation::isFemale() const
@@ -1307,22 +1471,7 @@ namespace MWRender
         // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
         // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which
         // lifts "Bip01" instead) takes over, leaving the NPC floating.
-        for (auto& [node, callback] : mLoopCallbacks)
-        {
-            node->removeUpdateCallback(callback);
-            if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
-            {
-                // Rotation too: a furniture entry leaves "Bip01 NonAccum" turned around
-                if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
-                {
-                    transform->setRotation(rest->second.mRotation);
-                    transform->setTranslation(rest->second.mTranslation);
-                }
-                else
-                    transform->setRotation(transform->mRotationScale);
-            }
-        }
-        mLoopCallbacks.clear();
+        stopSequence();
 
         const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
         mLocomotionSpeed = 0.f;

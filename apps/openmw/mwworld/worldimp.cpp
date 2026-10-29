@@ -3219,6 +3219,11 @@ namespace MWWorld
         return mPhysics->mPhysicsDt;
     }
 
+    MWPhysics::RagdollWorld& World::getRagdollWorld()
+    {
+        return mPhysics->getRagdollWorld();
+    }
+
     bool World::findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result)
     {
         if (cell->isExterior())

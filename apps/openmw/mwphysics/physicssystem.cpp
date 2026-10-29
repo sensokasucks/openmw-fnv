@@ -58,6 +58,7 @@
 #include "mtphysics.hpp"
 #include "object.hpp"
 #include "projectile.hpp"
+#include "ragdoll.hpp"
 
 namespace
 {
@@ -135,6 +136,7 @@ namespace MWPhysics
 
         mDebugDrawer = std::make_unique<MWRender::DebugDrawer>(mParentNode, mCollisionWorld.get(), mDebugDrawEnabled);
         mTaskScheduler = std::make_unique<PhysicsTaskScheduler>(mPhysicsDt, mCollisionWorld.get(), mDebugDrawer.get());
+        mRagdolls = std::make_unique<RagdollWorld>(*this);
     }
 
     PhysicsSystem::~PhysicsSystem()
@@ -145,6 +147,7 @@ namespace MWPhysics
             mTaskScheduler->removeCollisionObject(mWaterCollisionObject.get());
 
         mTaskScheduler->releaseSharedStates();
+        mRagdolls.reset();
         mHeightFields.clear();
         mObjects.clear();
         mActors.clear();
@@ -396,7 +399,10 @@ namespace MWPhysics
     {
         HeightFieldMap::iterator heightfield = mHeightFields.find(std::make_pair(x, y));
         if (heightfield != mHeightFields.end())
+        {
+            mRagdolls->onCollisionObjectRemoved(heightfield->second->getCollisionObject());
             mHeightFields.erase(heightfield);
+        }
     }
 
     const HeightField* PhysicsSystem::getHeightField(int x, int y) const
@@ -446,6 +452,7 @@ namespace MWPhysics
     {
         if (auto foundObject = mObjects.find(ptr.mRef); foundObject != mObjects.end())
         {
+            mRagdolls->onCollisionObjectRemoved(foundObject->second->getCollisionObject());
             mAnimatedObjects.erase(foundObject->second.get());
 
             mObjects.erase(foundObject);
@@ -733,9 +740,18 @@ namespace MWPhysics
         }
     }
 
+    void PhysicsSystem::aabbTest(
+        const btVector3& aabbMin, const btVector3& aabbMax, btBroadphaseAabbCallback& callback) const
+    {
+        mTaskScheduler->aabbTest(aabbMin, aabbMax, callback);
+    }
+
     void PhysicsSystem::stepSimulation(
         float dt, bool skipSimulation, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats)
     {
+        // The ragdolls fall on the main thread, before the frame's update traversal poses the bodies
+        if (!skipSimulation)
+            mRagdolls->step(dt);
         for (auto& [animatedObject, changed] : mAnimatedObjects)
         {
             if (animatedObject->animateCollisionShapes())
