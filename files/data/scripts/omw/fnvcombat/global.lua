@@ -1109,6 +1109,14 @@ local function replan(s, distance, los)
     if s.refreshWeaponsUntil then
         s.weapons = combat.getActorWeapons(s.actor)
         if simTime > s.refreshWeaponsUntil then s.refreshWeaponsUntil = nil end
+        -- (a weapon just dropped is still listed until the drop lands, a frame later)
+        if s.disarmed ~= nil and simTime - s.disarmed.at < 1 then
+            local left = {}
+            for _, w in ipairs(s.weapons) do
+                if w.id ~= s.disarmed.weaponId then left[#left + 1] = w end
+            end
+            s.weapons = left
+        end
     end
     s.best = bestWeapons(s, distance)
     local actorType = s.equippedType
@@ -1631,7 +1639,7 @@ checkDisarm = function(s)
         if crippledNow then
             local lostDps = weaponDps(actor, held)
             if dropHeldWeapon(actor) ~= nil then
-                s.disarmed = { dps = lostDps, at = simTime }
+                s.disarmed = { dps = lostDps, at = simTime, weaponId = held.id }
                 s.inHand, s.gun = nil, nil
                 s.equippedType, s.drawnType = PW.HAND_TO_HAND, PW.HAND_TO_HAND
                 -- off the list at once (the drop itself lands a frame later)
