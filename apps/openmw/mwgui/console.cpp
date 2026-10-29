@@ -231,10 +231,11 @@ namespace MWGui
         else
             print(mConsoleMode + " " + command + "\n");
 
-        // FO3/FNV testing commands that Lua scripts handle (scripts/omw/fnvgore/player.lua): the script compiler
+        // FO3/FNV testing commands that Lua scripts handle (scripts/omw/fnvgore/player.lua,
+        // scripts/omw/fnvcompanion/player.lua): the script compiler
         // never sees them
         const auto isLuaCommand = [](std::string_view cmd) {
-            static constexpr std::string_view luaCommands[] = { "gib", "sever" };
+            static constexpr std::string_view luaCommands[] = { "gib", "sever", "companion" };
             const std::size_t end = cmd.find_first_of(" \t");
             const std::string_view word = cmd.substr(0, end);
             for (std::string_view name : luaCommands)

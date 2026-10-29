@@ -14,9 +14,13 @@
 -- To the player:
 --   FNVCompanionWheelOpen     { companion, aggressive, long, ranged, following }
 --   FNVCompanionWheelSubtitle { text }
+-- Testing: the console command `companion` (FNVCompanion_Console { player }) brings Veronica next to the player and
+-- hires her with her own recruit line's scripts.
 
 local core = require('openmw.core')
 local storage = require('openmw.storage')
+local util = require('openmw.util')
+local world = require('openmw.world')
 local types = require('openmw.types')
 local I = require('openmw.interfaces')
 
@@ -125,8 +129,36 @@ local function openInventory(player, npc)
     end
 end
 
+-- The console's `companion`: Veronica (VeronicaREF) a few steps in front of the player, hired as her recruit
+-- INFO 0x147789 does. Her reputation warning (VDialogueVeronica.bWarn2Done) is marked done, or its force-greet
+-- fires her within seconds.
+local function bringTestCompanion(player)
+    local formId = core.obscript.resolveRefEditorId and core.obscript.resolveRefEditorId('VeronicaREF')
+    local ok, npc = pcall(function() return formId and world.getObjectByFormId(formId) end)
+    if not ok or npc == nil or not npc:isValid() then
+        log('companion: VeronicaREF not found')
+        return
+    end
+    local yaw = player.rotation:getYaw()
+    local ahead = util.vector3(math.sin(yaw), math.cos(yaw), 0) * 150
+    npc:teleport(player.cell, player.position + ahead, { rotation = util.transform.rotateZ(yaw + math.pi) })
+    local info = dlg.getInfo('FormId:0x147789')
+    if I.FNVDialogue and I.FNVDialogue.runResultScript then
+        if info ~= nil then
+            I.FNVDialogue.runResultScript(info.scriptBegin, 'INFO 0x147789 (companion console) begin', npc)
+            I.FNVDialogue.runResultScript(info.scriptEnd, 'INFO 0x147789 (companion console) end', npc)
+        end
+        I.FNVDialogue.runResultScript('set VDialogueVeronica.bWarn2Done to 1', 'companion console', npc)
+    end
+    if info == nil and I.FNVAI and I.FNVAI.setTeammate then I.FNVAI.setTeammate(npc, true) end
+    log(('companion: %s brought to the player and hired'):format(npc.recordId))
+end
+
 return {
     eventHandlers = {
+        FNVCompanion_Console = function(e)
+            if e.player ~= nil then bringTestCompanion(e.player) end
+        end,
         FNVCompanionWheelButton = function(e)
             local player, npc, button = e.player, e.companion, e.button
             if player == nil or npc == nil or not npc:isValid() then return end

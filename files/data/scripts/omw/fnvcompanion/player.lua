@@ -221,6 +221,12 @@ return {
         isOpen = function() return wheel ~= nil or core.getRealTime() - closedAt < 0.25 end,
     },
     engineHandlers = {
+        -- `companion` in the console (routed here by MWGui::Console::execute): Veronica comes and joins, for testing
+        onConsoleCommand = function(mode, cmd)
+            if mode ~= '' or cmd:lower():match('^%s*(%a+)') ~= 'companion' then return end
+            core.sendGlobalEvent('FNVCompanion_Console', { player = self.object })
+            ui.printToConsole('Veronica is on her way', ui.CONSOLE_COLOR.Success)
+        end,
         onKeyPress = function(key)
             if wheel and key.code == require('openmw.input').KEY.E then press(11) end
         end,
