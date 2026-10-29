@@ -48,8 +48,14 @@ namespace MWPhysics
         constexpr float sRestSettle = 0.5f;
         // A lying FNV body's light parts (hands, feet) keep turning at 0.5..2 rad/s and drifting a few units per
         // second while the pelvis creeps at 1..3 units per second, so tighter limits never let it rest
-        constexpr float sRestLinearSpeed = 12.f; // game units per second (0.17 m/s)
-        constexpr float sRestAngularSpeed = 2.f; // rad/s
+        // ...judged on the pelvis and the mass-weighted mean of the body, since a light limb wedged against the
+        // ground jitters at 20 units/s and several rad/s long after the body lies still
+        constexpr float sRestLinearSpeed = 8.f; // game units per second (0.11 m/s)
+        constexpr float sRestAngularSpeed = 1.f; // rad/s, the pelvis
+        // Once the body has slowed to this, its damping goes up so the limbs settle instead of jittering
+        constexpr float sSettleSpeed = 40.f;
+        constexpr float sSettledLinearDamping = 0.6f;
+        constexpr float sSettledAngularDamping = 0.95f;
         constexpr float sMinSimulated = 0.75f; // a body never rests before it has had time to fall
         // The whole body's launch speed is capped: a hard blow throws it, it doesn't fire it across the room
         constexpr float sMaxLaunchSpeed = 420.f; // game units per second (6 m/s)
@@ -544,17 +550,25 @@ namespace MWPhysics
         if (!mActive)
             return;
         mAge += dt;
-        bool still = mAge >= sMinSimulated;
+        float totalMass = 0.f;
+        float meanSpeed = 0.f;
         for (const Bone& bone : mBones)
         {
-            if (!still)
-                break;
-            if (!bone.mBody->isActive())
-                continue;
-            if (bone.mBody->getLinearVelocity().length2() > sRestLinearSpeed * sRestLinearSpeed
-                || bone.mBody->getAngularVelocity().length2() > sRestAngularSpeed * sRestAngularSpeed)
-                still = false;
+            totalMass += bone.mMass;
+            meanSpeed += bone.mMass * static_cast<float>(bone.mBody->getLinearVelocity().length());
         }
+        meanSpeed = totalMass > 0.f ? meanSpeed / totalMass : 0.f;
+        const btRigidBody& pelvis = *mBones.front().mBody;
+        const float pelvisSpeed = static_cast<float>(pelvis.getLinearVelocity().length());
+        const float pelvisSpin = static_cast<float>(pelvis.getAngularVelocity().length());
+        if (!mSettling && mAge >= sMinSimulated && meanSpeed < sSettleSpeed)
+        {
+            mSettling = true;
+            for (Bone& bone : mBones)
+                bone.mBody->setDamping(sSettledLinearDamping, sSettledAngularDamping);
+        }
+        const bool still = mAge >= sMinSimulated && pelvisSpeed < sRestLinearSpeed && meanSpeed < sRestLinearSpeed
+            && pelvisSpin < sRestAngularSpeed;
         if (still)
             mRestTime += dt;
         else

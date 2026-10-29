@@ -123,6 +123,7 @@ namespace MWPhysics
         RagdollWorld* mWorld = nullptr;
         bool mStarted = false;
         bool mActive = false;
+        bool mSettling = false; // the body has slowed and its damping is up
         float mRestTime = 0.f;
         float mAge = 0.f;
     };

@@ -325,15 +325,17 @@ namespace MWMechanics::ESM4Physical
         state.mImpulse = dir * force;
         state.mUnconscious = unconscious;
 
-        // Whatever it was doing stops: the move, the attack, the idle; a seated actor is knocked out of its seat
-        // where it sits
-        ESM4Actors::get().stop(actor, true);
         ESM4Combat::cancelAttacks(actor);
-        MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
-        // A knockdown is a shove, not a killing blow: the body goes over, it doesn't fly
+        // The ragdoll starts from the pose the actor is in right now, before anything resets its sequence (stop()
+        // below would put the bones back in the bind pose, and the body would drop from a T-pose). A knockdown is
+        // a shove, not a killing blow: the body goes over, it doesn't fly
         state.mRagdoll = animation != nullptr
             && animation->startRagdoll(state.mImpulse * sImpulsePerForce * sKnockdownImpulseMult, hitPosition);
+        // Whatever it was doing stops: the move, the attack, the idle; a seated actor is knocked out of its seat
+        // where it sits (the animation ignores locomotion changes while the body is down)
+        ESM4Actors::get().stop(actor, true);
+        MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         if (state.mRagdoll)
             state.mTimer = sMaxRagdollWait;
         else
