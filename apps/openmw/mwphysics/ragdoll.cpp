@@ -46,8 +46,10 @@ namespace MWPhysics
         // A body counts as at rest once every part has been (nearly) still this long. Bullet's own sleeping rarely
         // happens to a chain of constrained bodies (they jitter forever), so the rest is judged from speeds
         constexpr float sRestSettle = 0.5f;
-        constexpr float sRestLinearSpeed = 8.f; // game units per second (0.11 m/s)
-        constexpr float sRestAngularSpeed = 0.5f; // rad/s
+        // A lying FNV body's light parts (hands, feet) keep turning at 0.5..2 rad/s and drifting a few units per
+        // second while the pelvis creeps at 1..3 units per second, so tighter limits never let it rest
+        constexpr float sRestLinearSpeed = 12.f; // game units per second (0.17 m/s)
+        constexpr float sRestAngularSpeed = 2.f; // rad/s
         constexpr float sMinSimulated = 0.75f; // a body never rests before it has had time to fall
         // The whole body's launch speed is capped: a hard blow throws it, it doesn't fire it across the room
         constexpr float sMaxLaunchSpeed = 420.f; // game units per second (6 m/s)
