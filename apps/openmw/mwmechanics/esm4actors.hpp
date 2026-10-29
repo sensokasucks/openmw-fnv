@@ -79,7 +79,8 @@ namespace MWMechanics
 
         // False when no route exists (the status is then NoPath).
         bool moveTo(const MWWorld::Ptr& ptr, const osg::Vec3f& target, const MoveOptions& options);
-        void stop(const MWWorld::Ptr& ptr);
+        // inPlace: an actor knocked out of its furniture stays where it is instead of standing on the marker
+        void stop(const MWWorld::Ptr& ptr, bool inPlace = false);
         // Changes the speed and gait of the current move without finding a new path.
         void setPace(const MWWorld::Ptr& ptr, float speedMult, bool run);
         // Turns in place.
@@ -158,7 +159,7 @@ namespace MWMechanics
         // while the actor waits.
         bool avoidActors(const MWWorld::Ptr& ptr, State& state, float speed, float duration);
         void startUsing(const MWWorld::Ptr& ptr, State& state);
-        void finishUsing(const MWWorld::Ptr& ptr, State& state);
+        void finishUsing(const MWWorld::Ptr& ptr, State& state, bool inPlace = false);
         // Resumes the loop an idle interrupted: the seated loop or the standing idle.
         void resumeLoop(const MWWorld::Ptr& ptr, State& state);
 

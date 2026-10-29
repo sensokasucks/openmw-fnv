@@ -43,8 +43,14 @@ namespace MWPhysics
         // Bullet's defaults (0.8 m/s, 1 rad/s) in game units
         constexpr float sLinearSleep = 0.8f * Constants::UnitsPerMeter;
         constexpr float sAngularSleep = 1.f;
-        // A body counts as at rest once every part has slept this long
+        // A body counts as at rest once every part has been (nearly) still this long. Bullet's own sleeping rarely
+        // happens to a chain of constrained bodies (they jitter forever), so the rest is judged from speeds
         constexpr float sRestSettle = 0.5f;
+        constexpr float sRestLinearSpeed = 8.f; // game units per second (0.11 m/s)
+        constexpr float sRestAngularSpeed = 0.5f; // rad/s
+        constexpr float sMinSimulated = 0.75f; // a body never rests before it has had time to fall
+        // The whole body's launch speed is capped: a hard blow throws it, it doesn't fire it across the room
+        constexpr float sMaxLaunchSpeed = 420.f; // game units per second (6 m/s)
         // Bodies lying this long are frozen whatever Bullet thinks (a limb wedged in a wall jitters forever)
         constexpr float sMaxSimulated = 12.f;
         constexpr float sProxyRadius = 1024.f;
@@ -479,11 +485,23 @@ namespace MWPhysics
                     }
                 }
             }
-            target->mBody->applyCentralImpulse(Misc::Convert::toBullet(impulse));
-            // and the rest of the body comes along a little, so it doesn't fold around the hit
-            for (Bone& bone : mBones)
-                if (&bone != target)
-                    bone.mBody->applyCentralImpulse(Misc::Convert::toBullet(impulse) * 0.25f * bone.mMass / target->mMass);
+            float totalMass = 0.f;
+            for (const Bone& bone : mBones)
+                totalMass += bone.mMass;
+            // The impulse is the body's momentum whatever bone takes it: the launch speed is the same for a hand
+            // and the chest, and no more than sMaxLaunchSpeed
+            btVector3 total = Misc::Convert::toBullet(impulse);
+            const float speed = static_cast<float>(total.length()) / totalMass;
+            if (speed > sMaxLaunchSpeed)
+                total *= sMaxLaunchSpeed / speed;
+            // Half of it lands on the bone hit, the rest spreads over the body by mass, so it doesn't fold around
+            // the hit
+            const float restMass = totalMass - target->mMass;
+            target->mBody->applyCentralImpulse(total * (restMass > 0.f ? 0.5f : 1.f));
+            if (restMass > 0.f)
+                for (Bone& bone : mBones)
+                    if (&bone != target)
+                        bone.mBody->applyCentralImpulse(total * 0.5f * bone.mMass / restMass);
         }
         applyToBones();
     }
@@ -524,14 +542,18 @@ namespace MWPhysics
         if (!mActive)
             return;
         mAge += dt;
-        bool allSleeping = true;
+        bool still = mAge >= sMinSimulated;
         for (const Bone& bone : mBones)
-            if (bone.mBody->isActive())
-            {
-                allSleeping = false;
+        {
+            if (!still)
                 break;
-            }
-        if (allSleeping)
+            if (!bone.mBody->isActive())
+                continue;
+            if (bone.mBody->getLinearVelocity().length2() > sRestLinearSpeed * sRestLinearSpeed
+                || bone.mBody->getAngularVelocity().length2() > sRestAngularSpeed * sRestAngularSpeed)
+                still = false;
+        }
+        if (still)
             mRestTime += dt;
         else
             mRestTime = 0.f;

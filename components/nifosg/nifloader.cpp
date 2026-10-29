@@ -1374,6 +1374,11 @@ namespace NifOsg
                 {
                     // These controllers are handled elsewhere
                 }
+                else if (ctrl->mRecordType == Nif::RC_bhkBlendController)
+                {
+                    // Havok's blend between the animation and the ragdoll: MWPhysics::Ragdoll takes the bones over
+                    // outright, so there is nothing to blend
+                }
                 else
                     Log(Debug::Info) << "Unhandled controller " << ctrl->mRecordName << " on node "
                                      << nifNode->mRecordIndex << " in " << mFilename;

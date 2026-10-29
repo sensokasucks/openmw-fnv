@@ -226,14 +226,14 @@ namespace MWMechanics
         it->second.mOptions.mRun = run;
     }
 
-    void ESM4Actors::stop(const MWWorld::Ptr& ptr)
+    void ESM4Actors::stop(const MWWorld::Ptr& ptr, bool inPlace)
     {
         auto it = mStates.find(ptr.getCellRef().getRefNum());
         if (it == mStates.end())
             return;
         const bool wasUsing = it->second.mUsePhase != UsePhase::None || it->second.mIdleTimer > 0.f;
         if (wasUsing)
-            finishUsing(ptr, it->second);
+            finishUsing(ptr, it->second, inPlace);
         if (it->second.mActionTime > 0.f)
         {
             it->second.mStatus = Status::None;
@@ -323,10 +323,10 @@ namespace MWMechanics
             finishUsing(moved, state);
     }
 
-    void ESM4Actors::finishUsing(const MWWorld::Ptr& ptr, State& state)
+    void ESM4Actors::finishUsing(const MWWorld::Ptr& ptr, State& state, bool inPlace)
     {
         MWBase::World& world = *MWBase::Environment::get().getWorld();
-        if (state.mUsePhase == UsePhase::Using || state.mUsePhase == UsePhase::Entering)
+        if (!inPlace && (state.mUsePhase == UsePhase::Using || state.mUsePhase == UsePhase::Entering))
         {
             // Stand on the marker again, as after the exit sequence
             MWWorld::Ptr moved = world.moveObject(ptr, state.mFurniture.mMarker);

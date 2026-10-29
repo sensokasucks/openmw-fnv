@@ -1503,7 +1503,7 @@ namespace MWMechanics::ESM4Combat
     void kill(const MWWorld::Ptr& actor, bool instant, const osg::Vec3f& impulse,
         const std::optional<osg::Vec3f>& hitPosition)
     {
-        ESM4Actors::get().stop(actor);
+        ESM4Actors::get().stop(actor, true);
         cancelAttacks(actor);
         MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         // The body drops as a ragdoll where it has one; the death sequence otherwise

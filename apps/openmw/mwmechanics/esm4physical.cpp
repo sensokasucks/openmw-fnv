@@ -40,6 +40,8 @@ namespace MWMechanics::ESM4Physical
         // The original's force (fDeathForce*, 20..85) as the ragdoll's impulse: Havok N s to kg x game units per
         // second, with a body of around 10 kg per part this throws it a metre or two
         constexpr float sImpulsePerForce = 69.99125109f;
+        // A non-lethal knockdown gets this much of the blow's death-force impulse
+        constexpr float sKnockdownImpulseMult = 0.6f;
 
         std::map<ESM::RefNum, State> sStates;
         PostureListener sPostureListener;
@@ -323,13 +325,15 @@ namespace MWMechanics::ESM4Physical
         state.mImpulse = dir * force;
         state.mUnconscious = unconscious;
 
-        // Whatever it was doing stops: the move, the attack, the idle
-        ESM4Actors::get().stop(actor);
+        // Whatever it was doing stops: the move, the attack, the idle; a seated actor is knocked out of its seat
+        // where it sits
+        ESM4Actors::get().stop(actor, true);
         ESM4Combat::cancelAttacks(actor);
         MWBase::Environment::get().getWorld()->enableActorCollision(actor, false);
         MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        // A knockdown is a shove, not a killing blow: the body goes over, it doesn't fly
         state.mRagdoll = animation != nullptr
-            && animation->startRagdoll(state.mImpulse * sImpulsePerForce + osg::Vec3f(0.f, 0.f, 0.f), hitPosition);
+            && animation->startRagdoll(state.mImpulse * sImpulsePerForce * sKnockdownImpulseMult, hitPosition);
         if (state.mRagdoll)
             state.mTimer = sMaxRagdollWait;
         else
