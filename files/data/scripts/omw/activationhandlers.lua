@@ -132,6 +132,12 @@ local function ESM4FurnitureActivation(furniture, actor)
         return
     end
     if bedMarkerTypes[best.type] then
+        -- an owned bed refuses the player (sNoSleepInOwnedBed), as in the original
+        if I.FNVCrime and I.FNVCrime.mayUse and not I.FNVCrime.mayUse(furniture, actor) then
+            local text = core.getFNVGMST and core.getFNVGMST('sNoSleepInOwnedBed')
+            actor:sendEvent('FNVHudNotify', { text = type(text) == 'string' and text or 'You cannot sleep in an owned bed.' })
+            return false
+        end
         actor:sendEvent('AddUiMode', { mode = 'Rest' })
         return false
     end

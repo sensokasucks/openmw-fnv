@@ -22,7 +22,7 @@
 --     owner, or a faction the player ranks below the cell's XRNK in). The owner or an owning faction member that
 --     detects the player says GuardTrespass; fAITrespassWarningTimer (10 s) later, if the player is still there,
 --     SendTrespassAlarm: those of them that detect the player attack, and the owners get a minor crime.
--- Not done: pickpocketing (there is no pickpocket menu yet), owned beds, warners walking up to the player.
+-- Not done: pickpocketing (there is no pickpocket menu yet), warners walking up to the player.
 --
 -- Conditions and script functions: GetCrime, GetCrimeKnown, IsTrespassing, GetTrespassWarningLevel,
 -- IsInMyOwnedCell, IsGuard, IsPCAMurderer, GetMinorCrimeCount, GetMajorCrimeCount, GetPCEnemyofFaction,
@@ -642,6 +642,15 @@ return {
         --- Whether one of the actor's factions is an enemy of the player through crime.
         isFactionEnemy = isFactionEnemy,
         isTrespassing = function() return trespass ~= nil end,
+        --- Whether the player may use the object as its own (IsOwnedBy with the player's factions): unowned, or
+        -- owned by the player, PlayerFaction, a faction the player is in, or under a set ownership global. Owned
+        -- beds refuse sleep otherwise (sNoSleepInOwnedBed, FUN_005095b0).
+        mayUse = function(obj, player)
+            if obj == nil or not obj:isValid() then return true end
+            local ok, own = pcall(combat.ownership, obj)
+            if not ok or own == nil then return true end
+            return ownedByPlayer(own, player or world.players[1])
+        end,
         --- For the console: the crime state.
         getState = function() return state end,
         --- For testing: forget all crimes.
