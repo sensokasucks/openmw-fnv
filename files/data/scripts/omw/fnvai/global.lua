@@ -921,6 +921,13 @@ local function follow(npc, s, pkg)
         end
         return
     end
+    -- a follower of the player sneaks with the player (findings 2: crouched, and as hidden as the player)
+    local sneak = types.Player.objectIsInstance(leader) and combat.isSneaking ~= nil and combat.isSneaking(leader)
+        or false
+    if sneak ~= (s.crouched == true) and combat.setCrouched ~= nil then
+        s.crouched = sneak
+        pcall(combat.setCrouched, npc, sneak)
+    end
     local base = target.count and target.count >= 1 and target.count
         or gmstFloat('iAIDistanceRadiusMinLocation', 100)
     local keep = followQueueDistance(npc, leader, base)
@@ -1757,6 +1764,10 @@ local function cleanUp(npc, s)
     s.followFrom = nil
     s.talk = nil
     followsPlayer[npc.id] = nil
+    if s.crouched then
+        s.crouched = nil
+        pcall(combat.setCrouched, npc, false)
+    end
 end
 
 startPackage = function(npc, s, pkg)

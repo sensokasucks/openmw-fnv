@@ -853,6 +853,16 @@ namespace MWMechanics::ESM4Combat
         const bool moving = isMoving(target);
         const bool running = moving && isRunning(target);
         const bool sneaking = isSneaking(target);
+        const MWWorld::Ptr player = getPlayer();
+        if (context.mTeammate && sneaking && !context.mTargetInCombat && target != player && !player.isEmpty())
+        {
+            // a sneaking teammate is as hidden as the player (the sentinel in FUN_008a0d10)
+            DetectionContext own = context;
+            own.mTeammate = false;
+            const Detection viaPlayer = detect(observer, player, own);
+            result.mScore = viaPlayer.mScore;
+            return result;
+        }
 
         // Sound: footsteps, louder running, carried further with a line of sight
         const float soundFactor
@@ -885,7 +895,10 @@ namespace MWMechanics::ESM4Combat
             const int level = Stats::getLevel(target);
             const float startBonus = static_cast<float>(std::max(
                 getInt("iSneakStartBonus", 50) - level * getInt("iSneakStartBonusLevelPenatly", 10), 0));
-            skill -= Stats::getCurrent(target, Stats::Sneak) + startBonus;
+            float sneakSkill = Stats::getCurrent(target, Stats::Sneak);
+            if (context.mTeammate && !player.isEmpty() && target != player)
+                sneakSkill = std::max(sneakSkill, Stats::getCurrent(player, Stats::Sneak));
+            skill -= sneakSkill + startBonus;
         }
         skill *= getFloat("fSneakSkillMult", 0.5f);
 

@@ -1092,16 +1092,39 @@ namespace MWRender
         static constexpr std::string_view directions[] = { "forward", "backward", "left", "right" };
         const std::string suffix = std::string(mLocomotion == Locomotion::Run ? "fast" : "")
             + std::string(directions[static_cast<int>(mDirection)]) + ".kf";
+        // A crouched idle (sneak/mtidle.kf, sneak/2hraim.kf, ...) walks with the sneak loops of the same folder
+        std::string sneak;
+        std::string idle = mIdleSequence;
+        if (Misc::StringUtils::ciStartsWith(idle, "sneak/"))
+        {
+            sneak = "sneak/";
+            idle = idle.substr(6);
+        }
+        else if (Misc::StringUtils::ciStartsWith(idle, "sneak"))
+        {
+            sneak = "sneak";
+            idle = idle.substr(5);
+        }
         // With a weapon drawn the game plays the weapon's own loop where there is one (2hrforward.kf...); the
         // rest fall back to the plain mt loops.
-        if (mIdleSequence.size() > 6 && Misc::StringUtils::ciEndsWith(mIdleSequence, "aim.kf"))
+        if (idle.size() > 6 && Misc::StringUtils::ciEndsWith(idle, "aim.kf"))
         {
-            const std::string weaponLoop = mIdleSequence.substr(0, mIdleSequence.size() - 6) + suffix;
+            const std::string weaponLoop = idle.substr(0, idle.size() - 6) + suffix;
+            if (!sneak.empty() && !findLoopFONV(sneak + weaponLoop).empty())
+            {
+                playLoopFONV(sneak + weaponLoop, true);
+                return;
+            }
             if (!findLoopFONV(weaponLoop).empty())
             {
                 playLoopFONV(weaponLoop, true);
                 return;
             }
+        }
+        if (!sneak.empty() && !findLoopFONV(sneak + "mt" + suffix).empty())
+        {
+            playLoopFONV(sneak + "mt" + suffix, true);
+            return;
         }
         playLoopFONV("mt" + suffix, true);
     }
