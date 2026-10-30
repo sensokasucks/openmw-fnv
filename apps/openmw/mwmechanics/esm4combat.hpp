@@ -103,7 +103,7 @@ namespace MWMechanics::ESM4Combat
     bool setCrouched(const MWWorld::Ptr& actor, bool crouched);
 
     // Raises the actor's melee weapon or fists (BlockIdle) or lowers them again: a blocking actor takes less from a
-    // melee blow (see update). False when the actor has no block loop (it still blocks).
+    // melee blow (see update). False when the actor has no block loop (then it does not block).
     bool setBlocking(const MWWorld::Ptr& actor, bool blocking);
     bool isBlocking(const MWWorld::Ptr& actor);
 

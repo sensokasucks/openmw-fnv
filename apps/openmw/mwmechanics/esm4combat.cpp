@@ -667,13 +667,17 @@ namespace MWMechanics::ESM4Combat
 
     namespace
     {
-        // The animation prefix of what the actor would block with: its melee weapon, else its hands
-        std::string blockPrefix(const MWWorld::Ptr& actor)
+        // The animation prefix of what the actor would block with: its melee weapon's, else "mt" (the game ships
+        // 1hm/2hm/mt blockidle and blockhit, none for h2h: fists and hand to hand weapons use the mt ones)
+        std::string blockPrefix(const MWRender::ESM4NpcAnimation& animation, const MWWorld::Ptr& actor)
         {
             const ESM4::Weapon* weapon = getActorWeapon(actor);
-            if (weapon != nullptr && (getWeaponType(*weapon) == 2 || getWeaponType(*weapon) == 6))
+            if (weapon != nullptr && getWeaponType(*weapon) == 2)
                 return std::string(animPrefix(*weapon));
-            return "h2h";
+            if (weapon != nullptr && getWeaponType(*weapon) == 6
+                && animation.hasLoopFONV(std::string(animPrefix(*weapon)) + "blockidle.kf"))
+                return std::string(animPrefix(*weapon));
+            return "mt";
         }
     }
 
@@ -691,14 +695,15 @@ namespace MWMechanics::ESM4Combat
                 animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
             return true;
         }
-        sCrouched.erase(ref);
-        sBlocking.insert(ref);
-        const std::string loop = blockPrefix(actor) + "blockidle.kf";
+        const std::string loop = blockPrefix(*animation, actor) + "blockidle.kf";
         if (!animation->hasLoopFONV(loop))
         {
+            // no guard to show: the actor does not block (it would take less damage for no visible reason)
             Log(Debug::Verbose) << "ESM4 no block loop " << loop << " for " << actor.getCellRef().getRefId();
             return false;
         }
+        sCrouched.erase(ref);
+        sBlocking.insert(ref);
         animation->setIdleSequence(loop);
         return true;
     }
@@ -1544,7 +1549,8 @@ namespace MWMechanics::ESM4Combat
                     gmst("fBlockMax"));
                 damage *= 1.f - amount;
                 result.mBlocked = true;
-                ESM4Actors::get().playAction(target, blockPrefix(target) + "blockhit.kf");
+                if (MWRender::ESM4NpcAnimation* animation = getAnimation(target))
+                    ESM4Actors::get().playAction(target, blockPrefix(*animation, target) + "blockhit.kf");
             }
             result.mTarget = target;
             result.mPosition = target.getRefData().getPosition().asVec3();
