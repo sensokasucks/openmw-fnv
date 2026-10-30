@@ -67,6 +67,8 @@ namespace MWMechanics
         // Falls: a drop deeper than this isn't a step down but a fall under gravity (the Havok proxy's step
         // height is not located; the Morrowind controller's sStepSizeDown is 62)
         constexpr float sStepDown = 64.f;
+        // How far under a navmesh triangle the real ground may lie before the triangle's height is kept
+        constexpr float sNavmeshGroundSlack = 96.f;
         constexpr float sGravity = 8.96f * 69.99125109f; // Constants::GravityConst x UnitsPerMeter
 
         std::optional<ESM::FormId> getCellFormId(const MWWorld::Ptr& ptr)
@@ -642,7 +644,16 @@ namespace MWMechanics
             if (ESM4Navigation::contains2D(corridor[i], position.x(), position.y()))
             {
                 state.mCorridorIndex = i;
-                position.z() = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
+                // The triangle gives the height roughly (the original's navmesh triangles span hundreds of units
+                // over hills, 15-35 units above the dirt); the collision below says where the ground really is
+                const float navZ = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
+                position.z() = navZ;
+                const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(
+                    osg::Vec3f(position.x(), position.y(), navZ + sStepDown),
+                    osg::Vec3f(position.x(), position.y(), navZ - sNavmeshGroundSlack),
+                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+                if (ground.mHit)
+                    position.z() = ground.mHitPos.z();
                 onCorridor = true;
                 break;
             }
