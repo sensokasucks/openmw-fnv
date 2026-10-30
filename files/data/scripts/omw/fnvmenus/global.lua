@@ -91,6 +91,11 @@ return {
             local count = math.max(1, math.min(e.count or 1, item.count))
             if pickpocketing(e.container) then
                 -- a living NPC's pockets: each transfer is rolled, a catch closes the menu and leaves the item
+                -- (nothing moves once the victim has caught the player or can no longer be picked)
+                if I.FNVCrime and not I.FNVCrime.canPickpocket(e.player, e.container) then
+                    e.player:sendEvent('FNVClosePickpocket', {})
+                    return
+                end
                 if I.FNVCrime and not I.FNVCrime.pickpocket(e.player, e.container, item, count, toContainer) then
                     e.player:sendEvent('FNVClosePickpocket', {})
                     return
@@ -103,6 +108,10 @@ return {
         FNVContainerTakeAll = function(e)
             local playerInventory = types.Actor.inventory(e.player)
             local pockets = pickpocketing(e.container)
+            if pockets and I.FNVCrime and not I.FNVCrime.canPickpocket(e.player, e.container) then
+                e.player:sendEvent('FNVClosePickpocket', {})
+                return
+            end
             for _, item in ipairs(inventoryOf(e.container):getAll()) do
                 local ok, info = pcall(obscript.itemInfo, item)
                 if ok and info.name ~= '' then
