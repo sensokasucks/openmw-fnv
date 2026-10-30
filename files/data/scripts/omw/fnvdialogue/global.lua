@@ -2183,6 +2183,8 @@ local function topicOption(topicId)
     local info = pickInfo(topic)
     if info == nil then return nil end
     local text = info.prompt ~= '' and info.prompt or topic.name
+    -- designer notes in braces ({Evil 2+}...) are never shown
+    text = text:gsub('%b{}', ''):gsub('^%s+', ''):gsub('%s+$', '')
     if text == '' then text = topic.editorId end
     return { topic = topic, info = info, text = text }
 end
