@@ -706,9 +706,39 @@ local function holderItems(holder)
     return types.Container.content(holder)
 end
 
-local function containerOpen(obj)
+local function sameId(a, b)
+    return a ~= nil and b ~= nil and tostring(a):lower() == tostring(b):lower()
+end
+
+-- Whether the actor owns the object (its own XOWN or its cell's): the owner is the actor's base record, or a
+-- faction it belongs to
+local function ownedBy(actor, obj)
+    local ok, own = pcall(combat.ownership, obj)
+    if not ok or own == nil then return false end
+    if sameId(own.owner, actor.recordId) then return true end
+    if own.isFaction then
+        for _, f in ipairs(combat.getFactions(actor)) do
+            if sameId(f.id, own.owner) then return true end
+        end
+    end
+    return false
+end
+
+local function carriesKey(actor, obj)
+    local ok, key = pcall(combat.lockKey, obj)
+    if not ok or key == nil then return false end
+    for _, item in ipairs(types.Actor.inventory(actor):getAll()) do
+        if sameId(item.recordId, key) then return true end
+    end
+    return false
+end
+
+-- A container the actor may raid for weapons (ghidra-findings-6): unlocked, or locked but the actor's own or one it
+-- carries the key for
+local function containerOpen(obj, actor)
     local ok, locked = pcall(types.Lockable.isLocked, obj)
-    return not (ok and locked)
+    if not (ok and locked) then return true end
+    return actor ~= nil and (ownedBy(actor, obj) or carriesKey(actor, obj))
 end
 
 local function scanPickups(s)
@@ -834,11 +864,11 @@ local function scanPickups(s)
                 end
             end
         end
-        -- weapons in the unlocked containers within reach
+        -- weapons in the containers within reach it can open
         if types.ESM4Container ~= nil then
             local okConts, conts = pcall(cell.getAll, cell, types.ESM4Container)
             for _, cont in ipairs(okConts and conts or {}) do
-                if cont.enabled and (cont.position - actor.position):length() <= maxDist and containerOpen(cont) then
+                if cont.enabled and (cont.position - actor.position):length() <= maxDist and containerOpen(cont, actor) then
                     local okItems, items = pcall(function() return types.Container.content(cont):getAll() end)
                     for _, item in ipairs(okItems and items or {}) do
                         if types.ESM4Weapon.objectIsInstance(item) then consider(item, cont) end

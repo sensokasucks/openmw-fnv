@@ -307,6 +307,14 @@ namespace MWLua
 
         // Ownership of the cell an object is in: { owner, isFaction, global, rank (XRNK), public (CELL 0x20) };
         // owner is nil when nobody owns it.
+        // The key (form id text) that opens a locked door or container, nil when it has none.
+        api["lockKey"] = [](const Object& object) -> sol::optional<std::string> {
+            const ESM::RefId key = object.ptr().getCellRef().getKey();
+            const ESM::FormId* formId = key.getIf<ESM::FormId>();
+            if (formId == nullptr || formId->isZeroOrUnset())
+                return sol::nullopt;
+            return formIdText(*formId);
+        };
         api["cellOwnership"] = [](const Object& object, sol::this_state s) -> sol::table {
             sol::state_view lua(s);
             sol::table t(lua, sol::create);
