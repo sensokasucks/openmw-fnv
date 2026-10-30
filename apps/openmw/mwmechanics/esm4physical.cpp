@@ -501,11 +501,13 @@ namespace MWMechanics::ESM4Physical
                                 // The alignment is flat; on a slope the ground where the pose starts is at another
                                 // height, so the actor is put on it (a slope up through the body otherwise)
                                 // The terrain's height there, then whatever lies on it (a floor, a porch) within a
-                                // step of that: a fence rail or a table by the body isn't taken for the ground
+                                // step of that or of the body (settled on a porch above the terrain): a fence rail or
+                                // a table by the body isn't taken for the ground
                                 const MWPhysics::RayCastingResult terrain = world.getRayCasting()->castRay(
                                     position + osg::Vec3f(0.f, 0.f, 512.f), position - osg::Vec3f(0.f, 0.f, 512.f),
                                     MWPhysics::CollisionType_HeightMap);
-                                const float base = terrain.mHit ? terrain.mHitPos.z() : position.z();
+                                const float base
+                                    = terrain.mHit ? std::max(terrain.mHitPos.z(), position.z()) : position.z();
                                 const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(
                                     osg::Vec3f(position.x(), position.y(), base + 16.f),
                                     osg::Vec3f(position.x(), position.y(), base - 256.f),
