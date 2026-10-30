@@ -84,7 +84,8 @@ namespace MWLua
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
         // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB), corpse (the target
-        // was already dead), explosion (a blast), knockedDown (the hit knocked the target down, see physical) }
+        // was already dead), explosion (a blast), knockedDown (the hit knocked the target down, see physical),
+        // blocked (the target blocked a melee blow) }
         // Melee, unarmed and creature blows send it too, with melee = true (weapon nil when unarmed).
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon,
             const Combat::HitResult& hit, bool melee = false)
@@ -112,6 +113,8 @@ namespace MWLua
                     data["explosion"] = true;
                 if (hit.mKnockedDown)
                     data["knockedDown"] = true;
+                if (hit.mBlocked)
+                    data["blocked"] = true;
                 context.mLuaEvents->addGlobalEvent(
                     { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
             });
@@ -514,6 +517,12 @@ namespace MWLua
         api["setCrouched"] = [](const Object& actor, bool crouched) {
             return Combat::setCrouched(actor.ptr(), crouched);
         };
+        // Raises the melee weapon or fists (BlockIdle) or lowers them; a blocking actor takes less from melee blows
+        // (the shot event has blocked = true). False when it has no block loop.
+        api["setBlocking"] = [](const Object& actor, bool blocking) {
+            return Combat::setBlocking(actor.ptr(), blocking);
+        };
+        api["isBlocking"] = [](const Object& actor) { return Combat::isBlocking(actor.ptr()); };
         api["canTargetSee"] = [](const Object& actor, const Object& target, const osg::Vec3f& point) {
             return Combat::canTargetSee(actor.ptr(), target.ptr(), point);
         };
