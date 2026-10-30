@@ -292,7 +292,13 @@ local function approach(s, actor, target, reach, aroundObstacles)
         s.straight = true
     end
     local moved = s.goal == nil or (s.goal - target.position):length() > 64
-    if status ~= 'moving' or (moved and simTime >= s.nextMove) then
+    -- an order the actor says it carries while standing still for a second is stale (run 47: frozen at 185)
+    if s.stillFrom == nil or (actor.position - s.stillFrom):length() > 4 then
+        s.stillFrom, s.stillSince = actor.position, simTime
+    end
+    local stale = status == 'moving' and simTime - (s.stillSince or simTime) > 1 and simTime >= s.nextMove
+    if status ~= 'moving' or stale or (moved and simTime >= s.nextMove) then
+        if stale then ai.stop(actor) end
         s.nextMove = simTime + 0.5
         s.goal = target.position
         ai.moveTo(actor, target.position, { run = true, direct = true, straight = s.straight, tolerance = reach * 0.7 })
@@ -1402,7 +1408,9 @@ local function attackMelee(s, distance)
     s.straight = false
     -- Two fighters closing at a run overshoot into each other (run 44: 38 apart, bodies through each other; the
     -- original's bodies push each other apart). Nearer than the two bodies plus a hand, step back to the reach.
-    if distance < 2 * ACTOR_RADIUS + 16 and simTime >= (s.stepBackUntil or 0) then
+    local other = fighting[target.id]
+    local otherStepping = other ~= nil and simTime < (other.stepBackUntil or 0)
+    if distance < 2 * ACTOR_RADIUS + 16 and simTime >= (s.stepBackUntil or 0) and not otherStepping then
         local away = actor.position - target.position
         away = util.vector3(away.x, away.y, 0)
         if away:length() < 1 then away = util.vector3(math.random() - 0.5, math.random() - 0.5, 0) end
@@ -1412,7 +1420,9 @@ local function attackMelee(s, distance)
         local to = math.max(reach * 0.8, distance + 2 * ACTOR_RADIUS)
         print(('[combat] %s (%s) steps back from %s (%.0f apart, to %.0f)'):format(actor.recordId,
             tostring(actor.id), tostring(target.recordId), distance, to))
-        ai.moveTo(actor, target.position + away * to, { run = false, direct = true, tolerance = 8 })
+        -- (at the actor's own height: a point at the target's z on a slope is never reached, run 47 froze at 185)
+        local point = target.position + away * to
+        ai.moveTo(actor, util.vector3(point.x, point.y, actor.position.z), { run = false, direct = true, tolerance = 16 })
     end
     -- (the order lands a frame later; stopping on the next tick would cancel it: run 45 held at 70. The roll below
     -- goes on meanwhile, so a step back never costs a swing.)
