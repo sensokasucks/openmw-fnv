@@ -809,8 +809,9 @@ namespace MWMechanics::ESM4Combat
 
         bool isSneaking(const MWWorld::Ptr& actor)
         {
+            // FO3/FONV actors sneak by crouching (setCrouched: cover, companions sneaking with the player)
             if (actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4)
-                return false;
+                return sCrouched.count(actor.getCellRef().getRefNum()) != 0;
             return actor.getClass().getCreatureStats(actor).getStance(CreatureStats::Stance_Sneak);
         }
     }
