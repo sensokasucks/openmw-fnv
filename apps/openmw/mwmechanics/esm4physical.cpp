@@ -500,12 +500,17 @@ namespace MWMechanics::ESM4Physical
                                 osg::Vec3f position = actor.getRefData().getPosition().asVec3() + alignment->second;
                                 // The alignment is flat; on a slope the ground where the pose starts is at another
                                 // height, so the actor is put on it (a slope up through the body otherwise)
-                                // The ray starts low so a fence rail or a table by the body isn't taken for the
-                                // ground, and a hit far above the body (a ledge) is left alone
+                                // The terrain's height there, then whatever lies on it (a floor, a porch) within a
+                                // step of that: a fence rail or a table by the body isn't taken for the ground
+                                const MWPhysics::RayCastingResult terrain = world.getRayCasting()->castRay(
+                                    position + osg::Vec3f(0.f, 0.f, 512.f), position - osg::Vec3f(0.f, 0.f, 512.f),
+                                    MWPhysics::CollisionType_HeightMap);
+                                const float base = terrain.mHit ? terrain.mHitPos.z() : position.z();
                                 const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(
-                                    position + osg::Vec3f(0.f, 0.f, 16.f), position - osg::Vec3f(0.f, 0.f, 256.f),
+                                    osg::Vec3f(position.x(), position.y(), base + 16.f),
+                                    osg::Vec3f(position.x(), position.y(), base - 256.f),
                                     MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
-                                if (ground.mHit && ground.mHitPos.z() - position.z() < 12.f)
+                                if (ground.mHit && (terrain.mHit || ground.mHitPos.z() - position.z() < 12.f))
                                     position.z() = ground.mHitPos.z();
                                 const MWWorld::Ptr moved = world.moveObject(actor, position);
                                 animation = getAnimation(moved);
