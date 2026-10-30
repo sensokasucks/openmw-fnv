@@ -67,6 +67,8 @@ namespace MWMechanics
         // Falls: a drop deeper than this isn't a step down but a fall under gravity (the Havok proxy's step
         // height is not located; the Morrowind controller's sStepSizeDown is 62)
         constexpr float sStepDown = 64.f;
+        // A step up onto a stair or a porch (the Morrowind controller's sStepSizeUp)
+        constexpr float sStepUp = 34.f;
         // How far under a navmesh triangle the real ground may lie before the triangle's height is kept
         constexpr float sNavmeshGroundSlack = 96.f;
         constexpr float sGravity = 8.96f * 69.99125109f; // Constants::GravityConst x UnitsPerMeter
@@ -645,12 +647,15 @@ namespace MWMechanics
             {
                 state.mCorridorIndex = i;
                 // The triangle gives the height roughly (the original's navmesh triangles span hundreds of units
-                // over hills, 15-35 units above the dirt); the collision below says where the ground really is
+                // over hills, 15-35 units above the dirt); the collision below says where the ground really is.
+                // The probe starts a step above where the actor stands, so a fence or a plant beside the path
+                // isn't climbed onto
                 const float navZ = ESM4Navigation::heightAt(corridor[i], position.x(), position.y());
+                const float fromZ = position.z() + sStepUp;
+                const float toZ = std::min(navZ, position.z()) - sNavmeshGroundSlack;
                 position.z() = navZ;
                 const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(
-                    osg::Vec3f(position.x(), position.y(), navZ + sStepDown),
-                    osg::Vec3f(position.x(), position.y(), navZ - sNavmeshGroundSlack),
+                    osg::Vec3f(position.x(), position.y(), fromZ), osg::Vec3f(position.x(), position.y(), toZ),
                     MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
                 if (ground.mHit)
                     position.z() = ground.mHitPos.z();
