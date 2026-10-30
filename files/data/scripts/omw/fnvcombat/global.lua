@@ -1411,8 +1411,7 @@ local function attackMelee(s, distance)
             -- block for the style's Hold Timer [0.5-1.5 s in the default style]
             s.nextAttack = simTime + 0.5 + math.random()
             if combat.setBlocking and not s.blocking then
-                s.blocking = true
-                combat.setBlocking(actor, true)
+                s.blocking = combat.setBlocking(actor, true) -- false without a block loop: a plain hold
             end
         else
             -- hold for the style's Hold Timer
