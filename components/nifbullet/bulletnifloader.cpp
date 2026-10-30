@@ -513,6 +513,27 @@ namespace NifBullet
             mShape->mAnimatedShapes.emplace(node.mRecordIndex, mCompoundShape->getNumChildShapes());
         mCompoundShape->addChildShape(trans, shape.release());
         mBhkFound = true;
+
+        // A body with a dynamic motion type and a mass on the root (the first body found) is loose clutter the
+        // game can push around; a second body on the file makes it a jointed thing this doesn't handle
+        using Nif::HkMotionType;
+        const HkMotionType motion = body.mInfo.mMotionType;
+        const bool dynamic = motion == HkMotionType::Motion_Dynamic || motion == HkMotionType::Motion_SphereInertia
+            || motion == HkMotionType::Motion_SphereStabilized || motion == HkMotionType::Motion_BoxInertia
+            || motion == HkMotionType::Motion_BoxStabilized || motion == HkMotionType::Motion_ThinBox;
+        if (mCompoundShape->getNumChildShapes() == 1 && parent == nullptr && dynamic && body.mInfo.mMass > 0.f)
+        {
+            Resource::BulletShape::DynamicBody info;
+            info.mMass = body.mInfo.mMass;
+            info.mFriction = body.mInfo.mFriction;
+            info.mRestitution = body.mInfo.mRestitution;
+            info.mLinearDamping = body.mInfo.mLinearDamping;
+            info.mAngularDamping = body.mInfo.mAngularDamping;
+            info.mWind = (body.mBodyFlags & 1) != 0;
+            mShape->mDynamicBody = info;
+        }
+        else
+            mShape->mDynamicBody.reset();
     }
 
     std::unique_ptr<btCollisionShape> makeBhkShape(

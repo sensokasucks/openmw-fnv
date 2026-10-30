@@ -2,6 +2,7 @@
 #define OPENMW_COMPONENTS_RESOURCE_BULLETSHAPE_H
 
 #include <map>
+#include <optional>
 #include <memory>
 
 #include <osg/Object>
@@ -61,6 +62,19 @@ namespace Resource
         std::string mFileHash;
 
         VisualCollisionType mVisualCollisionType = VisualCollisionType::None;
+
+        // A Bethesda Havok body that moves (a bhkRigidBody with a dynamic motion type and a mass on the root:
+        // tumbleweeds, bottles, cans): what the game needs to let it fall, roll and be pushed. Game units and kg.
+        struct DynamicBody
+        {
+            float mMass = 1.f;
+            float mFriction = 0.5f;
+            float mRestitution = 0.f;
+            float mLinearDamping = 0.1f;
+            float mAngularDamping = 0.05f;
+            bool mWind = false; // the wind pushes it (hkpRigidBody flags bit 0: the tumbleweed)
+        };
+        std::optional<DynamicBody> mDynamicBody;
 
         BulletShape() = default;
         // Note this is always a shallow copy and the copy will not autodelete underlying vertex data

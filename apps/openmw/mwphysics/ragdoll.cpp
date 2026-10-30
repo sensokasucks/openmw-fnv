@@ -28,6 +28,13 @@
 #include <components/nifbullet/bulletnifloader.hpp>
 #include <components/nifosg/matrixtransform.hpp>
 
+#include <random>
+
+#include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
+#include "../mwworld/class.hpp"
+#include "../mwworld/ptr.hpp"
+
 #include "collisiontype.hpp"
 #include "object.hpp"
 #include "physicssystem.hpp"
@@ -69,6 +76,33 @@ namespace MWPhysics
         // How far a body's centre may be under the terrain before it is put back on top
         constexpr float sMaxUnderground = 4.f;
         constexpr float sProxyCheckEvery = 0.5f;
+        // Clutter: the wind reaches this far from the player, actors push clutter this close to them
+        constexpr float sWindRadius = 4096.f;
+        constexpr float sActorPushRadius = 512.f;
+        // The original's wind on clutter (FalloutNV.exe 0xc74570): W = 250 x the weather's wind speed, a push of
+        // clamp(0.25 W + rand(-W, W), 0, 250) along the wind's direction +-45 degrees, every step; in Havok's
+        // newtons on kilograms and metres, so x UnitsPerMeter for game units
+        constexpr float sWindScale = 250.f;
+        constexpr float sWindMax = 250.f;
+        constexpr float sWindSpread = 0.78539816f;
+        constexpr float sWindGustEvery = 0.25f;
+        // A body written back to its reference only when it has moved this much (units, radians)
+        constexpr float sWriteBackDistance = 0.5f;
+        constexpr float sWriteBackAngle = 0.01f;
+        // Clutter a long way from the player sleeps whatever pushes it
+        constexpr float sClutterAwakeRadius = 6144.f;
+
+        // The ESM rotation (Misc::Convert::makeOsgQuat's inverse): the quaternion is Rz(-rz) then Ry(-ry) then
+        // Rx(-rx), i.e. R = Rx(-rx) Ry(-ry) Rz(-rz) on column vectors
+        osg::Vec3f rotationFromQuat(const osg::Quat& quat)
+        {
+            const osg::Matrixd m(quat);
+            const auto R = [&](int i, int j) { return m(j, i); };
+            const double b = std::asin(std::clamp(R(0, 2), -1.0, 1.0));
+            const double a = std::atan2(-R(1, 2), R(2, 2));
+            const double c = std::atan2(-R(0, 1), R(0, 0));
+            return osg::Vec3f(static_cast<float>(-a), static_cast<float>(-b), static_cast<float>(-c));
+        }
 
         osg::Matrixf toOsg(const btTransform& transform)
         {
@@ -782,7 +816,8 @@ namespace MWPhysics
     void RagdollWorld::step(float dt)
     {
         mTime += dt;
-        if (getActiveCount() == 0)
+        stepClutter(dt);
+        if (getActiveCount() == 0 && getAwakeClutterCount() == 0)
         {
             // Nothing falls: the mirrored world isn't needed
             if (!mProxies.empty())
@@ -791,6 +826,13 @@ namespace MWPhysics
                     mWorld->removeRigidBody(proxy.mBody.get());
                 mProxies.clear();
             }
+            if (!mActorProxies.empty())
+            {
+                for (auto& [source, proxy] : mActorProxies)
+                    mWorld->removeRigidBody(proxy.mBody.get());
+                mActorProxies.clear();
+            }
+            writeBackClutter();
             return;
         }
         mProxyCheck -= dt;
@@ -800,10 +842,280 @@ namespace MWPhysics
             for (Ragdoll* ragdoll : mRagdolls)
                 if (ragdoll->isActive())
                     updateStaticProxies(ragdoll->getRootPosition(), sProxyRadius);
+            for (auto& [source, clutter] : mClutter)
+                if (clutter.mBody->isActive())
+                {
+                    updateStaticProxies(
+                        Misc::Convert::toOsg(clutter.mBody->getWorldTransform().getOrigin()), sProxyRadius);
+                    updateActorProxies(clutter.mBody->getWorldTransform().getOrigin(), sActorPushRadius);
+                }
+        }
+        // The actor proxies follow their actors every step: a kinematic body's motion state is what Bullet reads
+        for (auto it = mActorProxies.begin(); it != mActorProxies.end();)
+        {
+            if (mTime - it->second.mLastUsed > 2.f)
+            {
+                mWorld->removeRigidBody(it->second.mBody.get());
+                it = mActorProxies.erase(it);
+            }
+            else
+            {
+                it->second.mBody->getMotionState()->setWorldTransform(it->first->getWorldTransform());
+                ++it;
+            }
         }
         mWorld->stepSimulation(std::min(dt, 0.1f), sMaxSubSteps, sFixedStep);
         for (Ragdoll* ragdoll : std::vector<Ragdoll*>(mRagdolls))
             ragdoll->onStepped(dt);
+        writeBackClutter();
+    }
+
+    void RagdollWorld::addClutter(Object& object, const MWWorld::Ptr& ptr)
+    {
+        const btCollisionObject* source = object.getCollisionObject();
+        if (source == nullptr || mClutter.contains(source))
+            return;
+        const Resource::BulletShapeInstance* instance = object.getShapeInstance();
+        if (instance == nullptr || !instance->mDynamicBody || instance->mCollisionShape == nullptr)
+            return;
+        const Resource::BulletShape::DynamicBody& info = *instance->mDynamicBody;
+        // The instance's shape is this object's own copy (BulletShapeInstance duplicates it); a concave shape
+        // can't move, so only a convex one or a compound of convex ones goes in
+        btCollisionShape* shape = instance->mCollisionShape.get();
+        if (shape->isConcave())
+            return;
+        if (shape->isCompound())
+        {
+            const auto* compound = static_cast<const btCompoundShape*>(shape);
+            for (int i = 0; i < compound->getNumChildShapes(); ++i)
+                if (compound->getChildShape(i)->isConcave())
+                    return;
+        }
+        Clutter clutter;
+        clutter.mShapeInstance = instance;
+        clutter.mSource = source;
+        clutter.mWind = info.mWind;
+        btVector3 inertia(0, 0, 0);
+        shape->calculateLocalInertia(info.mMass, inertia);
+        clutter.mMotion = std::make_unique<btDefaultMotionState>(source->getWorldTransform());
+        btRigidBody::btRigidBodyConstructionInfo construction(info.mMass, clutter.mMotion.get(), shape, inertia);
+        construction.m_friction = std::clamp(info.mFriction, 0.1f, 1.f);
+        construction.m_restitution = std::clamp(info.mRestitution, 0.f, 0.6f);
+        construction.m_linearDamping = std::clamp(info.mLinearDamping, 0.05f, 0.9f);
+        construction.m_angularDamping = std::clamp(info.mAngularDamping, 0.05f, 0.9f);
+        clutter.mBody = std::make_unique<btRigidBody>(construction);
+        clutter.mBody->setRollingFriction(0.02f);
+        clutter.mBody->setSleepingThresholds(sLinearSleep, sAngularSleep);
+        clutter.mBody->setCcdMotionThreshold(8.f);
+        clutter.mBody->setCcdSweptSphereRadius(4.f);
+        clutter.mBody->setUserPointer(nullptr);
+        clutter.mWritten = source->getWorldTransform();
+        mWorld->addRigidBody(clutter.mBody.get(), CollisionType_Actor,
+            CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor);
+        // Placed as the designers left it: asleep until something happens to it
+        clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+        Log(Debug::Verbose) << "Clutter body for " << ptr.getCellRef().getRefId() << ": " << info.mMass << " kg"
+                            << (info.mWind ? ", in the wind" : "");
+        mClutter.emplace(source, std::move(clutter));
+    }
+
+    void RagdollWorld::removeClutter(const btCollisionObject* source)
+    {
+        auto found = mClutter.find(source);
+        if (found == mClutter.end())
+            return;
+        mWorld->removeRigidBody(found->second.mBody.get());
+        mClutter.erase(found);
+    }
+
+    bool RagdollWorld::applyClutterImpulse(
+        const btCollisionObject* source, const btVector3& impulse, const btVector3& at)
+    {
+        auto found = mClutter.find(source);
+        if (found == mClutter.end())
+            return false;
+        btRigidBody& body = *found->second.mBody;
+        body.activate(true);
+        body.applyImpulse(impulse, at - body.getWorldTransform().getOrigin());
+        return true;
+    }
+
+    void RagdollWorld::applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias)
+    {
+        if (radius <= 0.f)
+            return;
+        for (auto& [source, clutter] : mClutter)
+        {
+            btRigidBody& body = *clutter.mBody;
+            btVector3 away = body.getWorldTransform().getOrigin() - centre;
+            const float distance = static_cast<float>(away.length());
+            if (distance > radius)
+                continue;
+            if (distance < 1.f)
+                away = btVector3(0, 0, 1);
+            else
+                away /= distance;
+            away.setZ(away.z() + upBias);
+            away.normalize();
+            const float falloff = 1.f - (distance / radius) * (distance / radius);
+            body.activate(true);
+            body.applyCentralImpulse(away * impulse * falloff);
+        }
+    }
+
+    std::size_t RagdollWorld::getAwakeClutterCount() const
+    {
+        std::size_t count = 0;
+        for (const auto& [source, clutter] : mClutter)
+            if (clutter.mBody->isActive())
+                ++count;
+        return count;
+    }
+
+    void RagdollWorld::stepClutter(float dt)
+    {
+        if (mClutter.empty())
+            return;
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        const MWWorld::Ptr player = world.getPlayerPtr();
+        const btVector3 playerPos = player.isEmpty()
+            ? btVector3(0, 0, 0)
+            : Misc::Convert::toBullet(player.getRefData().getPosition().asVec3());
+
+        // The wind, as the original gusts it: the direction wanders slowly, the strength rolls every quarter second
+        const float windSpeed = std::clamp(world.getWindSpeed(), 0.f, 1.f);
+        static std::mt19937 random{ std::random_device{}() };
+        mWindCheck -= dt;
+        if (mWindCheck <= 0.f)
+        {
+            mWindCheck = sWindGustEvery;
+            const float w = sWindScale * windSpeed;
+            std::uniform_real_distribution<float> gust(-w, w);
+            mWindGust = w > 0.f ? std::clamp(0.25f * w + gust(random), 0.f, sWindMax) : 0.f;
+            std::uniform_real_distribution<float> turn(-0.2f, 0.2f);
+            mWindHeading += turn(random);
+        }
+        const bool windy = windSpeed > 0.05f && mWindGust > 0.f;
+
+        std::size_t awake = 0;
+        // The oldest awake bodies go to sleep when too many are up; far ones sleep whatever happens
+        std::vector<std::pair<float, btRigidBody*>> awakeBodies;
+        for (auto& [source, clutter] : mClutter)
+        {
+            btRigidBody& body = *clutter.mBody;
+            const btVector3 origin = body.getWorldTransform().getOrigin();
+            const float toPlayer = static_cast<float>((origin - playerPos).length());
+            if (body.isActive())
+            {
+                if (toPlayer > sClutterAwakeRadius)
+                {
+                    body.setLinearVelocity(btVector3(0, 0, 0));
+                    body.setAngularVelocity(btVector3(0, 0, 0));
+                    body.forceActivationState(ISLAND_SLEEPING);
+                    clutter.mAwakeTime = 0.f;
+                    continue;
+                }
+                clutter.mAwakeTime += dt;
+                ++awake;
+                awakeBodies.emplace_back(clutter.mAwakeTime, &body);
+            }
+            else
+                clutter.mAwakeTime = 0.f;
+            if (windy && clutter.mWind && toPlayer < sWindRadius)
+            {
+                std::uniform_real_distribution<float> spread(-sWindSpread, sWindSpread);
+                const float heading = mWindHeading + spread(random);
+                const btVector3 direction(std::cos(heading), std::sin(heading), 0.f);
+                // newtons on kilograms give metres per second squared: game units per second squared x mass
+                body.activate(true);
+                body.applyCentralForce(direction * mWindGust * Constants::UnitsPerMeter);
+            }
+        }
+        if (awake > sMaxAwakeClutter)
+        {
+            std::sort(awakeBodies.begin(), awakeBodies.end(),
+                [](const auto& a, const auto& b) { return a.first > b.first; });
+            for (std::size_t i = 0; i + sMaxAwakeClutter < awakeBodies.size(); ++i)
+            {
+                awakeBodies[i].second->setLinearVelocity(btVector3(0, 0, 0));
+                awakeBodies[i].second->setAngularVelocity(btVector3(0, 0, 0));
+                awakeBodies[i].second->forceActivationState(ISLAND_SLEEPING);
+            }
+        }
+    }
+
+    namespace
+    {
+        struct CollectActors : btBroadphaseAabbCallback
+        {
+            std::vector<const btCollisionObject*> mFound;
+            bool process(const btBroadphaseProxy* proxy) override
+            {
+                const auto* object = static_cast<const btCollisionObject*>(proxy->m_clientObject);
+                if (object != nullptr && (proxy->m_collisionFilterGroup & CollisionType_Actor))
+                    mFound.push_back(object);
+                return true;
+            }
+        };
+    }
+
+    void RagdollWorld::updateActorProxies(const btVector3& centre, float radius)
+    {
+        const btVector3 extent(radius, radius, radius);
+        CollectActors callback;
+        mPhysics.aabbTest(centre - extent, centre + extent, callback);
+        for (const btCollisionObject* source : callback.mFound)
+        {
+            if (mClutter.contains(source))
+                continue;
+            auto found = mActorProxies.find(source);
+            if (found != mActorProxies.end())
+            {
+                found->second.mLastUsed = mTime;
+                continue;
+            }
+            ActorProxy proxy;
+            proxy.mMotion = std::make_unique<btDefaultMotionState>(source->getWorldTransform());
+            btRigidBody::btRigidBodyConstructionInfo info(
+                0.f, proxy.mMotion.get(), const_cast<btCollisionShape*>(source->getCollisionShape()));
+            info.m_friction = 0.6f;
+            proxy.mBody = std::make_unique<btRigidBody>(info);
+            proxy.mBody->setCollisionFlags((proxy.mBody->getCollisionFlags() & ~btCollisionObject::CF_STATIC_OBJECT)
+                | btCollisionObject::CF_KINEMATIC_OBJECT);
+            proxy.mBody->setActivationState(DISABLE_DEACTIVATION);
+            proxy.mLastUsed = mTime;
+            mWorld->addRigidBody(proxy.mBody.get(), CollisionType_World, CollisionType_Actor);
+            mActorProxies.emplace(source, std::move(proxy));
+        }
+    }
+
+    void RagdollWorld::writeBackClutter()
+    {
+        MWBase::World& world = *MWBase::Environment::get().getWorld();
+        for (auto& [source, clutter] : mClutter)
+        {
+            btRigidBody& body = *clutter.mBody;
+            const bool awake = body.isActive();
+            if (!awake && !clutter.mWasAwake)
+                continue;
+            clutter.mWasAwake = awake;
+            const btTransform& now = body.getWorldTransform();
+            const btTransform& was = clutter.mWritten;
+            const bool moved
+                = (now.getOrigin() - was.getOrigin()).length2() > sWriteBackDistance * sWriteBackDistance
+                || now.getRotation().angle(was.getRotation()) > sWriteBackAngle;
+            if (!moved)
+                continue;
+            clutter.mWritten = now;
+            const auto* holder = static_cast<const PtrHolder*>(source->getUserPointer());
+            if (holder == nullptr)
+                continue;
+            MWWorld::Ptr ptr = holder->getPtr();
+            if (ptr.isEmpty())
+                continue;
+            world.rotateObject(ptr, rotationFromQuat(Misc::Convert::toOsg(now.getRotation())));
+            world.moveObject(ptr, Misc::Convert::toOsg(now.getOrigin()));
+        }
     }
 
     namespace
@@ -831,6 +1143,9 @@ namespace MWPhysics
         mPhysics.aabbTest(centre - extent, centre + extent, callback);
         for (const auto& [source, group] : callback.mFound)
         {
+            // Clutter is its own body here, not a wall
+            if (mClutter.contains(source))
+                continue;
             auto found = mProxies.find(source);
             if (found != mProxies.end())
             {
@@ -884,6 +1199,12 @@ namespace MWPhysics
 
     void RagdollWorld::onCollisionObjectRemoved(const btCollisionObject* object)
     {
+        removeClutter(object);
+        if (auto actor = mActorProxies.find(object); actor != mActorProxies.end())
+        {
+            mWorld->removeRigidBody(actor->second.mBody.get());
+            mActorProxies.erase(actor);
+        }
         auto found = mProxies.find(object);
         if (found == mProxies.end())
             return;

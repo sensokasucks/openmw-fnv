@@ -194,6 +194,13 @@ namespace MWPhysics
         void updatePosition(const MWWorld::Ptr& ptr);
 
         // The ragdolls' own dynamics world (ragdoll.hpp)
+        // FO3/FNV loose clutter: an impulse (kg x units/s) at a point on an object, or a blast on everything in
+        // reach (impulse falling off with distance, pushed up by upBias). False when the object isn't clutter.
+        bool applyClutterImpulse(const MWWorld::ConstPtr& ptr, const osg::Vec3f& impulse, const osg::Vec3f& at);
+        void applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias);
+        // Record types whose placed references are clutter (movable statics, items lying about)
+        static bool isClutterType(unsigned int type);
+
         RagdollWorld& getRagdollWorld() { return *mRagdolls; }
         // Broadphase query of the collision world
         void aabbTest(const btVector3& aabbMin, const btVector3& aabbMax, btBroadphaseAabbCallback& callback) const;

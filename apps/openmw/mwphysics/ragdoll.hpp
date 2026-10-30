@@ -37,10 +37,16 @@ namespace NifOsg
     class MatrixTransform;
 }
 
+namespace MWWorld
+{
+    class Ptr;
+}
+
 namespace MWPhysics
 {
     class PhysicsSystem;
     class RagdollWorld;
+    class Object;
 
     // A Bullet ragdoll built from a Bethesda skeleton's Havok data (FO3/FNV/Skyrim skeleton.nif): the bones with a
     // bhkBlendCollisionObject give the rigid bodies (capsules, with their mass, friction and damping), and the
@@ -172,6 +178,20 @@ namespace MWPhysics
         // The height of the mirrored terrain at the point, if it has any there
         std::optional<float> getTerrainHeight(const btVector3& point) const;
 
+        // Loose clutter (a tumbleweed, a bottle): the placed object's Havok body lives in this world and the
+        // reference follows it. The object keeps its collision in the game's world (actors walk into it), which
+        // moves along; the actors near it are mirrored as kinematic capsules so they push it. Asleep until
+        // something touches, shoots or blows it.
+        void addClutter(Object& object, const MWWorld::Ptr& ptr);
+        void removeClutter(const btCollisionObject* source);
+        // An impulse (kg x units/s) at a world point on the clutter the collision object belongs to; false when
+        // it isn't clutter
+        bool applyClutterImpulse(const btCollisionObject* source, const btVector3& impulse, const btVector3& at);
+        // A blast: clutter within radius gets an impulse away from the centre, falling off with distance
+        void applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias);
+        std::size_t getAwakeClutterCount() const;
+        static constexpr std::size_t sMaxAwakeClutter = 24;
+
         std::size_t getActiveCount() const;
         // At most this many ragdolls simulate at once; the oldest freeze where they lie
         static constexpr std::size_t sMaxActive = 10;
@@ -194,6 +214,34 @@ namespace MWPhysics
         std::vector<Ragdoll*> mRagdolls;
         float mTime = 0.f;
         float mProxyCheck = 0.f;
+
+        struct Clutter
+        {
+            std::unique_ptr<btRigidBody> mBody;
+            std::unique_ptr<btDefaultMotionState> mMotion;
+            osg::ref_ptr<const Resource::BulletShapeInstance> mShapeInstance;
+            const btCollisionObject* mSource = nullptr; // the object's collision in the game's world
+            bool mWind = false;
+            bool mWasAwake = false;
+            float mAwakeTime = 0.f;
+            btTransform mWritten; // the last transform written to the reference
+        };
+        std::map<const btCollisionObject*, Clutter> mClutter;
+        // Actors mirrored as kinematic bodies: source collision object -> proxy
+        struct ActorProxy
+        {
+            std::unique_ptr<btRigidBody> mBody;
+            std::unique_ptr<btDefaultMotionState> mMotion;
+            float mLastUsed = 0.f;
+        };
+        std::map<const btCollisionObject*, ActorProxy> mActorProxies;
+        float mWindHeading = 0.f;
+        float mWindGust = 0.f;
+        float mWindCheck = 0.f;
+
+        void stepClutter(float dt);
+        void updateActorProxies(const btVector3& centre, float radius);
+        void writeBackClutter();
     };
 }
 

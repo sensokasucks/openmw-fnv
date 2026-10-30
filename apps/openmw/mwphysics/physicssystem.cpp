@@ -30,6 +30,7 @@
 #include <components/misc/strings/conversion.hpp>
 #include <components/resource/bulletshapemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
+#include <components/esm/defs.hpp>
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -446,6 +447,48 @@ namespace MWPhysics
 
         if (obj->isAnimated())
             mAnimatedObjects.emplace(obj.get(), false);
+
+        // FO3/FNV loose clutter (a movable static, an item lying about) with a dynamic Havok body falls, rolls
+        // and gets pushed in the dynamics world; its reference follows the body
+        if (shapeInstance->mDynamicBody && collisionType == CollisionType_World && Settings::game().mFnvClutterPhysics
+            && isClutterType(ptr.getType()))
+            mRagdolls->addClutter(*obj, ptr);
+    }
+
+    bool PhysicsSystem::isClutterType(unsigned int type)
+    {
+        switch (type)
+        {
+            case ESM::REC_MSTT4:
+            case ESM::REC_MISC4:
+            case ESM::REC_ALCH4:
+            case ESM::REC_AMMO4:
+            case ESM::REC_WEAP4:
+            case ESM::REC_ARMO4:
+            case ESM::REC_BOOK4:
+            case ESM::REC_KEYM4:
+            case ESM::REC_INGR4:
+            case ESM::REC_NOTE4:
+            case ESM::REC_CMNY4:
+            case ESM::REC_IMOD4:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool PhysicsSystem::applyClutterImpulse(const MWWorld::ConstPtr& ptr, const osg::Vec3f& impulse, const osg::Vec3f& at)
+    {
+        const auto found = mObjects.find(ptr.mRef);
+        if (found == mObjects.end())
+            return false;
+        return mRagdolls->applyClutterImpulse(
+            found->second->getCollisionObject(), Misc::Convert::toBullet(impulse), Misc::Convert::toBullet(at));
+    }
+
+    void PhysicsSystem::applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias)
+    {
+        mRagdolls->applyClutterBlast(Misc::Convert::toBullet(centre), radius, impulse, upBias);
     }
 
     void PhysicsSystem::remove(const MWWorld::Ptr& ptr)
