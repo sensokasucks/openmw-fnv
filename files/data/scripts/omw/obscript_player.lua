@@ -31,7 +31,27 @@ local function formatMessage(text, args)
     end))
 end
 
+-- Console command for testing (the engine routes it here, see MWGui::Console::execute):
+--   additem <EditorId> [count]   gives the player an FNV item by editor id (WeapNVDynamite, Stimpak, Ammo10mm)
+-- A file of such lines passed with --script-run runs at start-up, so a test launch can hand out gear.
+local function onConsoleCommand(mode, cmd, selectedObject)
+    if mode ~= '' then return end
+    local verb, item, count = cmd:match('^%s*(%a+)%s+([%w_]+)%s*(%d*)')
+    if verb == nil or verb:lower() ~= 'additem' then
+        if cmd:lower():match('^%s*additem') then
+            ui.printToConsole('Usage: additem <EditorId> [count]', ui.CONSOLE_COLOR.Error)
+        end
+        return
+    end
+    if core.obscript.resolveItemEditorId(item) == nil then
+        ui.printToConsole('additem: unknown item editor id ' .. item, ui.CONSOLE_COLOR.Error)
+        return
+    end
+    core.sendGlobalEvent('ObScriptAddItem', { actor = self.object, item = item, count = tonumber(count) or 1 })
+end
+
 return {
+    engineHandlers = { onConsoleCommand = onConsoleCommand },
     eventHandlers = {
         ObScriptShowMessage = function(data)
             local msg = core.obscript.getMessage(data.editorId)
