@@ -163,6 +163,10 @@ namespace MWMechanics::ESM4Combat
         bool mSleeping = false; // the observer is asleep
         bool mInCombat = false; // the observer is fighting
         bool mAlert = false; // the observer has its weapon out
+        bool mTeammate = false; // the target is a teammate of the player (FUN_008a0d10): it sneaks with the higher
+                                // of its own and the player's Sneak, and while sneaking out of combat the observer's
+                                // detection of the player stands for it
+        bool mTargetInCombat = false; // (with mTeammate) the teammate is fighting
     };
     struct Detection
     {

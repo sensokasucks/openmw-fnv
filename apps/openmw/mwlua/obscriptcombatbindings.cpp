@@ -653,6 +653,8 @@ namespace MWLua
                 context.mSleeping = options->get_or("sleeping", false);
                 context.mInCombat = options->get_or("inCombat", false);
                 context.mAlert = options->get_or("alert", false);
+                context.mTeammate = options->get_or("teammate", false);
+                context.mTargetInCombat = options->get_or("targetInCombat", false);
             }
             const Combat::Detection detection = Combat::detect(observer.ptr(), target.ptr(), context);
             return { detection.mScore, detection.mLineOfSight };

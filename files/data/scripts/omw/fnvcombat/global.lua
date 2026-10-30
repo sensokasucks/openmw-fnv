@@ -130,6 +130,8 @@ local function startCombat(actor, target)
     -- what it carries and holds, for the combat planner (weapon types: 1 ranged, 2 melee, 6 hand to hand, 7 none drawn)
     s.equippedType, s.drawnType = 6, 6
     s.flushed = true
+    -- a follower crouching along with the player stands up to fight
+    if combat.setCrouched then pcall(combat.setCrouched, actor, false) end
     s.failedCovers = {}
     s.style = combat.getCombatStyle and combat.getCombatStyle(actor) or nil
     -- grenades thrown in earlier fights are gone too
@@ -390,9 +392,14 @@ end
 local RESELECT_EVERY = 1.0
 local CLOSE_RANGE = 2048
 
+-- Detection of a target by a fighting, alert actor; a teammate of the player sneaks with the player (findings 2)
+local function detectOptions(target)
+    return { inCombat = true, alert = true, teammate = isTeammate(target), targetInCombat = fighting[target.id] ~= nil }
+end
+
 local function targetScore(s, actor, target)
     local score = 0
-    local d = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+    local d = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
     local seen = d ~= nil and d > gmst('fSneakNoticedMin', -20)
     local sight = combat.hasLineOfFire(actor, target)
     s.seen = s.seen or {}
@@ -1932,11 +1939,11 @@ local function fight(s)
         noticed = noticesPlayer(actor)
     else
         -- the same detection score as for the player, in combat and alert
-        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        local score = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
         noticed = los or distance <= REACH * 2 or (score ~= nil and score > gmst('fSneakNoticedMin', -20))
     end
     if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > lostAfter() then
-        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        local score = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
         print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, moving %s; %s)')
             :format(actor.recordId, tostring(actor.id), tostring(target.recordId), distance, tostring(score),
                 tostring(los), tostring(ai.status(actor)), describeLine(actor, target)))
