@@ -1204,6 +1204,12 @@ local function holdStill(actor)
     if ai.status(actor) == 'moving' then ai.stop(actor) end
 end
 
+-- A move order sent at least half a second ago that the actor no longer carries (ai.status 'none': stopped by
+-- another step, or never taken). ai.status never says 'idle' (run 44: the pickup walk stalled on "moving none").
+local function orderDropped(actor, state)
+    return state.sent == true and simTime >= (state.sentAt or 0) + 0.5 and ai.status(actor) == 'none'
+end
+
 local function equipType(s, weaponType)
     local b = s.best[weaponType]
     local actor = s.actor
@@ -1241,8 +1247,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' then
-            state.sent = true
+        if not state.sent or orderDropped(actor, state) then
+            state.sent, state.sentAt = true, simTime
             ai.moveTo(actor, s.cover.cover, { run = true, direct = true, tolerance = 24 })
         elseif ai.status(actor) == 'nopath' then
             s.failedCovers[s.cover.key] = simTime
@@ -1257,14 +1263,20 @@ local function moveTowards(s, kind, distance, los)
             s.pickup, s.nextPickupScan = nil, 0
             return 'failed'
         end
-        if (actor.position - s.pickup.position):length() <= PICKUP_REACH then
+        local left = (actor.position - s.pickup.position):length()
+        if left <= PICKUP_REACH then
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' then
-            state.sent = true
+        -- a walk that takes far longer than the distance warrants [inferred] gives the item up for 30 s
+        state.startedAt = state.startedAt or simTime
+        state.budget = state.budget or math.max(8, left / 150)
+        if not state.sent or orderDropped(actor, state) then
+            state.sent, state.sentAt = true, simTime
             ai.moveTo(actor, s.pickup.position, { run = true, direct = true, tolerance = 24 })
-        elseif ai.status(actor) == 'nopath' then
+        elseif ai.status(actor) == 'nopath' or simTime > state.startedAt + state.budget then
+            print(('[combat] %s (%s) gives up fetching %s (%s, %.0f away)'):format(actor.recordId,
+                tostring(actor.id), tostring(s.pickup.editorId), tostring(ai.status(actor)), left))
             pickupBlocked[obj.id] = simTime + 30
             s.pickup, s.nextPickupScan = nil, 0
             return 'failed'
@@ -1306,8 +1318,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if state.sentTo ~= s.searchPos or ai.status(actor) == 'idle' then
-            state.sentTo = s.searchPos
+        if state.sentTo ~= s.searchPos or orderDropped(actor, state) then
+            state.sentTo, state.sent, state.sentAt = s.searchPos, true, simTime
             ai.moveTo(actor, s.searchPos, { run = true, direct = true, tolerance = 96 })
         elseif ai.status(actor) == 'nopath' then
             return 'failed'
@@ -1322,8 +1334,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' or simTime >= (state.resend or 0) then
-            state.sent, state.resend = true, simTime + 1
+        if not state.sent or orderDropped(actor, state) or simTime >= (state.resend or 0) then
+            state.sent, state.sentAt, state.resend = true, simTime, simTime + 1
             ai.moveTo(actor, ally.position, { run = true, direct = true,
                 tolerance = 2 * ACTOR_RADIUS + MOVE_TO_ACTOR_BUFFER })
         elseif ai.status(actor) == 'nopath' then
@@ -1388,6 +1400,18 @@ local function attackMelee(s, distance)
         return 'failed'
     end
     s.straight = false
+    -- Two fighters closing at a run overshoot into each other (run 44: 38 apart, bodies through each other; the
+    -- original's bodies push each other apart). Nearer than the two bodies plus a hand, step back to the reach.
+    if distance < 2 * ACTOR_RADIUS + 16 and simTime >= (s.stepBackUntil or 0) then
+        local away = actor.position - target.position
+        away = util.vector3(away.x, away.y, 0)
+        if away:length() < 1 then away = util.vector3(math.random() - 0.5, math.random() - 0.5, 0) end
+        away = away:normalize()
+        s.stepBackUntil = simTime + 1
+        ai.moveTo(actor, target.position + away * (reach * 0.8), { run = false, direct = true, tolerance = 16 })
+        return 'running'
+    end
+    if simTime < (s.stepBackUntil or 0) and ai.status(actor) == 'moving' then return 'running' end
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
     if simTime >= s.nextAttack then
@@ -1526,8 +1550,8 @@ local function beInCover(s, distance, los, grenade)
     end
     local function near(point) return (actor.position - point):length() <= 40 end
     local function go(point)
-        if not st.sent or ai.status(actor) == 'idle' then
-            st.sent = true
+        if not st.sent or orderDropped(actor, st) then
+            st.sent, st.sentAt = true, simTime
             ai.moveTo(actor, point, { run = true, direct = true, tolerance = 24 })
         end
     end
