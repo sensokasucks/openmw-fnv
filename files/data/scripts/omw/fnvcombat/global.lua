@@ -155,6 +155,7 @@ local function stopCombat(actor, why)
         print(('[combat] %s (%s) stops fighting (%s)'):format(actor.recordId, tostring(actor.id), why or 'told to'))
         fighting[actor.id] = nil
         if releaseCover then releaseCover(s) end
+        if s.blocking and combat.setBlocking and actor:isValid() then combat.setBlocking(actor, false) end
         scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
             ai.stop(actor)
@@ -1371,17 +1372,29 @@ local function attackRanged(s, distance, los)
     return 'running'
 end
 
+-- Lowers a raised weapon (see attackMelee)
+local function lowerBlock(s)
+    if s.blocking then
+        s.blocking = false
+        if combat.setBlocking and s.actor:isValid() then combat.setBlocking(s.actor, false) end
+    end
+end
+
 local function attackMelee(s, distance)
     local actor, target = s.actor, s.target
     local reach = meleeReach(s)
-    if distance > reach * 1.3 then return 'failed' end
+    if distance > reach * 1.3 then
+        lowerBlock(s)
+        return 'failed'
+    end
     s.straight = false
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
     if simTime >= s.nextAttack then
         -- In reach the original rolls attack / block / hold each decision (ghidra-findings-7): attack = Attack % +
         -- 20 x skill/100 (plus bonuses), block = Block % x fBlockScoreNoShieldMult 0.5, x0.25 more when not under
-        -- attack, hold = max(100 - attack - block, 30). Blocks are not animated yet, so a block is a hold here.
+        -- attack, hold = max(100 - attack - block, 30). A block raises the weapon (BlockIdle) for the hold timer; a
+        -- blow landing meanwhile is cut and plays BlockHit (the engine, see the shot event's blocked).
         local style = s.style
         local skill = s.inHand and s.inHand.skill and s.inHand.skill >= 0 and stats.get(actor, s.inHand.skill) or 50
         local attack = (style and style.attackChance or 40) + 20 * skill / 100
@@ -1391,10 +1404,19 @@ local function attackMelee(s, distance)
         local hold = math.max(100 - attack - block, 30)
         local roll = math.random() * (attack + block + hold)
         if roll < attack then
+            lowerBlock(s)
             s.nextAttack = simTime + 1.2 + math.random() * 0.8
             combat.attack(actor, target, reach)
+        elseif roll < attack + block then
+            -- block for the style's Hold Timer [0.5-1.5 s in the default style]
+            s.nextAttack = simTime + 0.5 + math.random()
+            if combat.setBlocking and not s.blocking then
+                s.blocking = true
+                combat.setBlocking(actor, true)
+            end
         else
-            -- hold (or block) for the style's Hold Timer [0.5-1.5 s in the default style]
+            -- hold for the style's Hold Timer
+            lowerBlock(s)
             s.nextAttack = simTime + 0.5 + math.random()
         end
     end
@@ -1907,6 +1929,7 @@ local function fight(s)
             combat.setCrouched(actor, false)
         end
     end
+    if step.name ~= 'ATTACK_MELEE' and step.name ~= 'ATTACK_HAND_TO_HAND' then lowerBlock(s) end
     local procedure = procedures[step.name]
     local result = procedure and procedure(s, step, distance, los) or 'failed'
     if step.action.move and step.param ~= P.L.FLEE then
@@ -2054,6 +2077,10 @@ return {
             end
             if target ~= nil and target:isValid() and isActor(target) then
                 if fighting[target.id] then fighting[target.id].lastHitAt = simTime end
+                if e.blocked then
+                    print(('[combat] %s (%s) blocks %s (%.0f damage gets through)'):format(target.recordId,
+                        tostring(target.id), tostring(e.attacker.recordId), e.damage or 0))
+                end
                 if e.knockedDown then
                     print(('[combat] %s (%s) is knocked down by %s (%.0f damage)'):format(target.recordId,
                         tostring(target.id), tostring(e.attacker.recordId), e.damage or 0))

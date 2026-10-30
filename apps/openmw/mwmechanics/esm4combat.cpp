@@ -162,6 +162,7 @@ namespace MWMechanics::ESM4Combat
 
         // Actors crouched behind cover
         std::set<ESM::RefNum> sCrouched;
+        std::set<ESM::RefNum> sBlocking; // actors holding their weapon up (BlockIdle)
 
         // Havok gravity, 9.81 m/s^2 at 69.99 units a metre [inferred: PROJ gravity is a multiple of it]
         constexpr float sGravity = 686.6f;
@@ -612,6 +613,7 @@ namespace MWMechanics::ESM4Combat
         if (animation == nullptr || weapon == nullptr || isDead(actor))
             return;
         sCrouched.erase(actor.getCellRef().getRefNum());
+        sBlocking.erase(actor.getCellRef().getRefNum());
         animation->showWeapon(drawn ? weapon->mModel.getOriginal() : std::string_view());
         animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
     }
@@ -661,6 +663,49 @@ namespace MWMechanics::ESM4Combat
             Log(Debug::Verbose) << "ESM4 crouch " << actor.getCellRef().getRefId() << " with " << loop;
         animation->setIdleSequence(loop);
         return true;
+    }
+
+    namespace
+    {
+        // The animation prefix of what the actor would block with: its melee weapon, else its hands
+        std::string blockPrefix(const MWWorld::Ptr& actor)
+        {
+            const ESM4::Weapon* weapon = getActorWeapon(actor);
+            if (weapon != nullptr && (getWeaponType(*weapon) == 2 || getWeaponType(*weapon) == 6))
+                return std::string(animPrefix(*weapon));
+            return "h2h";
+        }
+    }
+
+    bool setBlocking(const MWWorld::Ptr& actor, bool blocking)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        if (animation == nullptr || isDead(actor))
+            return false;
+        const ESM::RefNum ref = actor.getCellRef().getRefNum();
+        const ESM4::Weapon* weapon = getActorWeapon(actor);
+        const bool drawn = weapon != nullptr && animation->isWeaponShown();
+        if (!blocking)
+        {
+            if (sBlocking.erase(ref) != 0)
+                animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
+            return true;
+        }
+        sCrouched.erase(ref);
+        sBlocking.insert(ref);
+        const std::string loop = blockPrefix(actor) + "blockidle.kf";
+        if (!animation->hasLoopFONV(loop))
+        {
+            Log(Debug::Verbose) << "ESM4 no block loop " << loop << " for " << actor.getCellRef().getRefId();
+            return false;
+        }
+        animation->setIdleSequence(loop);
+        return true;
+    }
+
+    bool isBlocking(const MWWorld::Ptr& actor)
+    {
+        return sBlocking.count(actor.getCellRef().getRefNum()) != 0;
     }
 
     namespace
@@ -911,6 +956,7 @@ namespace MWMechanics::ESM4Combat
     {
         if (isDead(attacker) || ESM4Actors::get().isActing(attacker))
             return false;
+        setBlocking(attacker, false);
         // NPCs with a melee weapon (or a hand to hand one, like a power fist) in hand swing it
         const ESM4::Weapon* weapon = getActorWeapon(attacker);
         if (weapon != nullptr && getWeaponType(*weapon) != 2 && getWeaponType(*weapon) != 6)
@@ -1482,9 +1528,24 @@ namespace MWMechanics::ESM4Combat
                 = target.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
             if (delta.length() > blow.mReach * 1.5f)
                 continue;
-            const float damage = applyArmor(target,
+            float damage = applyArmor(target,
                 blow.mWeapon != nullptr ? getWeaponDamage(attacker, *blow.mWeapon) : getUnarmedDamage(attacker));
             HitResult result;
+            // A target holding its weapon up blocks: [inferred, after Oblivion/FO3] the blow loses
+            // fBlockAmountWeaponMult (hands: fBlockAmountHandToHandMult) x (fBlockSkillBase + fBlockSkillMult x
+            // skill 50 / 100), at most fBlockMax, and the BlockHit sequence plays. Blocking while swinging fails.
+            if (target != getPlayer() && isBlocking(target) && !ESM4Actors::get().isActing(target))
+            {
+                const ESM4::Weapon* held = getActorWeapon(target);
+                const bool withWeapon = held != nullptr && getWeaponType(*held) == 2;
+                const float skillTerm = gmst("fBlockSkillBase") + gmst("fBlockSkillMult") * 0.5f;
+                const float amount = std::clamp(
+                    gmst(withWeapon ? "fBlockAmountWeaponMult" : "fBlockAmountHandToHandMult") * skillTerm, 0.f,
+                    gmst("fBlockMax"));
+                damage *= 1.f - amount;
+                result.mBlocked = true;
+                ESM4Actors::get().playAction(target, blockPrefix(target) + "blockhit.kf");
+            }
             result.mTarget = target;
             result.mPosition = target.getRefData().getPosition().asVec3();
             result.mDirection = delta;
