@@ -1240,7 +1240,17 @@ namespace MWRender
         // Which way up the body lies picks the sequence (asked before the ragdoll lets go)
         const bool faceUp = isRagdollFaceUp();
         if (mRagdollPosing)
+        {
+            // The sequence blends in from the pose the body lies in, so the limbs don't jump to its first frame;
+            // not the roots, which the get-up lines up with the body on its own
+            mPoseBlendFrom.clear();
+            if (mRagdoll != nullptr)
+                for (const MWPhysics::Ragdoll::Bone& bone : mRagdoll->getBones())
+                    if (bone.mNode != nullptr && bone.mName != "Bip01" && bone.mName != "Bip01 NonAccum")
+                        mPoseBlendFrom[bone.mNode.get()]
+                            = { bone.mNode->getMatrix().getTrans(), getNifRotation(*bone.mNode) };
             endRagdoll();
+        }
         const auto sequence = findGetUpSequence(faceUp);
         if (!sequence || !sequence->second)
             return 0.f;
@@ -1608,7 +1618,17 @@ namespace MWRender
                 }
                 blendFrom[transform] = { transform->getMatrix().getTrans(), getNifRotation(*transform) };
             }
+            // Bones a ragdoll posed (it has let go, and put them back at rest) blend from where it left them
+            for (const auto& [transform, from] : mPoseBlendFrom)
+            {
+                if (blendFrom.contains(transform))
+                    continue;
+                if (!mRestPoses.contains(transform))
+                    mRestPoses[transform] = { transform->getMatrix().getTrans(), transform->getMatrix().getRotate() };
+                blendFrom[transform] = from;
+            }
         }
+        mPoseBlendFrom.clear();
 
         // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
         // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which

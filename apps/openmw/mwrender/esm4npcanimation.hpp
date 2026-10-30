@@ -219,6 +219,9 @@ namespace MWRender
             osg::Quat mRotation;
         };
         std::map<const osg::Node*, RestPose> mRestPoses;
+        // Poses to blend the next sequence from on top of what the last sequence left (the ragdoll's, once it
+        // lets go of the bones for the get-up); used once
+        std::map<NifOsg::MatrixTransform*, RestPose> mPoseBlendFrom;
         // The current sequence moves the actor with its accumulation root (a furniture entry or exit)
         bool mKeepsRootMotion = false;
         // The poses the last switch blends from, and whether it has been shown yet
