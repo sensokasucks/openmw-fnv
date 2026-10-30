@@ -1007,14 +1007,20 @@ namespace MWPhysics
         // Bullet sweeps only convex bodies for continuous collision, and a compound is not convex to it: a
         // compound of one convex child (the usual Havok rigid body) is stepped as that child, at its offset
         btCollisionShape* bodyShape = shape;
-        if (shape->isCompound())
+        // Havok wraps a body's shape in a list and a transform, so a nest of one-child compounds is unwound
+        while (bodyShape->isCompound())
         {
-            auto* compound = static_cast<btCompoundShape*>(shape);
-            if (compound->getNumChildShapes() == 1 && compound->getChildShape(0)->isConvex())
-            {
-                bodyShape = compound->getChildShape(0);
-                clutter.mOffset = compound->getChildTransform(0);
-            }
+            auto* compound = static_cast<btCompoundShape*>(bodyShape);
+            if (compound->getNumChildShapes() != 1)
+                break;
+            clutter.mOffset = clutter.mOffset * compound->getChildTransform(0);
+            bodyShape = compound->getChildShape(0);
+        }
+        if (bodyShape->isCompound())
+        {
+            // several parts: stepped as the whole compound, without a sweep
+            bodyShape = shape;
+            clutter.mOffset = btTransform::getIdentity();
         }
         const btTransform start = source->getWorldTransform() * clutter.mOffset;
         btVector3 inertia(0, 0, 0);
