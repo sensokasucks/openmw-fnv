@@ -311,7 +311,8 @@ namespace MWLua
         api["lockKey"] = [](const Object& object) -> sol::optional<std::string> {
             const ESM::RefId key = object.ptr().getCellRef().getKey();
             const ESM::FormId* formId = key.getIf<ESM::FormId>();
-            if (formId == nullptr || formId->isZeroOrUnset())
+            // (a keyless lock carries the null form in the plugin's load slot: index 0)
+            if (formId == nullptr || formId->isZeroOrUnset() || formId->mIndex == 0)
                 return sol::nullopt;
             return formIdText(*formId);
         };
