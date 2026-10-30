@@ -929,23 +929,39 @@ namespace MWPhysics
         {
             if (!clutter.mFresh)
                 continue;
-            clutter.mFresh = false;
+            if (mTime < clutter.mFreshRetry)
+            {
+                // Still waiting for its ground; whatever woke it meanwhile does not get to drop it
+                clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+                continue;
+            }
             const btVector3 origin = clutter.mBody->getWorldTransform().getOrigin();
             updateStaticProxies(Misc::Convert::toOsg(origin), sProxyRadius);
             updateActorProxies(origin, sActorPushRadius);
+            // What is under it: a ray from the centre to the fall limit. Nothing at all means the ground is not
+            // there yet (a cell still loading, or a body outside the loaded cells): it stays asleep and is looked
+            // at again in half a second. Resting on something already (placed): leave it be.
+            btVector3 aabbMin, aabbMax;
+            clutter.mBody->getCollisionShape()->getAabb(clutter.mBody->getWorldTransform(), aabbMin, aabbMax);
+            const btVector3 to(origin.x(), origin.y(), origin.z() - sClutterFallLimit);
+            NotMeRayCallback ray(origin, to, clutter.mBody.get());
+            ray.m_collisionFilterGroup = CollisionType_Actor;
+            ray.m_collisionFilterMask
+                = CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor;
+            mWorld->rayTest(origin, to, ray);
+            if (!ray.hasHit())
+            {
+                clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+                clutter.mBody->setLinearVelocity(btVector3(0, 0, 0));
+                clutter.mBody->setAngularVelocity(btVector3(0, 0, 0));
+                clutter.mFreshRetry = mTime + sProxyCheckEvery;
+                continue;
+            }
+            clutter.mFresh = false;
             if (clutter.mPlaced)
             {
                 clutter.mPlaced = false;
-                // Resting on something already: leave it be. Only a body hanging in the air is dropped.
-                btVector3 aabbMin, aabbMax;
-                clutter.mBody->getCollisionShape()->getAabb(clutter.mBody->getWorldTransform(), aabbMin, aabbMax);
-                const btVector3 to(origin.x(), origin.y(), aabbMin.z() - sPlacedSupportGap);
-                NotMeRayCallback ray(origin, to, clutter.mBody.get());
-                ray.m_collisionFilterGroup = CollisionType_Actor;
-                ray.m_collisionFilterMask
-                    = CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor;
-                mWorld->rayTest(origin, to, ray);
-                if (ray.hasHit())
+                if (ray.m_hitPointWorld.z() >= aabbMin.z() - sPlacedSupportGap)
                 {
                     clutter.mBody->forceActivationState(ISLAND_SLEEPING);
                     continue;
@@ -1052,7 +1068,8 @@ namespace MWPhysics
         return true;
     }
 
-    void RagdollWorld::applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias)
+    void RagdollWorld::applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias,
+        const std::function<bool(const btVector3&)>& blocked)
     {
         if (radius <= 0.f)
             return;
@@ -1062,6 +1079,9 @@ namespace MWPhysics
             btVector3 away = body.getWorldTransform().getOrigin() - centre;
             const float distance = static_cast<float>(away.length());
             if (distance > radius)
+                continue;
+            // A floor or wall between the blast and the body shields it (the original casts rays too)
+            if (blocked && blocked(body.getWorldTransform().getOrigin()))
                 continue;
             if (distance < 1.f)
                 away = btVector3(0, 0, 1);

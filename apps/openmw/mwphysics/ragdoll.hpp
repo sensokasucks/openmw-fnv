@@ -1,6 +1,7 @@
 #ifndef OPENMW_MWPHYSICS_RAGDOLL_H
 #define OPENMW_MWPHYSICS_RAGDOLL_H
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -190,7 +191,10 @@ namespace MWPhysics
         // it isn't clutter
         bool applyClutterImpulse(const btCollisionObject* source, const btVector3& impulse, const btVector3& at);
         // A blast: clutter within radius gets an impulse away from the centre, falling off with distance
-        void applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias);
+        // blocked(bodyPosition) says whether a wall stands between the blast and a body (checked in the game's
+        // world, the mirrored one only holds floors near awake bodies)
+        void applyClutterBlast(const btVector3& centre, float radius, float impulse, float upBias,
+            const std::function<bool(const btVector3&)>& blocked);
         std::size_t getAwakeClutterCount() const;
         static constexpr std::size_t sMaxAwakeClutter = 24;
 
@@ -228,6 +232,7 @@ namespace MWPhysics
             bool mFresh = true; // needs its floor and actors mirrored before it is stepped
             bool mPlaced = true; // fresh because it was placed (a load), not shoved: only woken if it hangs in the air
             float mWindHoldUntil = 0.f; // the wind lets a shoved body fly for a moment (mTime)
+            float mFreshRetry = 0.f; // nothing under it yet (the cell is still loading): look again then (mTime)
             float mAwakeTime = 0.f;
             btTransform mWritten; // the last transform written to the reference
             btTransform mHome; // where it last rested: a body that falls out of the world comes back here

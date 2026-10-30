@@ -493,7 +493,13 @@ namespace MWPhysics
 
     void PhysicsSystem::applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias)
     {
-        mRagdolls->applyClutterBlast(Misc::Convert::toBullet(centre), radius, impulse, upBias);
+        const osg::Vec3f from = centre + osg::Vec3f(0, 0, 8);
+        mRagdolls->applyClutterBlast(Misc::Convert::toBullet(centre), radius, impulse, upBias,
+            [&](const btVector3& body) {
+                return castRay(from, Misc::Convert::toOsg(body),
+                    CollisionType_World | CollisionType_HeightMap | CollisionType_Door)
+                    .mHit;
+            });
     }
 
     void PhysicsSystem::remove(const MWWorld::Ptr& ptr)
