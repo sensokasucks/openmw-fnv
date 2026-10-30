@@ -59,7 +59,9 @@ end
 
 -- The container menu on a living NPC is its pockets (scripts/omw/fnvcrime pickpocketing)
 local function pickpocketing(container)
-    return container ~= nil and container:isValid() and types.Actor.objectIsInstance(container)
+    -- types.Actor.objectIsInstance is false for ESM4 NPCs, so test both.
+    return container ~= nil and container:isValid()
+        and (types.ESM4NPC.objectIsInstance(container) or types.Actor.objectIsInstance(container))
         and not (obscript.combat and obscript.combat.isDead and obscript.combat.isDead(container))
 end
 
