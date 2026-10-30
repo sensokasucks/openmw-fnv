@@ -149,6 +149,7 @@ namespace Resource
         , mFileName(other.mFileName)
         , mFileHash(other.mFileHash)
         , mVisualCollisionType(other.mVisualCollisionType)
+        , mDynamicBody(other.mDynamicBody)
     {
     }
 
