@@ -32,6 +32,7 @@
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/ptr.hpp"
 
@@ -82,8 +83,15 @@ namespace MWPhysics
         // The original's wind on clutter (FalloutNV.exe 0xc74570): W = 250 x the weather's wind speed, a push of
         // clamp(0.25 W + rand(-W, W), 0, 250) along the wind's direction +-45 degrees, every step; in Havok's
         // newtons on kilograms and metres, so x UnitsPerMeter for game units
-        constexpr float sWindScale = 250.f;
-        constexpr float sWindMax = 250.f;
+        // The wind drags bodies toward its own velocity: full weather wind (speed 1) blows a tumbleweed along
+        // at up to sWindTopSpeed units/s, gusting between a quarter and five quarters of that, and the drag
+        // closes the gap at sWindDrag per second [inferred: the original's 250 x wind speed force per quarter
+        // second is on Havok's scale; on ours it sent tumbleweeds thousands of units in seconds]
+        constexpr float sWindTopSpeed = 350.f;
+        constexpr float sWindDrag = 2.f;
+        // A body still moving faster than this is not put to sleep by the distance or count rules, so nothing
+        // freezes in mid-air
+        constexpr float sClutterRestingSpeed = 20.f;
         constexpr float sWindSpread = 0.78539816f;
         constexpr float sWindGustEvery = 0.25f;
         // A body written back to its reference only when it has moved this much (units, radians)
@@ -912,8 +920,9 @@ namespace MWPhysics
         clutter.mWritten = source->getWorldTransform();
         mWorld->addRigidBody(clutter.mBody.get(), CollisionType_Actor,
             CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor);
-        // Placed as the designers left it: asleep until something happens to it
-        clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+        // Awake at first, so anything a designer (or a save) left in the air settles onto the floor, as the
+        // original's clutter does when a cell loads; Bullet puts it to sleep once it rests
+        clutter.mBody->activate(true);
         Log(Debug::Verbose) << "Clutter body for " << ptr.getCellRef().getRefId() << ": " << info.mMass << " kg"
                             << (info.mWind ? ", in the wind" : "");
         mClutter.emplace(source, std::move(clutter));
@@ -997,20 +1006,23 @@ namespace MWPhysics
             ? btVector3(0, 0, 0)
             : Misc::Convert::toBullet(player.getRefData().getPosition().asVec3());
 
-        // The wind, as the original gusts it: the direction wanders slowly, the strength rolls every quarter second
-        const float windSpeed = std::clamp(world.getWindSpeed(), 0.f, 1.f);
+        // The wind, as the original gusts it: the direction wanders slowly, the strength rolls every quarter
+        // second, and there is none indoors
+        const bool outdoors = !player.isEmpty() && player.getCell() != nullptr
+            && (player.getCell()->isExterior() || player.getCell()->isQuasiExterior());
+        const float windSpeed = outdoors ? std::clamp(world.getWindSpeed(), 0.f, 1.f) : 0.f;
         static std::mt19937 random{ std::random_device{}() };
         mWindCheck -= dt;
         if (mWindCheck <= 0.f)
         {
             mWindCheck = sWindGustEvery;
-            const float w = sWindScale * windSpeed;
-            std::uniform_real_distribution<float> gust(-w, w);
-            mWindGust = w > 0.f ? std::clamp(0.25f * w + gust(random), 0.f, sWindMax) : 0.f;
+            const float w = sWindTopSpeed * windSpeed;
+            std::uniform_real_distribution<float> gust(-0.5f * w, 0.5f * w);
+            mWindGust = w > 0.f ? std::clamp(0.75f * w + gust(random), 0.f, 1.25f * sWindTopSpeed) : 0.f;
             std::uniform_real_distribution<float> turn(-0.2f, 0.2f);
             mWindHeading += turn(random);
         }
-        const bool windy = windSpeed > 0.05f && mWindGust > 0.f;
+        const bool windy = windSpeed > 0.1f && mWindGust > 0.f;
 
         std::size_t awake = 0;
         // The oldest awake bodies go to sleep when too many are up; far ones sleep whatever happens
@@ -1020,9 +1032,10 @@ namespace MWPhysics
             btRigidBody& body = *clutter.mBody;
             const btVector3 origin = body.getWorldTransform().getOrigin();
             const float toPlayer = static_cast<float>((origin - playerPos).length());
+            const bool resting = body.getLinearVelocity().length() < sClutterRestingSpeed;
             if (body.isActive())
             {
-                if (toPlayer > sClutterAwakeRadius)
+                if (toPlayer > sClutterAwakeRadius && resting)
                 {
                     body.setLinearVelocity(btVector3(0, 0, 0));
                     body.setAngularVelocity(btVector3(0, 0, 0));
@@ -1040,10 +1053,17 @@ namespace MWPhysics
             {
                 std::uniform_real_distribution<float> spread(-sWindSpread, sWindSpread);
                 const float heading = mWindHeading + spread(random);
-                const btVector3 direction(std::cos(heading), std::sin(heading), 0.f);
-                // newtons on kilograms give metres per second squared: game units per second squared x mass
-                body.activate(true);
-                body.applyCentralForce(direction * mWindGust * Constants::UnitsPerMeter);
+                const btVector3 windVelocity(std::cos(heading) * mWindGust, std::sin(heading) * mWindGust, 0.f);
+                btVector3 velocity = body.getLinearVelocity();
+                velocity.setZ(0.f);
+                const btVector3 gap = windVelocity - velocity;
+                // A still body in a light breeze stays put; a gust wakes it
+                if (body.isActive() || gap.length() > 0.5f * mWindGust)
+                {
+                    body.activate(true);
+                    const float mass = body.getInvMass() > 0.f ? 1.f / static_cast<float>(body.getInvMass()) : 1.f;
+                    body.applyCentralForce(gap * (sWindDrag * mass));
+                }
             }
         }
         if (awake > sMaxAwakeClutter)
@@ -1052,6 +1072,8 @@ namespace MWPhysics
                 [](const auto& a, const auto& b) { return a.first > b.first; });
             for (std::size_t i = 0; i + sMaxAwakeClutter < awakeBodies.size(); ++i)
             {
+                if (awakeBodies[i].second->getLinearVelocity().length() >= sClutterRestingSpeed)
+                    continue;
                 awakeBodies[i].second->setLinearVelocity(btVector3(0, 0, 0));
                 awakeBodies[i].second->setAngularVelocity(btVector3(0, 0, 0));
                 awakeBodies[i].second->forceActivationState(ISLAND_SLEEPING);
