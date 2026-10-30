@@ -400,7 +400,8 @@ namespace MWMechanics::ESM4Combat
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const osg::Vec3f end = origin + dir * sShotRange;
         const MWPhysics::RayCastingResult wall = world->getRayCasting()->castRay(origin, end, { attacker }, {},
-            MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door);
+            MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door
+                | MWPhysics::CollisionType_Clutter);
         float range = wall.mHit ? (wall.mHitPos - origin).length() : sShotRange;
         result.mPosition = wall.mHit ? wall.mHitPos : end;
         if (wall.mHit)
@@ -1181,7 +1182,7 @@ namespace MWMechanics::ESM4Combat
             const MWPhysics::RayCastingResult hit = world->getRayCasting()->castRay(projectile.mPosition, next, ignore,
                 {},
                 MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Door
-                    | MWPhysics::CollisionType_Actor);
+                    | MWPhysics::CollisionType_Actor | MWPhysics::CollisionType_Clutter);
             if (hit.mHit)
             {
                 projectile.mPosition = hit.mHitPos + hit.mHitNormal * 2.f;

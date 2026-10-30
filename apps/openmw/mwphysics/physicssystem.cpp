@@ -442,16 +442,21 @@ namespace MWPhysics
                 break;
         }
 
+        // FO3/FNV loose clutter (a movable static, an item lying about) with a dynamic Havok body falls, rolls
+        // and gets pushed in the dynamics world; its reference follows the body. Actors walk into it instead of
+        // stopping against it, so it sits in its own collision group
+        const bool clutter = shapeInstance->mDynamicBody && collisionType == CollisionType_World
+            && Settings::game().mFnvClutterPhysics && isClutterType(ptr.getType());
+        if (clutter)
+            collisionType = CollisionType_Clutter;
+
         auto obj = std::make_shared<Object>(ptr, shapeInstance, rotation, collisionType, mTaskScheduler.get());
         mObjects.emplace(ptr.mRef, obj);
 
         if (obj->isAnimated())
             mAnimatedObjects.emplace(obj.get(), false);
 
-        // FO3/FNV loose clutter (a movable static, an item lying about) with a dynamic Havok body falls, rolls
-        // and gets pushed in the dynamics world; its reference follows the body
-        if (shapeInstance->mDynamicBody && collisionType == CollisionType_World && Settings::game().mFnvClutterPhysics
-            && isClutterType(ptr.getType()))
+        if (clutter)
             mRagdolls->addClutter(*obj, ptr);
     }
 
@@ -586,6 +591,7 @@ namespace MWPhysics
         {
             foundObject->second->setRotation(rotate);
             mTaskScheduler->updateSingleAabb(foundObject->second);
+            mRagdolls->onSourceMoved(foundObject->second->getCollisionObject());
         }
         else if (auto foundActor = mActors.find(ptr.mRef); foundActor != mActors.end())
         {
@@ -603,6 +609,7 @@ namespace MWPhysics
         {
             foundObject->second->updatePosition();
             mTaskScheduler->updateSingleAabb(foundObject->second);
+            mRagdolls->onSourceMoved(foundObject->second->getCollisionObject());
         }
         else if (auto foundActor = mActors.find(ptr.mRef); foundActor != mActors.end())
         {

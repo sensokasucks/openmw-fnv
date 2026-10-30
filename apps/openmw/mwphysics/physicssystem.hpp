@@ -200,6 +200,7 @@ namespace MWPhysics
         void applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias);
         // Record types whose placed references are clutter (movable statics, items lying about)
         static bool isClutterType(unsigned int type);
+        // Objects in the clutter collision group do not stop actors; see CollisionType_Clutter
 
         RagdollWorld& getRagdollWorld() { return *mRagdolls; }
         // Broadphase query of the collision world

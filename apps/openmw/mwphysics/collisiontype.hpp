@@ -17,7 +17,10 @@ namespace MWPhysics
         CollisionType_AnyPhysical = CollisionType_World | CollisionType_HeightMap | CollisionType_Actor
             | CollisionType_Door | CollisionType_Projectile | CollisionType_Water,
         CollisionType_CameraOnly = 1 << 6,
-        CollisionType_VisualOnly = 1 << 7
+        CollisionType_VisualOnly = 1 << 7,
+        // FO3/FNV loose clutter with a dynamic body (MWPhysics::RagdollWorld): shots and rays hit it, actors walk
+        // into it and push it rather than stopping against it
+        CollisionType_Clutter = 1 << 8
     };
 
 }

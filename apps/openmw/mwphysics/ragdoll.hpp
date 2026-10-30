@@ -184,6 +184,8 @@ namespace MWPhysics
         // something touches, shoots or blows it.
         void addClutter(Object& object, const MWWorld::Ptr& ptr);
         void removeClutter(const btCollisionObject* source);
+        // The game moved the object (a script, a save): the body follows unless the move was our own write-back
+        void onSourceMoved(const btCollisionObject* source);
         // An impulse (kg x units/s) at a world point on the clutter the collision object belongs to; false when
         // it isn't clutter
         bool applyClutterImpulse(const btCollisionObject* source, const btVector3& impulse, const btVector3& at);
@@ -223,8 +225,10 @@ namespace MWPhysics
             const btCollisionObject* mSource = nullptr; // the object's collision in the game's world
             bool mWind = false;
             bool mWasAwake = false;
+            bool mFresh = true; // needs its floor and actors mirrored before it is stepped
             float mAwakeTime = 0.f;
             btTransform mWritten; // the last transform written to the reference
+            btTransform mHome; // where it last rested: a body that falls out of the world comes back here
         };
         std::map<const btCollisionObject*, Clutter> mClutter;
         // Actors mirrored as kinematic bodies: source collision object -> proxy

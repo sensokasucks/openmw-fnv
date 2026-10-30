@@ -92,6 +92,9 @@ namespace MWPhysics
         // A body still moving faster than this is not put to sleep by the distance or count rules, so nothing
         // freezes in mid-air
         constexpr float sClutterRestingSpeed = 20.f;
+        // A body this far below where it last rested has left the world (through a floor that had no mirror yet)
+        // and is put back
+        constexpr float sClutterFallLimit = 1024.f;
         constexpr float sWindSpread = 0.78539816f;
         constexpr float sWindGustEvery = 0.25f;
         // A body written back to its reference only when it has moved this much (units, radians)
@@ -825,7 +828,7 @@ namespace MWPhysics
     {
         mTime += dt;
         stepClutter(dt);
-        if (getActiveCount() == 0 && getAwakeClutterCount() == 0)
+        if (getActiveCount() == 0 && getAwakeClutterCount() == 0 && mClutter.empty())
         {
             // Nothing falls: the mirrored world isn't needed
             if (!mProxies.empty())
@@ -850,13 +853,20 @@ namespace MWPhysics
             for (Ragdoll* ragdoll : mRagdolls)
                 if (ragdoll->isActive())
                     updateStaticProxies(ragdoll->getRootPosition(), sProxyRadius);
+            // Floors are mirrored around awake bodies; actors around every body near the player, so walking
+            // into a resting one wakes and pushes it
+            const MWWorld::Ptr player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+            const btVector3 playerPos = player.isEmpty()
+                ? btVector3(0, 0, 0)
+                : Misc::Convert::toBullet(player.getRefData().getPosition().asVec3());
             for (auto& [source, clutter] : mClutter)
+            {
+                const btVector3 origin = clutter.mBody->getWorldTransform().getOrigin();
                 if (clutter.mBody->isActive())
-                {
-                    updateStaticProxies(
-                        Misc::Convert::toOsg(clutter.mBody->getWorldTransform().getOrigin()), sProxyRadius);
-                    updateActorProxies(clutter.mBody->getWorldTransform().getOrigin(), sActorPushRadius);
-                }
+                    updateStaticProxies(Misc::Convert::toOsg(origin), sProxyRadius);
+                if ((origin - playerPos).length() < sClutterAwakeRadius)
+                    updateActorProxies(origin, sActorPushRadius);
+            }
         }
         // The actor proxies follow their actors every step: a kinematic body's motion state is what Bullet reads
         for (auto it = mActorProxies.begin(); it != mActorProxies.end();)
@@ -868,9 +878,37 @@ namespace MWPhysics
             }
             else
             {
-                it->second.mBody->getMotionState()->setWorldTransform(it->first->getWorldTransform());
+                const btTransform& actorTransform = it->first->getWorldTransform();
+                it->second.mBody->getMotionState()->setWorldTransform(actorTransform);
+                // A resting body an actor walks into wakes up (Bullet leaves kinematic bodies out of its islands)
+                btVector3 actorMin, actorMax;
+                it->second.mBody->getCollisionShape()->getAabb(actorTransform, actorMin, actorMax);
+                for (auto& [source, clutter] : mClutter)
+                {
+                    if (clutter.mBody->isActive())
+                        continue;
+                    btVector3 bodyMin, bodyMax;
+                    clutter.mBody->getCollisionShape()->getAabb(clutter.mBody->getWorldTransform(), bodyMin, bodyMax);
+                    if (TestAabbAgainstAabb2(actorMin, actorMax, bodyMin, bodyMax))
+                    {
+                        clutter.mBody->activate(true);
+                        clutter.mFresh = true;
+                    }
+                }
                 ++it;
             }
+        }
+        // A body about to move for the first time (placed, shoved, woken) gets its floor and the actors around
+        // it mirrored now, not at the next half-second check, or it falls through the floor it stands on
+        for (auto& [source, clutter] : mClutter)
+        {
+            if (!clutter.mFresh)
+                continue;
+            clutter.mFresh = false;
+            const btVector3 origin = clutter.mBody->getWorldTransform().getOrigin();
+            updateStaticProxies(Misc::Convert::toOsg(origin), sProxyRadius);
+            updateActorProxies(origin, sActorPushRadius);
+            clutter.mBody->activate(true);
         }
         mWorld->stepSimulation(std::min(dt, 0.1f), sMaxSubSteps, sFixedStep);
         for (Ragdoll* ragdoll : std::vector<Ragdoll*>(mRagdolls))
@@ -920,9 +958,11 @@ namespace MWPhysics
         clutter.mWritten = source->getWorldTransform();
         mWorld->addRigidBody(clutter.mBody.get(), CollisionType_Actor,
             CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor);
-        // Awake at first, so anything a designer (or a save) left in the air settles onto the floor, as the
-        // original's clutter does when a cell loads; Bullet puts it to sleep once it rests
-        clutter.mBody->activate(true);
+        // Woken at the first step (once its floor is mirrored), so anything a designer or a save left in the
+        // air settles onto the floor as the original's clutter does when a cell loads; it sleeps once it rests
+        clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+        clutter.mFresh = true;
+        clutter.mHome = clutter.mWritten;
         Log(Debug::Verbose) << "Clutter body for " << ptr.getCellRef().getRefId() << ": " << info.mMass << " kg"
                             << (info.mWind ? ", in the wind" : "");
         mClutter.emplace(source, std::move(clutter));
@@ -959,6 +999,8 @@ namespace MWPhysics
         if (found == mClutter.end())
             return false;
         btRigidBody& body = *found->second.mBody;
+        if (!body.isActive())
+            found->second.mFresh = true;
         body.activate(true);
         body.applyImpulse(capKick(body, impulse), at - body.getWorldTransform().getOrigin());
         return true;
@@ -982,6 +1024,8 @@ namespace MWPhysics
             away.setZ(away.z() + upBias);
             away.normalize();
             const float falloff = 1.f - (distance / radius) * (distance / radius);
+            if (!body.isActive())
+                clutter.mFresh = true;
             body.activate(true);
             body.applyCentralImpulse(capKick(body, away * impulse * falloff));
         }
@@ -1032,6 +1076,19 @@ namespace MWPhysics
             btRigidBody& body = *clutter.mBody;
             const btVector3 origin = body.getWorldTransform().getOrigin();
             const float toPlayer = static_cast<float>((origin - playerPos).length());
+            if (origin.z() < clutter.mHome.getOrigin().z() - sClutterFallLimit)
+            {
+                // Out of the world: back to where it last rested
+                Log(Debug::Warning) << "Clutter body fell out of the world at " << origin.x() << " " << origin.y()
+                                    << " " << origin.z() << ", put back";
+                body.setWorldTransform(clutter.mHome);
+                body.getMotionState()->setWorldTransform(clutter.mHome);
+                body.setLinearVelocity(btVector3(0, 0, 0));
+                body.setAngularVelocity(btVector3(0, 0, 0));
+                body.forceActivationState(ISLAND_SLEEPING);
+                clutter.mAwakeTime = 0.f;
+                continue;
+            }
             const bool resting = body.getLinearVelocity().length() < sClutterRestingSpeed;
             if (body.isActive())
             {
@@ -1060,6 +1117,8 @@ namespace MWPhysics
                 // A still body in a light breeze stays put; a gust wakes it
                 if (body.isActive() || gap.length() > 0.5f * mWindGust)
                 {
+                    if (!body.isActive())
+                        clutter.mFresh = true;
                     body.activate(true);
                     const float mass = body.getInvMass() > 0.f ? 1.f / static_cast<float>(body.getInvMass()) : 1.f;
                     body.applyCentralForce(gap * (sWindDrag * mass));
@@ -1126,6 +1185,26 @@ namespace MWPhysics
         }
     }
 
+    void RagdollWorld::onSourceMoved(const btCollisionObject* source)
+    {
+        auto found = mClutter.find(source);
+        if (found == mClutter.end())
+            return;
+        Clutter& clutter = found->second;
+        const btTransform& now = source->getWorldTransform();
+        // Our own write-back put the reference exactly where the body is
+        if ((now.getOrigin() - clutter.mWritten.getOrigin()).length() < 1.f
+            && now.getRotation().angle(clutter.mWritten.getRotation()) < 0.02f)
+            return;
+        clutter.mBody->setWorldTransform(now);
+        clutter.mBody->getMotionState()->setWorldTransform(now);
+        clutter.mBody->setLinearVelocity(btVector3(0, 0, 0));
+        clutter.mBody->setAngularVelocity(btVector3(0, 0, 0));
+        clutter.mWritten = now;
+        clutter.mHome = now;
+        clutter.mFresh = true;
+    }
+
     void RagdollWorld::writeBackClutter()
     {
         MWBase::World& world = *MWBase::Environment::get().getWorld();
@@ -1135,6 +1214,8 @@ namespace MWPhysics
             const bool awake = body.isActive();
             if (!awake && !clutter.mWasAwake)
                 continue;
+            if (!awake)
+                clutter.mHome = body.getWorldTransform();
             clutter.mWasAwake = awake;
             const btTransform& now = body.getWorldTransform();
             const btTransform& was = clutter.mWritten;
