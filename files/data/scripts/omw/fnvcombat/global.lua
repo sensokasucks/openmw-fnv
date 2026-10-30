@@ -667,7 +667,8 @@ end
 -- band set by what the actor holds (ranged 512-2048, melee 256-1024, fists 256-2048), doubled while unarmed,
 -- stretching with score over bar up to fPickupWeaponDistanceMinMaxDPSMult 5 [band formula inferred]. Candidates
 -- rank by dps x 10000 / max(distance, 64). A gun that needs rounds the actor lacks is taken with the rounds on its
--- corpse, or the rounds lying within reach are fetched first (see hasAmmoFor); containers are not modelled yet.
+-- corpse, or the rounds lying within reach are fetched first (see hasAmmoFor). Unlocked containers within reach
+-- count like corpses (the original also opens ones the actor owns or has the key for; not modelled).
 local PICKUP_IDLE = 'characters/_male/idleanims/pickupgroundobject_0.3.kf'
 local PICKUP_TAKE_AT = 0.3
 local PICKUP_REACH = 32 + ACTOR_RADIUS + 16 -- fPickupItemDistanceFudge + the two radii
@@ -689,6 +690,18 @@ local function pickupBand(s)
     if held == PW.RANGED or held == PW.EXPLOSIVE then return 512, 2048 end
     if held == PW.MELEE then return 256, 1024 end
     return 256, 2048
+end
+
+-- What a corpse or a container holds (ghidra-findings-6: both serve as sources, a container's lock must pass: here
+-- only unlocked ones, the owner and key cases are not modelled)
+local function holderItems(holder)
+    if types.Actor.objectIsInstance(holder) then return types.Actor.inventory(holder) end
+    return types.Container.content(holder)
+end
+
+local function containerOpen(obj)
+    local ok, locked = pcall(types.Lockable.isLocked, obj)
+    return not (ok and locked)
 end
 
 local function scanPickups(s)
@@ -746,7 +759,7 @@ local function scanPickups(s)
         return nearest
     end
     local function holderHasAmmo(holder, rec)
-        local okItems, items = pcall(function() return types.Actor.inventory(holder):getAll() end)
+        local okItems, items = pcall(function() return holderItems(holder):getAll() end)
         for _, item in ipairs(okItems and items or {}) do
             for _, ammo in ipairs(rec.ammoTypes) do
                 if ammo.id == item.recordId and item.count > 0 then return true end
@@ -811,6 +824,18 @@ local function scanPickups(s)
                 local okItems, items = pcall(function() return types.Actor.inventory(npc):getAll() end)
                 for _, item in ipairs(okItems and items or {}) do
                     if types.ESM4Weapon.objectIsInstance(item) then consider(item, npc) end
+                end
+            end
+        end
+        -- weapons in the unlocked containers within reach
+        if types.ESM4Container ~= nil then
+            local okConts, conts = pcall(cell.getAll, cell, types.ESM4Container)
+            for _, cont in ipairs(okConts and conts or {}) do
+                if cont.enabled and (cont.position - actor.position):length() <= maxDist and containerOpen(cont) then
+                    local okItems, items = pcall(function() return types.Container.content(cont):getAll() end)
+                    for _, item in ipairs(okItems and items or {}) do
+                        if types.ESM4Weapon.objectIsInstance(item) then consider(item, cont) end
+                    end
                 end
             end
         end
@@ -1690,7 +1715,7 @@ local function activateCombatItem(s, step)
     if okMove and pickup.holder ~= nil then
         -- the ammo that goes with it
         local rec = combat.getWeapon(obj.recordId)
-        local okItems, items = pcall(function() return types.Actor.inventory(pickup.holder):getAll() end)
+        local okItems, items = pcall(function() return holderItems(pickup.holder):getAll() end)
         for _, item in ipairs(okItems and items or {}) do
             if rec and rec.ammoTypes then
                 for _, ammo in ipairs(rec.ammoTypes) do
@@ -1701,6 +1726,7 @@ local function activateCombatItem(s, step)
     end
     print(('[combat] %s (%s) picks up %s%s'):format(actor.recordId, tostring(actor.id), tostring(pickup.editorId),
         pickup.holder and (' from ' .. tostring(pickup.holder.recordId)) or ' from the ground'))
+    -- (a container's or corpse's item is taken at once, without the pickup idle, as the original does)
     pickupBlocked[obj.id] = simTime + 5
     s.pickup, s.nextPickupScan = nil, 0
     -- moveInto lands with the next frame: re-read the weapons at the replans of the next moment, so the new gun
