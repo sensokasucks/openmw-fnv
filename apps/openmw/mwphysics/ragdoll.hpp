@@ -226,6 +226,8 @@ namespace MWPhysics
             bool mWind = false;
             bool mWasAwake = false;
             bool mFresh = true; // needs its floor and actors mirrored before it is stepped
+            bool mPlaced = true; // fresh because it was placed (a load), not shoved: only woken if it hangs in the air
+            float mWindHoldUntil = 0.f; // the wind lets a shoved body fly for a moment (mTime)
             float mAwakeTime = 0.f;
             btTransform mWritten; // the last transform written to the reference
             btTransform mHome; // where it last rested: a body that falls out of the world comes back here

@@ -7,6 +7,7 @@
 #include <BulletCollision/CollisionDispatch/btCollisionDispatcher.h>
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 #include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
+#include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 #include <BulletCollision/CollisionShapes/btCollisionShape.h>
 #include <BulletDynamics/ConstraintSolver/btConeTwistConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btHingeConstraint.h>
@@ -95,6 +96,27 @@ namespace MWPhysics
         // A body this far below where it last rested has left the world (through a floor that had no mirror yet)
         // and is put back
         constexpr float sClutterFallLimit = 1024.f;
+        // A placed body whose underside is within this of a surface is left asleep at load: bottles a designer
+        // set on a table sit a hair into it, and waking them lets Bullet eject them to the wrong side
+        constexpr float sPlacedSupportGap = 8.f;
+        // The wind leaves a shoved body alone for this long (s), so a shot kick is not dragged back at once
+        constexpr float sWindHoldAfterShove = 1.f;
+
+        // Ray test that ignores one body (the ray starts inside it)
+        struct NotMeRayCallback : btCollisionWorld::ClosestRayResultCallback
+        {
+            const btCollisionObject* mMe;
+            NotMeRayCallback(const btVector3& from, const btVector3& to, const btCollisionObject* me)
+                : btCollisionWorld::ClosestRayResultCallback(from, to)
+                , mMe(me)
+            {
+            }
+            bool needsCollision(btBroadphaseProxy* proxy) const override
+            {
+                return proxy->m_clientObject != mMe
+                    && btCollisionWorld::ClosestRayResultCallback::needsCollision(proxy);
+            }
+        };
         constexpr float sWindSpread = 0.78539816f;
         constexpr float sWindGustEvery = 0.25f;
         // A body written back to its reference only when it has moved this much (units, radians)
@@ -893,6 +915,9 @@ namespace MWPhysics
                     {
                         clutter.mBody->activate(true);
                         clutter.mFresh = true;
+                        clutter.mPlaced = false;
+                        Log(Debug::Verbose) << "Clutter body woken by an actor at " << bodyMin.x() << " "
+                                            << bodyMin.y() << " " << bodyMin.z();
                     }
                 }
                 ++it;
@@ -908,6 +933,24 @@ namespace MWPhysics
             const btVector3 origin = clutter.mBody->getWorldTransform().getOrigin();
             updateStaticProxies(Misc::Convert::toOsg(origin), sProxyRadius);
             updateActorProxies(origin, sActorPushRadius);
+            if (clutter.mPlaced)
+            {
+                clutter.mPlaced = false;
+                // Resting on something already: leave it be. Only a body hanging in the air is dropped.
+                btVector3 aabbMin, aabbMax;
+                clutter.mBody->getCollisionShape()->getAabb(clutter.mBody->getWorldTransform(), aabbMin, aabbMax);
+                const btVector3 to(origin.x(), origin.y(), aabbMin.z() - sPlacedSupportGap);
+                NotMeRayCallback ray(origin, to, clutter.mBody.get());
+                ray.m_collisionFilterGroup = CollisionType_Actor;
+                ray.m_collisionFilterMask
+                    = CollisionType_World | CollisionType_HeightMap | CollisionType_Door | CollisionType_Actor;
+                mWorld->rayTest(origin, to, ray);
+                if (ray.hasHit())
+                {
+                    clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+                    continue;
+                }
+            }
             clutter.mBody->activate(true);
         }
         mWorld->stepSimulation(std::min(dt, 0.1f), sMaxSubSteps, sFixedStep);
@@ -962,6 +1005,7 @@ namespace MWPhysics
         // air settles onto the floor as the original's clutter does when a cell loads; it sleeps once it rests
         clutter.mBody->forceActivationState(ISLAND_SLEEPING);
         clutter.mFresh = true;
+        clutter.mPlaced = true;
         clutter.mHome = clutter.mWritten;
         Log(Debug::Verbose) << "Clutter body for " << ptr.getCellRef().getRefId() << ": " << info.mMass << " kg"
                             << (info.mWind ? ", in the wind" : "");
@@ -1001,6 +1045,8 @@ namespace MWPhysics
         btRigidBody& body = *found->second.mBody;
         if (!body.isActive())
             found->second.mFresh = true;
+        found->second.mPlaced = false;
+        found->second.mWindHoldUntil = mTime + sWindHoldAfterShove;
         body.activate(true);
         body.applyImpulse(capKick(body, impulse), at - body.getWorldTransform().getOrigin());
         return true;
@@ -1026,6 +1072,8 @@ namespace MWPhysics
             const float falloff = 1.f - (distance / radius) * (distance / radius);
             if (!body.isActive())
                 clutter.mFresh = true;
+            clutter.mPlaced = false;
+            clutter.mWindHoldUntil = mTime + sWindHoldAfterShove;
             body.activate(true);
             body.applyCentralImpulse(capKick(body, away * impulse * falloff));
         }
@@ -1106,7 +1154,7 @@ namespace MWPhysics
             }
             else
                 clutter.mAwakeTime = 0.f;
-            if (windy && clutter.mWind && toPlayer < sWindRadius)
+            if (windy && clutter.mWind && toPlayer < sWindRadius && mTime >= clutter.mWindHoldUntil)
             {
                 std::uniform_real_distribution<float> spread(-sWindSpread, sWindSpread);
                 const float heading = mWindHeading + spread(random);
@@ -1118,7 +1166,10 @@ namespace MWPhysics
                 if (body.isActive() || gap.length() > 0.5f * mWindGust)
                 {
                     if (!body.isActive())
+                    {
                         clutter.mFresh = true;
+                        clutter.mPlaced = false;
+                    }
                     body.activate(true);
                     const float mass = body.getInvMass() > 0.f ? 1.f / static_cast<float>(body.getInvMass()) : 1.f;
                     body.applyCentralForce(gap * (sWindDrag * mass));
