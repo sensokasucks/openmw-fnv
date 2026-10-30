@@ -242,6 +242,8 @@ namespace MWPhysics
         float mWindHeading = 0.f;
         float mWindGust = 0.f;
         float mWindCheck = 0.f;
+        // Set while writeBackClutter moves references, so onSourceMoved knows the move is ours
+        bool mWritingBack = false;
 
         void stepClutter(float dt);
         void updateActorProxies(const btVector3& centre, float radius);

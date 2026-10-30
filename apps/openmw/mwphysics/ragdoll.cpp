@@ -1187,6 +1187,9 @@ namespace MWPhysics
 
     void RagdollWorld::onSourceMoved(const btCollisionObject* source)
     {
+        // The write-back rotates the reference before moving it, so in between it is neither here nor there
+        if (mWritingBack)
+            return;
         auto found = mClutter.find(source);
         if (found == mClutter.end())
             return;
@@ -1231,8 +1234,10 @@ namespace MWPhysics
             MWWorld::Ptr ptr = holder->getPtr();
             if (ptr.isEmpty())
                 continue;
+            mWritingBack = true;
             world.rotateObject(ptr, rotationFromQuat(Misc::Convert::toOsg(now.getRotation())));
             world.moveObject(ptr, Misc::Convert::toOsg(now.getOrigin()));
+            mWritingBack = false;
         }
     }
 
