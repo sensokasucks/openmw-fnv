@@ -497,8 +497,14 @@ namespace MWMechanics::ESM4Physical
                                 osg::Vec3f rotation = actor.getRefData().getPosition().asRotationVec3();
                                 rotation.z() += alignment->first;
                                 world.rotateObject(actor, rotation);
-                                const osg::Vec3f position
-                                    = actor.getRefData().getPosition().asVec3() + alignment->second;
+                                osg::Vec3f position = actor.getRefData().getPosition().asVec3() + alignment->second;
+                                // The alignment is flat; on a slope the ground where the pose starts is at another
+                                // height, so the actor is put on it (a slope up through the body otherwise)
+                                const MWPhysics::RayCastingResult ground = world.getRayCasting()->castRay(
+                                    position + osg::Vec3f(0.f, 0.f, 64.f), position - osg::Vec3f(0.f, 0.f, 256.f),
+                                    MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+                                if (ground.mHit)
+                                    position.z() = ground.mHitPos.z();
                                 const MWWorld::Ptr moved = world.moveObject(actor, position);
                                 animation = getAnimation(moved);
                                 if (animation != nullptr)
