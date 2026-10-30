@@ -493,12 +493,14 @@ namespace MWPhysics
 
     void PhysicsSystem::applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias)
     {
-        const osg::Vec3f from = centre + osg::Vec3f(0, 0, 8);
+        // A wall between the burst and a body shields it. The burst sits a hair off the surface it struck, so a
+        // hit within arm's reach of it is that surface, not a wall in the way
+        constexpr float sStruckSurface = 24.f;
         mRagdolls->applyClutterBlast(Misc::Convert::toBullet(centre), radius, impulse, upBias,
             [&](const btVector3& body) {
-                return castRay(from, Misc::Convert::toOsg(body),
-                    CollisionType_World | CollisionType_HeightMap | CollisionType_Door)
-                    .mHit;
+                const RayCastingResult ray = castRay(centre, Misc::Convert::toOsg(body),
+                    CollisionType_World | CollisionType_HeightMap | CollisionType_Door);
+                return ray.mHit && (ray.mHitPos - centre).length() > sStruckSurface;
             });
     }
 

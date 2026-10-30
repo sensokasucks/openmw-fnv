@@ -1087,7 +1087,8 @@ namespace MWPhysics
                 away = btVector3(0, 0, 1);
             else
                 away /= distance;
-            away.setZ(away.z() + upBias);
+            // A blast lifts and scatters; it never drives a body down into the floor it stands on
+            away.setZ(std::max(away.z(), 0.f) + upBias);
             away.normalize();
             const float falloff = 1.f - (distance / radius) * (distance / radius);
             if (!body.isActive())
@@ -1402,6 +1403,26 @@ namespace MWPhysics
         auto found = mProxies.find(object);
         if (found == mProxies.end())
             return;
+        // The floor is leaving (its cell unloads while a persistent body on it stays): every body over it goes
+        // back to sleep and looks for its ground again before it moves, instead of falling through the gap
+        btVector3 floorMin, floorMax;
+        found->second.mBody->getCollisionShape()->getAabb(
+            found->second.mBody->getWorldTransform(), floorMin, floorMax);
+        floorMin -= btVector3(64.f, 64.f, 64.f);
+        floorMax += btVector3(64.f, 64.f, 256.f);
+        for (auto& [source, clutter] : mClutter)
+        {
+            btVector3 bodyMin, bodyMax;
+            clutter.mBody->getCollisionShape()->getAabb(clutter.mBody->getWorldTransform(), bodyMin, bodyMax);
+            if (!TestAabbAgainstAabb2(floorMin, floorMax, bodyMin, bodyMax))
+                continue;
+            clutter.mBody->setLinearVelocity(btVector3(0, 0, 0));
+            clutter.mBody->setAngularVelocity(btVector3(0, 0, 0));
+            clutter.mBody->forceActivationState(ISLAND_SLEEPING);
+            clutter.mFresh = true;
+            clutter.mPlaced = true;
+            clutter.mFreshRetry = mTime + sProxyCheckEvery;
+        }
         mWorld->removeRigidBody(found->second.mBody.get());
         mProxies.erase(found);
     }
