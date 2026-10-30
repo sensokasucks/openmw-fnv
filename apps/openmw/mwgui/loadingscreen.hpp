@@ -46,6 +46,11 @@ namespace MWGui
 
         void setVisible(bool visible) override;
 
+        /// FO3/FNV content: FNV's loading backdrop on every loading screen, without Morrowind's progress box
+        void setFalloutStyle(bool enabled);
+        /// The content is loaded: FNV loading screens show a tip from the LSCR records from now on
+        void setTipsReady() { mTipsReady = true; }
+
         double getTargetFrameRate() const;
 
     private:
@@ -71,6 +76,13 @@ namespace MWGui
         size_t mProgress;
 
         bool mShowWallpaper;
+        bool mFalloutStyle = false;
+        bool mTipsReady = false;
+        std::string mTipPicture; // the shown tip's picture, which the wallpaper changes keep
+        MyGUI::ImageBox* mTipBar = nullptr;
+        MyGUI::EditBox* mTipText = nullptr;
+
+        void showTip();
         double mOldIcoMin = 0.0;
         unsigned int mOldIcoMax = 0;
 

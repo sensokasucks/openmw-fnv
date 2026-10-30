@@ -358,29 +358,45 @@ function Parser:parseCommandLine()
 end
 
 -- expressions (precedence climbing)
+--
+-- The original compiler gives `||` a higher precedence than `&&` (the
+-- reverse of C): `a || b && c` compiles to `(a || b) && c`, as the compiled
+-- bytecode of FalloutNV.esm shows.
 
 function Parser:parseExpression()
-    return self:parseOr()
+    return self:parseAnd()
 end
 
-function Parser:parseOr()
-    local left = self:parseAnd()
-    while self:accept('OP', '||') do
-        left = node('BinOp', { op = '||', left = left, right = self:parseAnd() })
+function Parser:parseAnd()
+    local left = self:parseOr()
+    while self:accept('OP', '&&') do
+        left = node('BinOp', { op = '&&', left = left, right = self:parseOr() })
     end
     return left
 end
 
-function Parser:parseAnd()
+function Parser:parseOr()
     local left = self:parseCmp()
-    while self:accept('OP', '&&') do
-        left = node('BinOp', { op = '&&', left = left, right = self:parseCmp() })
+    while self:accept('OP', '||') do
+        left = node('BinOp', { op = '||', left = left, right = self:parseCmp() })
     end
     return left
 end
 
 local CMP_OPS = { ['=='] = true, ['!='] = true, ['<'] = true,
                   ['>'] = true, ['<='] = true, ['>='] = true }
+
+-- A binary operator with nothing after it on the line
+-- (`ApplyImageSpaceModifier VCG01FadeInFromBlackISFX *`) is dropped, as the
+-- original compiler does.
+function Parser:danglingOperator()
+    local after = self:peek(1).kind
+    if after == 'NEWLINE' or after == 'EOF' then
+        self:next()
+        return true
+    end
+    return false
+end
 
 function Parser:parseCmp()
     local left
@@ -396,6 +412,7 @@ function Parser:parseCmp()
     while true do
         local t = self:peek()
         if t.kind == 'OP' and CMP_OPS[t.value] then
+            if self:danglingOperator() then return left end
             self:next()
             left = node('BinOp', { op = t.value, left = left, right = self:parseAdd() })
         else
@@ -409,6 +426,7 @@ function Parser:parseAdd()
     while true do
         local t = self:peek()
         if t.kind == 'OP' and (t.value == '+' or t.value == '-') then
+            if self:danglingOperator() then return left end
             self:next()
             left = node('BinOp', { op = t.value, left = left, right = self:parseMul() })
         else
@@ -422,6 +440,7 @@ function Parser:parseMul()
     while true do
         local t = self:peek()
         if t.kind == 'OP' and (t.value == '*' or t.value == '/' or t.value == '%') then
+            if self:danglingOperator() then return left end
             self:next()
             left = node('BinOp', { op = t.value, left = left, right = self:parseUnary() })
         else
@@ -452,6 +471,10 @@ function Parser:parseCallExpr()
             self:next()
         elseif ARG_KINDS[t.kind] then
             args[#args + 1] = self:parsePostfix()
+        elseif #args > 0 and self:isNegativeLiteral() then
+            -- `ModAV Strength -2`: a minus glued to a number after a space is a negative argument
+            self:next()
+            args[#args + 1] = node('Neg', { operand = self:parsePrimary() })
         else
             break
         end
@@ -460,6 +483,18 @@ function Parser:parseCallExpr()
         return node('Call', { callee = expr, args = args })
     end
     return expr
+end
+
+-- A '-' with a space before it and a number right after it.
+function Parser:isNegativeLiteral()
+    local minus, number, prev = self:peek(), self:peek(1), self.toks[self.i - 1]
+    if not (minus.kind == 'OP' and minus.value == '-' and (number.kind == 'INT' or number.kind == 'FLOAT')) then
+        return false
+    end
+    if minus.pos == nil or number.pos == nil or prev == nil or prev.pos == nil then
+        return false
+    end
+    return number.pos == minus.pos + 1 and prev.pos + #prev.value < minus.pos
 end
 
 function Parser:parsePostfix()

@@ -240,12 +240,16 @@ namespace ESM
         REC_PERK4 = esm4Recname(ESM4::REC_PERK), // Perk
         REC_PGRE4 = esm4Recname(ESM4::REC_PGRE), // Placed grenade
         REC_PHZD4 = esm4Recname(ESM4::REC_PHZD), // Placed hazard
+        REC_PMIS4 = esm4Recname(ESM4::REC_PMIS), // Placed missile
         REC_PROJ4 = esm4Recname(ESM4::REC_PROJ), // Projectile
         REC_QUST4 = esm4Recname(ESM4::REC_QUST), // Quest
         REC_RACE4 = esm4Recname(ESM4::REC_RACE), // Race / Creature type
+        REC_RCCT4 = esm4Recname(ESM4::REC_RCCT), // Recipe Category (FONV)
+        REC_RCPE4 = esm4Recname(ESM4::REC_RCPE), // Recipe (FONV)
         REC_REFR4 = esm4Recname(ESM4::REC_REFR), // Object Reference
         REC_REGN4 = esm4Recname(ESM4::REC_REGN), // Region (Audio/Weather)
         REC_RELA4 = esm4Recname(ESM4::REC_RELA), // Relationship
+        REC_REPU4 = esm4Recname(ESM4::REC_REPU), // Reputation (FONV)
         REC_REVB4 = esm4Recname(ESM4::REC_REVB), // Reverb Parameters
         REC_RFCT4 = esm4Recname(ESM4::REC_RFCT), // Visual Effect
         REC_SBSP4 = esm4Recname(ESM4::REC_SBSP), // Subspace (TES4 only?)

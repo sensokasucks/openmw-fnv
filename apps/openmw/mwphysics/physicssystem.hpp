@@ -42,6 +42,7 @@ namespace Resource
 }
 
 class btCollisionWorld;
+struct btBroadphaseAabbCallback;
 class btBroadphaseInterface;
 class btDefaultCollisionConfiguration;
 class btCollisionDispatcher;
@@ -54,6 +55,7 @@ namespace MWPhysics
     class HeightField;
     class Object;
     class Actor;
+    class RagdollWorld;
     class PhysicsTaskScheduler;
     class Projectile;
     enum ScriptedCollisionType : char;
@@ -164,6 +166,11 @@ namespace MWPhysics
         void addObject(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh, osg::Quat rotation,
             int collisionType = CollisionType_World);
         void addActor(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh);
+        // FO3/FNV actors are moved by ESM4Actors, not simulated: they get an upright box that other
+        // actors collide with, centred on the reference and standing on its origin.
+        void addActorBody(const MWWorld::Ptr& ptr, const osg::Vec3f& halfExtents, osg::Quat rotation, bool enabled);
+        // Whether the body of addActorBody blocks other actors; false if ptr has no such body.
+        bool setActorBodyEnabled(const MWWorld::ConstPtr& ptr, bool enabled);
 
         int addProjectile(
             const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool computeRadius);
@@ -185,6 +192,11 @@ namespace MWPhysics
         void updateScale(const MWWorld::Ptr& ptr);
         void updateRotation(const MWWorld::Ptr& ptr, osg::Quat rotate);
         void updatePosition(const MWWorld::Ptr& ptr);
+
+        // The ragdolls' own dynamics world (ragdoll.hpp)
+        RagdollWorld& getRagdollWorld() { return *mRagdolls; }
+        // Broadphase query of the collision world
+        void aabbTest(const btVector3& aabbMin, const btVector3& aabbMax, btBroadphaseAabbCallback& callback) const;
 
         void addHeightField(const float* heights, int x, int y, int size, int verts, float minH, float maxH,
             const osg::Object* holdObject);
@@ -299,6 +311,7 @@ namespace MWPhysics
         std::unique_ptr<btCollisionDispatcher> mDispatcher;
         std::unique_ptr<btCollisionWorld> mCollisionWorld;
         std::unique_ptr<PhysicsTaskScheduler> mTaskScheduler;
+        std::unique_ptr<RagdollWorld> mRagdolls;
 
         std::unique_ptr<Resource::BulletShapeManager> mShapeManager;
         Resource::ResourceSystem* mResourceSystem;

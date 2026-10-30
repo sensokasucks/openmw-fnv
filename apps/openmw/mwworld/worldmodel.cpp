@@ -13,6 +13,9 @@
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
 #include <components/esm3/loadregn.hpp>
+#include <components/esm4/loadachr.hpp>
+#include <components/esm4/loadcell.hpp>
+#include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadwrld.hpp>
 #include <components/loadinglistener/loadinglistener.hpp>
 #include <components/settings/values.hpp>
@@ -358,6 +361,61 @@ namespace MWWorld
         mPtrRegistry.remove(ref);
         ref.mWorldModel = nullptr;
     }
+}
+
+void MWWorld::WorldModel::loadPersistentRefs()
+{
+    const Store<ESM4::Cell>& cells = mStore.get<ESM4::Cell>();
+    std::size_t loaded = 0;
+    std::size_t cellCount = 0;
+
+    // The cell a reference sits in. Exterior persistent references were moved from the worldspace's persistent cell
+    // to the exterior cell under them when the store was built; those over a spot without a CELL record still point
+    // at the persistent cell, which is not a real cell, so they go to the generated exterior cell there.
+    auto cellOf = [&](const auto& ref) -> CellStore* {
+        const ESM4::Cell* cell = cells.search(ref.mParent);
+        if (cell == nullptr)
+            return nullptr;
+        if (cell->isExterior() && (cell->mFlags & ESM4::Rec_Persistent))
+            return &getExterior(
+                ESM::positionToExteriorCellLocation(ref.mPos.pos[0], ref.mPos.pos[1], cell->mParent), false);
+        return findCell(cell->mId, false);
+    };
+
+    auto loadAll = [&](const auto& refs) {
+        for (size_t i = 0; i < refs.getSize(); ++i)
+        {
+            const auto& ref = *refs.at(i);
+            if (!(ref.mFlags & ESM4::Rec_Persistent))
+                continue;
+            CellStore* cellStore = cellOf(ref);
+            if (cellStore == nullptr)
+                continue;
+            if (cellStore->getState() == CellStore::State_Loaded)
+            {
+                // Loaded from the saved game; make sure scripts can find the reference by its form id.
+                const ESM::RefNum refNum = ref.mId;
+                if (mPtrRegistry.getOrEmpty(refNum).isEmpty())
+                    cellStore->forEach([&](const Ptr& ptr) {
+                        if (ptr.getCellRef().getRefNum() != refNum)
+                            return true;
+                        registerPtr(ptr);
+                        return false;
+                    });
+                continue;
+            }
+            if (!cellStore->hasPersistentRefs())
+                ++cellCount;
+            cellStore->loadPersistentRef(ref);
+            ++loaded;
+        }
+    };
+    loadAll(mStore.get<ESM4::Reference>());
+    loadAll(mStore.get<ESM4::ActorCharacter>());
+    loadAll(mStore.get<ESM4::ActorCreature>());
+
+    if (loaded > 0)
+        Log(Debug::Info) << "Loaded " << loaded << " persistent references in " << cellCount << " cells";
 }
 
 MWWorld::Ptr MWWorld::WorldModel::getPtrByRefId(const ESM::RefId& name)

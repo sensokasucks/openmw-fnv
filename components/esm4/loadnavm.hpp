@@ -99,6 +99,39 @@ namespace ESM4
 
         std::vector<NVNMstruct> mData; // Up to 4 skywind cells in one Morrowind cell
 
+        // FO3/FONV navmesh (NVER, DATA, NVVX, NVTR, NVEX, NVDP)
+#pragma pack(push, 1)
+        struct FoTriangle
+        {
+            std::uint16_t vertices[3];
+            // Neighbour across edge k (vertices k and k+1): a triangle of this navmesh, -1 for none, or an index
+            // into mFoExternal when flag bit k is set.
+            std::int16_t edges[3];
+            std::uint16_t flags;
+            std::uint16_t coverFlags;
+        };
+
+        struct FoExternal
+        {
+            std::uint32_t unknown;
+            ESM::FormId32 navMesh;
+            std::uint16_t triangle;
+        };
+
+        struct FoDoor
+        {
+            ESM::FormId32 door;
+            std::uint16_t triangle;
+            std::uint16_t unused;
+        };
+#pragma pack(pop)
+
+        ESM::FormId mCell; // FO3/FONV: cell this navmesh belongs to
+        std::vector<Vertex> mFoVertices;
+        std::vector<FoTriangle> mFoTriangles;
+        std::vector<FoExternal> mFoExternal; // form ids adjusted for the load order
+        std::vector<FoDoor> mFoDoors; // form ids adjusted for the load order
+
         ESM::FormId mId; // from the header
         std::uint32_t mFlags; // from the header, see enum type RecordFlag for details
 

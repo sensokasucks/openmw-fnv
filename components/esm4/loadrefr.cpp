@@ -65,6 +65,32 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XSCL"):
                 reader.get(mScale);
                 break;
+            case ESM::fourCC("XPRM"):
+            {
+                // FO3/FNV: 3 floats bounds, 3 floats colour, float unknown, uint32 type (32 bytes)
+                if (subHdr.dataSize >= 12)
+                {
+                    reader.get(mPrimitiveBounds[0]);
+                    reader.get(mPrimitiveBounds[1]);
+                    reader.get(mPrimitiveBounds[2]);
+                    if (subHdr.dataSize >= 32)
+                    {
+                        float dummy;
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(dummy);
+                        reader.get(mPrimitiveType);
+                        if (subHdr.dataSize > 32)
+                            reader.skipSubRecordData(subHdr.dataSize - 32);
+                    }
+                    else if (subHdr.dataSize > 12)
+                        reader.skipSubRecordData(subHdr.dataSize - 12);
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            }
             case ESM::fourCC("XOWN"):
             {
                 switch (subHdr.dataSize)
@@ -100,6 +126,12 @@ void ESM4::Reference::load(ESM4::Reader& reader)
                 // << ", 0x" << std::hex << (mEsp.flags & 0xff) << std::endl;// FIXME
                 break;
             }
+            case ESM::fourCC("XLKR"): // linked reference; TES5 prefixes a keyword
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mLinkedRef);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XTEL"):
             {
                 switch (subHdr.dataSize)
@@ -214,9 +246,11 @@ void ESM4::Reference::load(ESM4::Reader& reader)
                 break; // all have mBaseObj 0x00000010 "MapMarker"
             case ESM::fourCC("FNAM"):
             {
-                // std::cout << "REFR " << ESM::printName(subHdr.typeId) << " skipping..."
-                // << subHdr.dataSize << std::endl;
-                reader.skipSubRecordData();
+                // FO3/FONV map marker flags: 0x01 visible, 0x02 can travel to, 0x04 "show all" hidden
+                if (mIsMapMarker && subHdr.dataSize == 1)
+                    reader.get(mMapMarkerFlags);
+                else
+                    reader.skipSubRecordData();
                 break;
             }
             case ESM::fourCC("XTRG"): // formId
@@ -231,6 +265,7 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XRDO"): // FO3
             {
                 // FIXME: completely different meaning in FO4
+                mRadio.present = true;
                 reader.get(mRadio.rangeRadius);
                 reader.get(mRadio.broadcastRange);
                 reader.get(mRadio.staticPercentage);
@@ -277,7 +312,12 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("LNAM"): // lighting template formId
             case ESM::fourCC("XLIG"): // struct, FOV, fade, etc
             case ESM::fourCC("XEMI"): // LIGH formId
-            case ESM::fourCC("XRDS"): // Radius or Radiance
+            case ESM::fourCC("XRDS"): // Radius or Radiance; FONV audio markers: the controller's radius
+                if (subHdr.dataSize == 4)
+                    reader.get(mRadius);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XRGB"):
             case ESM::fourCC("XRGD"): // tangent data?
             case ESM::fourCC("XALP"): // alpha cutoff
@@ -286,7 +326,6 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XLCM"):
             case ESM::fourCC("ONAM"):
             case ESM::fourCC("VMAD"):
-            case ESM::fourCC("XPRM"):
             case ESM::fourCC("INAM"):
             case ESM::fourCC("PDTO"):
             case ESM::fourCC("SCHR"):
@@ -302,7 +341,6 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XIS2"):
             case ESM::fourCC("XLCN"):
             case ESM::fourCC("XLIB"):
-            case ESM::fourCC("XLKR"):
             case ESM::fourCC("XLRM"):
             case ESM::fourCC("XLRT"):
             case ESM::fourCC("XLTW"):
@@ -313,8 +351,13 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XOCP"):
             case ESM::fourCC("XPOD"):
             case ESM::fourCC("XPTL"):
+            case ESM::fourCC("XPRD"): // patrol data: the idle time at this point
+                if (subHdr.dataSize == 4)
+                    reader.get(mPatrolIdleTime);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XPPA"):
-            case ESM::fourCC("XPRD"):
             case ESM::fourCC("XPWR"):
             case ESM::fourCC("XRMR"):
             case ESM::fourCC("XSPC"):
@@ -334,10 +377,28 @@ void ESM4::Reference::load(ESM4::Reader& reader)
             case ESM::fourCC("XCLP"): // FO3
             case ESM::fourCC("SCDA"): // FO3
             case ESM::fourCC("RCLR"): // FO3
-            case ESM::fourCC("BNAM"): // FONV
-            case ESM::fourCC("MMRK"): // FONV
-            case ESM::fourCC("MNAM"): // FONV
-            case ESM::fourCC("NNAM"): // FONV
+            case ESM::fourCC("MMRK"): // FONV audio marker
+                mIsAudioMarker = true;
+                reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("BNAM"): // FONV audio marker flags
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioMarkerFlags);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("MNAM"): // FONV audio marker: where the middle layer starts, fraction of the radius
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioLayer2);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("NNAM"): // FONV audio marker: where the inner layer starts
+                if (subHdr.dataSize == 4)
+                    reader.get(mAudioLayer3);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XATO"): // FONV
             case ESM::fourCC("SCRV"): // FONV
             case ESM::fourCC("SCVR"): // FONV

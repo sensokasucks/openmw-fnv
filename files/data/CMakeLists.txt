@@ -124,8 +124,11 @@ set(BUILTIN_DATA_FILES
     openmw_aux/lexer.lua
     openmw_aux/obscript/bindings.lua
     openmw_aux/obscript/compiler.lua
+    openmw_aux/obscript/effects.lua
     openmw_aux/obscript/parser.lua
     openmw_aux/obscript/runtime.lua
+    openmw_aux/obscript/stats.lua
+    openmw_aux/obscript/character.lua
     openmw_aux/obscript/transpiler.lua
 
     builtin.omwscripts
@@ -171,10 +174,55 @@ set(BUILTIN_DATA_FILES
     scripts/omw/input/smoothmovement.lua
     scripts/omw/input/gamepadcontrols.lua
     scripts/omw/obscript.lua
+    scripts/omw/obscript_player.lua
+    scripts/omw/furniture_player.lua
+    scripts/omw/fnvuitrace.lua
+    scripts/omw/fnvaitrace.lua
+    scripts/omw/esm4terminal.lua
+    scripts/omw/fnvdialogue/camera.lua
+    scripts/omw/fnvdialogue/conditions.lua
+    scripts/omw/fnvdialogue/global.lua
+    scripts/omw/fnvdialogue/player.lua
+    scripts/omw/fnvchargen/player.lua
+    scripts/omw/fnvai/global.lua
+    scripts/omw/fnvai/idles.lua
+    scripts/omw/fnvai/furniture.lua
+    scripts/omw/fnvcombat/global.lua
+    scripts/omw/fnvcombat/planner.lua
+    scripts/omw/fnvcrime/global.lua
+    scripts/omw/fnvcombat/player.lua
+    scripts/omw/fnvgore/global.lua
+    scripts/omw/fnvgore/player.lua
+    scripts/omw/fnvhud/frame.lua
+    scripts/omw/fnvhud/global.lua
+    scripts/omw/fnvhud/keys.lua
+    scripts/omw/fnvhud/player.lua
+    scripts/omw/fnvbarter/global.lua
+    scripts/omw/fnvbarter/player.lua
+    scripts/omw/fnvcompanion/global.lua
+    scripts/omw/fnvcompanion/player.lua
+    scripts/omw/fnvcrafting/global.lua
+    scripts/omw/fnvcrafting/player.lua
+    scripts/omw/fnvpipboy/global.lua
+    scripts/omw/fnvpipboy/player.lua
+    scripts/omw/fnvradio/global.lua
+    scripts/omw/fnvradio/player.lua
+    scripts/omw/fnvmusic/global.lua
+    scripts/omw/fnvmusic/player.lua
+    scripts/omw/fnvmenus/global.lua
+    scripts/omw/fnvmenus/menu.lua
+    scripts/omw/fnvmenus/player.lua
+    scripts/omw/fnvmenus/style.lua
+    scripts/omw/fnvstats.lua
+    scripts/omw/fnvcharacter/rules.lua
+    scripts/omw/fnvcharacter/global.lua
+    scripts/omw/fnvcharacter/player.lua
+    scripts/omw/fnveffects/global.lua
     
     shaders/adjustments.omwfx
     shaders/bloomlinear.omwfx
     shaders/debug.omwfx
+    shaders/fnvdialoguedof.omwfx
     shaders/internal_distortion.omwfx
 
     mygui/core.skin

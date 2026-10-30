@@ -31,7 +31,7 @@
 #include <string> // getline
 
 #include "reader.hpp"
-//#include "writer.hpp"
+// #include "writer.hpp"
 
 void ESM4::Npc::load(ESM4::Reader& reader)
 {
@@ -79,6 +79,7 @@ void ESM4::Npc::load(ESM4::Reader& reader)
                 else
                     reader.get(mFaction);
                 reader.adjustFormId(mFaction.faction);
+                mFactions.push_back(mFaction);
                 break;
             }
             case ESM::fourCC("RNAM"):
@@ -97,12 +98,32 @@ void ESM4::Npc::load(ESM4::Reader& reader)
             case ESM::fourCC("INAM"):
                 reader.getFormId(mDeathItem);
                 break;
+            case ESM::fourCC("VTCK"): // FO3/FONV voice type
+                reader.getFormId(mVoiceType);
+                break;
             case ESM::fourCC("SCRI"):
                 reader.getFormId(mScriptId);
                 break;
             //
             case ESM::fourCC("AIDT"):
             {
+                if (mIsFONV && subHdr.dataSize == 20)
+                {
+                    reader.get(mFO3Stats.aiValues.data(), 5);
+                    std::uint8_t skipped[7];
+                    reader.get(skipped, 7); // unused, services
+                    std::int8_t teaches;
+                    std::uint8_t maxTraining;
+                    reader.get(teaches);
+                    reader.get(maxTraining);
+                    reader.get(mFO3Stats.assistance);
+                    std::uint8_t aggroBehaviour;
+                    std::int32_t aggroRadius;
+                    reader.get(aggroBehaviour);
+                    reader.get(aggroRadius);
+                    mFO3Stats.hasAIValues = true;
+                    break;
+                }
                 if (subHdr.dataSize != 12)
                 {
                     reader.skipSubRecordData(); // FIXME: process the subrecord rather than skip
@@ -136,7 +157,29 @@ void ESM4::Npc::load(ESM4::Reader& reader)
 
                 if (subHdr.dataSize == 33)
                     reader.get(&mData, 33); // FIXME: check packing
+                else if (mIsFONV && subHdr.dataSize >= 11)
+                {
+                    reader.get(mFO3Stats.baseHealth);
+                    reader.get(mFO3Stats.special.data(), 7);
+                    mFO3Stats.hasSpecial = true;
+                    if (subHdr.dataSize > 11)
+                        reader.skipSubRecordData(subHdr.dataSize - 11);
+                }
                 else // FIXME FO3
+                    reader.skipSubRecordData();
+                break;
+            }
+            case ESM::fourCC("DNAM"):
+            {
+                if (mIsFONV && subHdr.dataSize >= 28)
+                {
+                    reader.get(mFO3Stats.skills.data(), 14);
+                    reader.get(mFO3Stats.skillOffsets.data(), 14);
+                    mFO3Stats.hasSkills = true;
+                    if (subHdr.dataSize > 28)
+                        reader.skipSubRecordData(subHdr.dataSize - 28);
+                }
+                else
                     reader.skipSubRecordData();
                 break;
             }
@@ -264,7 +307,6 @@ void ESM4::Npc::load(ESM4::Reader& reader)
             case ESM::fourCC("ATKR"):
             case ESM::fourCC("CRIF"):
             case ESM::fourCC("CSDT"):
-            case ESM::fourCC("DNAM"):
             case ESM::fourCC("ECOR"):
             case ESM::fourCC("ANAM"):
             case ESM::fourCC("ATKD"):
@@ -286,7 +328,6 @@ void ESM4::Npc::load(ESM4::Reader& reader)
             case ESM::fourCC("TINI"):
             case ESM::fourCC("TINV"):
             case ESM::fourCC("VMAD"):
-            case ESM::fourCC("VTCK"):
             case ESM::fourCC("GNAM"):
             case ESM::fourCC("SHRT"):
             case ESM::fourCC("SPOR"):

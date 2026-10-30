@@ -43,6 +43,11 @@ namespace ESM
     class ESMWriter;
 }
 
+namespace MWRender
+{
+    class LocalMap;
+}
+
 namespace MWMechanics
 {
     class AttributeValue;
@@ -188,6 +193,8 @@ namespace MWBase
         ///< change the active cell
 
         virtual void setFocusObject(const MWWorld::Ptr& focus) = 0;
+        /// The object under the crosshair, the one activation would use (empty if none).
+        virtual MWWorld::Ptr getFocusObject() const = 0;
         virtual void setFocusObjectScreenCoords(float x, float y) = 0;
 
         virtual void setCursorVisible(bool visible) = 0;
@@ -236,6 +243,16 @@ namespace MWBase
         virtual bool setHudVisibility(bool show) = 0;
         virtual bool isHudVisible() const = 0;
 
+        /// Scripts draw a Fallout HUD: hides the Morrowind HUD elements and the crosshair tooltip.
+        virtual void setFalloutHud(bool enabled) = 0;
+        /// The Fallout HUD is on: FO3/FNV content, whose Lua menus replace the pause menu and the rest dialog
+        virtual bool isFalloutHud() const = 0;
+        /// FO3/FNV content is loaded: FNV's loading screens, and the title menu is scripts/omw/fnvmenus/menu.lua's
+        virtual void setFalloutContent(bool enabled) = 0;
+        virtual bool isFalloutContent() const = 0;
+        /// The player sneaks unnoticed (the Morrowind HUD's sneak icon).
+        virtual bool isSneakHidden() const = 0;
+
         virtual void disallowMouse() = 0;
         virtual void allowMouse() = 0;
         virtual void notifyInputActionBound() = 0;
@@ -265,6 +282,9 @@ namespace MWBase
         /// returns the index of the pressed button or -1 if no button was pressed
         /// (->MessageBoxmanager->InteractiveMessageBox)
         virtual int readPressedButton() = 0;
+
+        /// The renderer of the local map textures (for the FNV Pip-Boy's local map).
+        virtual MWRender::LocalMap* getLocalMapRender() = 0;
 
         virtual void updateConsoleObjectPtr(const MWWorld::Ptr& currentPtr, const MWWorld::Ptr& newPtr) = 0;
 

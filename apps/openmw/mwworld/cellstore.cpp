@@ -44,6 +44,8 @@
 
 #include <components/esm4/loadachr.hpp>
 #include <components/esm4/loadacti.hpp>
+#include <components/esm4/loadproj.hpp>
+#include <components/esm4/loadtact.hpp>
 #include <components/esm4/loadalch.hpp>
 #include <components/esm4/loadammo.hpp>
 #include <components/esm4/loadarmo.hpp>
@@ -55,11 +57,14 @@
 #include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadflor.hpp>
 #include <components/esm4/loadfurn.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
+#include <components/esm4/loadnote.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadscol.hpp>
@@ -122,6 +127,26 @@ namespace
     {
         using StateType = ESM::CreatureLevListState;
     };
+    template <>
+    struct RecordToState<ESM4::Container>
+    {
+        using StateType = ESM::ContainerState;
+    };
+    template <>
+    struct RecordToState<ESM4::Npc>
+    {
+        using StateType = ESM::ContainerState;
+    };
+    template <>
+    struct RecordToState<ESM4::Creature>
+    {
+        using StateType = ESM::ContainerState;
+    };
+    template <>
+    struct RecordToState<ESM4::Door>
+    {
+        using StateType = ESM::DoorState;
+    };
 
     template <typename T>
     MWWorld::Ptr searchInContainerList(MWWorld::CellRefList<T>& containerList, const ESM::RefId& id)
@@ -148,11 +173,6 @@ namespace
         // references
         for (const MWWorld::LiveCellRef<T>& liveCellRef : collection.mList)
         {
-            if (ESM::isESM4Rec(T::sRecordId))
-            {
-                // TODO: Implement loading/saving of REFR4 and ACHR4 with ESM3 reader/writer.
-                continue;
-            }
             if (!liveCellRef.mData.hasChanged() && !liveCellRef.mRef.hasChanged() && liveCellRef.mRef.hasContentFile())
             {
                 // Reference that came from a content file and has not been changed -> ignore
@@ -350,12 +370,15 @@ namespace MWWorld
             if (ref.mEsp.parent.isZeroOrUnset())
                 return true;
 
-            // Disable objects that are linked to an initially disabled parent.
-            // Actually when we will start working on Oblivion/Skyrim scripting we will need to:
-            //  - use the current state of the parent instead of initial state of the parent
-            //  - every time when the parent is enabled/disabled we should also enable/disable
-            //        all objects that are linked to it.
-            // But for now we assume that the parent remains in its initial state.
+            const bool inversedChild = ref.mEsp.flags & ESM4::EnableParent::Flag_Inversed;
+            // A parent that is already loaded (persistent references always are) has its current state, which
+            // scripts may have changed (VCG02BottleMarkerREF.Enable); World::enable/disable passes later
+            // changes on to loaded children.
+            const MWWorld::Ptr parent = MWBase::Environment::get().getWorldModel()->getPtr(ref.mEsp.parent);
+            if (!parent.isEmpty())
+                return parent.getRefData().isEnabled() != inversedChild;
+
+            // Otherwise the parent is in its initial state.
             if (const ESM4::Reference* parentRef = store.get<ESM4::Reference>().searchStatic(ref.mEsp.parent))
             {
                 const bool parentDisabled = parentRef->mFlags & ESM4::Rec_Disabled;
@@ -442,10 +465,16 @@ namespace MWWorld
             Log(Debug::Warning) << "Warning: could not resolve cell reference " << ref.mId << " (dropping reference)";
             return;
         }
-        LiveCellRef<X> liveCellRef(ref, ptr);
         if (!isEnabled(ref, esmStore))
-            liveCellRef.mData.disable();
-        list.push_back(std::move(liveCellRef));
+        {
+            // Start disabled through the record flag rather than RefData::disable(), so the reference is not
+            // marked as changed and written to every saved game.
+            R disabled = ref;
+            disabled.mFlags |= ESM4::Rec_Disabled;
+            list.push_back(LiveCellRef<X>(disabled, ptr));
+            return;
+        }
+        list.push_back(LiveCellRef<X>(ref, ptr));
     }
 
     template <typename X>
@@ -500,10 +529,14 @@ namespace MWWorld
         if (cellToMoveTo == this)
             throw std::runtime_error("moveTo: object is already in this cell");
 
-        // We assume that *this is in State_Loaded since we could hardly have reference to a live object otherwise.
+        // Only persistent references are reachable in a cell that is not loaded. Load the rest before tracking moves.
         if (mState != State_Loaded)
-            throw std::runtime_error(
-                "moveTo: can't move object from a non-loaded cell (how did you get this object anyway?)");
+        {
+            if (!mHasPersistentRefs)
+                throw std::runtime_error(
+                    "moveTo: can't move object from a non-loaded cell (how did you get this object anyway?)");
+            load();
+        }
 
         MWBase::Environment::get().getWorldModel()->registerPtr(MWWorld::Ptr(object.getBase(), cellToMoveTo));
 
@@ -627,7 +660,17 @@ namespace MWWorld
 
     bool CellStore::hasState() const
     {
-        return mHasState;
+        if (mHasState || !mHasPersistentRefs)
+            return mHasState;
+        // Scripts may have changed persistent references of a cell that was not loaded then (it may be loaded since
+        // without being visited, e.g. by World::moveObject).
+        bool changed = false;
+        auto visitor = [&](const Ptr& ptr) {
+            changed = ptr.getRefData().hasChanged() || ptr.getCellRef().hasChanged();
+            return !changed;
+        };
+        CellStoreImp::forEachInternal(visitor, const_cast<CellStore&>(*this), true);
+        return changed;
     }
 
     bool CellStore::hasId(const ESM::RefId& id) const
@@ -880,8 +923,16 @@ namespace MWWorld
 
     void CellStore::loadRefs(const ESM4::Cell& cell, std::map<ESM::RefNum, ESM::RefId>& refNumToID)
     {
-        visitCell4References(cell, mStore, mReaders, [&](const ESM4::Reference& ref) { loadRef(ref); });
-        visitCell4ActorReferences(cell, mStore, mReaders, [&](const ESM4::ActorCharacter& ref) { loadRef(ref); });
+        // Persistent references may be here already (loadPersistentRef).
+        const bool skipPersistent = mHasPersistentRefs;
+        visitCell4References(cell, mStore, mReaders, [&](const ESM4::Reference& ref) {
+            if (!skipPersistent || !(ref.mFlags & ESM4::Rec_Persistent))
+                loadRef(ref);
+        });
+        visitCell4ActorReferences(cell, mStore, mReaders, [&](const ESM4::ActorCharacter& ref) {
+            if (!skipPersistent || !(ref.mFlags & ESM4::Rec_Persistent))
+                loadRef(ref);
+        });
     }
 
     void CellStore::loadRefs()
@@ -942,6 +993,35 @@ namespace MWWorld
         Misc::tupleForEach(this->mCellStoreImp->mRefLists, [&ref, &store, foundType](auto& x) {
             recNameSwitcher(x, foundType, [&ref, &store](auto& storeIn) { storeIn.load(ref, store); });
         });
+    }
+
+    template <class R>
+    void CellStore::loadPersistentRefImpl(const R& ref)
+    {
+        if (mState == State_Loaded)
+            return;
+        const MWWorld::ESMStore& store = mStore;
+        ESM::RecNameInts foundType = static_cast<ESM::RecNameInts>(store.find(ref.mBaseObj));
+        Misc::tupleForEach(mCellStoreImp->mRefLists, [&](auto& x) {
+            recNameSwitcher(x, foundType, [&](auto& storeIn) {
+                const std::size_t before = storeIn.mList.size();
+                storeIn.load(ref, store);
+                if (storeIn.mList.size() != before)
+                    MWBase::Environment::get().getWorldModel()->registerPtr(Ptr(&storeIn.mList.back(), this));
+            });
+        });
+        mHasPersistentRefs = true;
+        requestMergedRefsUpdate();
+    }
+
+    void CellStore::loadPersistentRef(const ESM4::Reference& ref)
+    {
+        loadPersistentRefImpl(ref);
+    }
+
+    void CellStore::loadPersistentRef(const ESM4::ActorCharacter& ref)
+    {
+        loadPersistentRefImpl(ref);
     }
 
     void CellStore::loadRef(ESM::CellRef& ref, bool deleted, std::map<ESM::RefNum, ESM::RefId>& refNumToID)

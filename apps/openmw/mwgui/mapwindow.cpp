@@ -620,9 +620,11 @@ namespace MWGui
 
             if (!entry.mMapTexture)
             {
+                // the active worldspace's cells: a Morrowind cell at the same grid position would render an empty
+                // map over an FO3/FNV one (the local map keys its segments by grid position only)
                 if (mActiveCell->isExterior())
                     requestMapRender(&MWBase::Environment::get().getWorldModel()->getExterior(
-                        ESM::ExteriorCellLocation(entry.mCellX, entry.mCellY, ESM::Cell::sDefaultWorldspaceId)));
+                        ESM::ExteriorCellLocation(entry.mCellX, entry.mCellY, mActiveCell->getWorldSpace())));
 
                 osg::ref_ptr<osg::Texture2D> texture = mLocalMapRender->getMapTexture(entry.mCellX, entry.mCellY);
                 if (texture)
@@ -680,7 +682,7 @@ namespace MWGui
                     continue;
                 if (mExteriorDoorsByCell.contains({ entry.mCellX, entry.mCellY }))
                     continue;
-                ESM::ExteriorCellLocation id(entry.mCellX, entry.mCellY, ESM::Cell::sDefaultWorldspaceId);
+                ESM::ExteriorCellLocation id(entry.mCellX, entry.mCellY, mActiveCell->getWorldSpace());
                 world->getDoorMarkers(worldModel->getExterior(id), doors);
             }
         }

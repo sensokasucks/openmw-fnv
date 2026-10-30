@@ -282,6 +282,8 @@ namespace MWMechanics
 
         bool onOpen() const;
         void onClose() const;
+        // Start point for one group of an open/close pair, given how far the other group has played.
+        float getStartPointAfter(std::string_view otherGroup) const;
 
         void persistAnimationState() const;
         bool playGroup(std::string_view groupname, int mode, uint32_t count, bool scripted = false);

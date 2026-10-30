@@ -198,7 +198,26 @@ void ESM4::Armor::load(ESM4::Reader& reader)
             case ESM::fourCC("KSIZ"):
             case ESM::fourCC("KWDA"):
             case ESM::fourCC("TNAM"):
+                reader.skipSubRecordData();
+                break;
             case ESM::fourCC("DNAM"):
+                // FO3: int16 DR, uint16 flags; FONV adds float DT and 4 more bytes. BMDT (before it) marks FO3/FONV.
+                if ((mGeneralFlags & 0xf000) == TYPE_FO3 && (subHdr.dataSize == 4 || subHdr.dataSize == 12))
+                {
+                    std::int16_t resistance = 0;
+                    std::uint16_t unused = 0;
+                    reader.get(resistance);
+                    reader.get(unused);
+                    mDamageResistance = resistance;
+                    if (subHdr.dataSize == 12)
+                    {
+                        reader.get(mDamageThreshold);
+                        reader.skipSubRecordData(4);
+                    }
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("BAMT"):
             case ESM::fourCC("BIDS"):
             case ESM::fourCC("ETYP"):

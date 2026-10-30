@@ -195,8 +195,10 @@ namespace
                         object->getShapeInstance(), objectTransform, connectionStart, connectionEnd),
                     transform, navigatorUpdateGuard);
             }
-            else if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None)
+            else if (object->getShapeInstance()->mVisualCollisionType == Resource::VisualCollisionType::None
+                && ptr.getType() != ESM::REC_NPC_4 && ptr.getType() != ESM::REC_CREA4)
             {
+                // FO3/FNV actor bodies (PhysicsSystem::addActorBody) move, so they stay out of the navmesh
                 navigator.addObject(DetourNavigator::ObjectId(object),
                     DetourNavigator::ObjectShapes(object->getShapeInstance(), objectTransform), object->getTransform(),
                     navigatorUpdateGuard);

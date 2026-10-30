@@ -29,18 +29,47 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
 #include <components/esm/path.hpp>
+
+#include "loadinfo.hpp" // DialogCondition
 
 namespace ESM4
 {
     class Reader;
     class Writer;
 
+    struct TerminalItem
+    {
+        enum Flags : std::uint8_t
+        {
+            Flag_AddNote = 0x01,
+            Flag_ForceRedraw = 0x02,
+        };
+
+        std::string mText; // ITXT, the menu entry
+        std::string mResultText; // RNAM, shown once the entry is picked
+        std::uint8_t mFlags = 0; // ANAM
+        ESM::FormId mDisplayNote; // INAM, NOTE shown (and added when Flag_AddNote)
+        ESM::FormId mSubMenu; // TNAM, TERM opened instead
+        std::string mScriptSource; // SCTX of the embedded result script
+        bool mHasConditions = false; // CTDA present
+        std::vector<DialogCondition> mConditions; // the entry shows only when they pass (run on the terminal)
+    };
+
     struct Terminal
     {
+        enum Flags : std::uint8_t
+        {
+            Flag_Leveled = 0x01,
+            Flag_UnlockedAtStart = 0x02,
+            Flag_AlternateColors = 0x04,
+            Flag_HideWelcome = 0x08,
+        };
+
         ESM::FormId mId; // from the header
         std::uint32_t mFlags; // from the header, see enum type RecordFlag for details
 
@@ -49,7 +78,12 @@ namespace ESM4
         std::string mText;
 
         ESM::Path mModel;
-        std::string mResultText;
+
+        std::uint8_t mDifficulty = 0; // DNAM: 0 very easy .. 4 very hard, 5 requires key
+        std::uint8_t mTerminalFlags = 0; // DNAM
+        std::uint8_t mServerType = 0; // DNAM
+
+        std::vector<TerminalItem> mItems;
 
         ESM::FormId mScriptId;
         ESM::FormId mPasswordNote;

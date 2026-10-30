@@ -2,6 +2,10 @@
 #define COMPONENTS_NIFOSG_CONTROLLER_H
 
 #include <set>
+#include <utility>
+#include <vector>
+
+#include <osg/Matrixf>
 #include <type_traits>
 
 #include <osg/Texture2D>
@@ -9,6 +13,7 @@
 #include <components/nif/controller.hpp>
 #include <components/nif/data.hpp>
 #include <components/nif/nifkey.hpp>
+#include <components/nif/particle.hpp>
 #include <components/sceneutil/keyframe.hpp>
 #include <components/sceneutil/nodecallback.hpp>
 #include <components/sceneutil/statesetupdater.hpp>
@@ -200,6 +205,7 @@ namespace NifOsg
 
     public:
         ControllerFunction(const Nif::NiTimeController* ctrl);
+        ControllerFunction(const Nif::NiControllerSequence* sequence);
 
         float calculate(float value) const override;
 
@@ -211,6 +217,10 @@ namespace NifOsg
     {
     public:
         GeomMorpherController(const Nif::NiGeomMorpherController* ctrl);
+        // For a morpher driven by a NiControllerManager: the morph weights come from a sequence's interpolators,
+        // one per morph target (null where the target is not animated).
+        GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+            const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators);
         GeomMorpherController();
         GeomMorpherController(const GeomMorpherController& copy, const osg::CopyOp& copyop);
 
@@ -238,6 +248,10 @@ namespace NifOsg
         KeyframeController();
         KeyframeController(const KeyframeController& copy, const osg::CopyOp& copyop);
         KeyframeController(const Nif::NiKeyframeController* keyctrl);
+        // Embedded sequences: keys only, channels without keys keep the node's own transform
+        explicit KeyframeController(const Nif::NiTransformInterpolator* interp);
+        // NiTransformInterpolator or NiBSpline(Comp)TransformInterpolator, as found in Gamebryo 10+ KF sequences
+        KeyframeController(const Nif::NiInterpolator* interpolator);
 
         META_Object(NifOsg, KeyframeController)
 
@@ -246,9 +260,12 @@ namespace NifOsg
 
         KfTransform getCurrentTransformation(osg::NodeVisitor* nv) override;
 
+        KfTransform getTransformation(float time) const;
+
         void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
 
     private:
+
         QuaternionInterpolator mRotations;
 
         FloatInterpolator mXRotations;
@@ -261,6 +278,43 @@ namespace NifOsg
         Nif::NiKeyframeData::AxisOrder mAxisOrder{ Nif::NiKeyframeData::AxisOrder::Order_XYZ };
 
         osg::Quat getXYZRotation(float time) const;
+        void initFromInterpolator(const Nif::NiInterpolator* interpolator);
+    };
+
+    // Plays the NiControllerSequences embedded in a Gamebryo NIF (e.g. the "Open" and "Close" sequences of an ESM4
+    // door) for one node. The sequences are laid out one after another on a single timeline, each one shifted by its
+    // own offset.
+    class SequenceKeyframeController
+        : public SceneUtil::KeyframeController,
+          public SceneUtil::NodeCallback<SequenceKeyframeController, NifOsg::MatrixTransform*>
+    {
+    public:
+        struct Segment
+        {
+            float mStart; // Timeline time where the sequence starts
+            float mStop; // Timeline time where the sequence stops
+            float mOffset; // Timeline time minus sequence time
+            osg::ref_ptr<NifOsg::KeyframeController> mController;
+        };
+
+        SequenceKeyframeController() = default;
+        SequenceKeyframeController(const SequenceKeyframeController& copy, const osg::CopyOp& copyop);
+
+        META_Object(NifOsg, SequenceKeyframeController)
+
+        void addSegment(const Segment& segment) { mSegments.push_back(segment); }
+
+        osg::Vec3f getTranslation(float time) const override;
+        osg::Callback* getAsCallback() override { return this; }
+
+        KfTransform getCurrentTransformation(osg::NodeVisitor* nv) override;
+
+        void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
+
+    private:
+        const Segment* findSegment(float time) const;
+
+        std::vector<Segment> mSegments;
     };
 #ifdef _MSC_VER
 #pragma warning(pop)
@@ -284,6 +338,38 @@ namespace NifOsg
         FloatInterpolator mUScale;
         FloatInterpolator mVScale;
         std::set<unsigned int> mTextureUnits;
+    };
+
+    // NiTextureTransformController (Gamebryo 20.x, FO3/FNV): one float track drives one member (U or V offset,
+    // rotation, U or V scale) of a texture slot's transform. A slot's controllers are gathered into one of
+    // these, which keeps the slot's TexMat (over any transform the property itself set).
+    class TextureTransformController : public SceneUtil::StateSetUpdater, public SceneUtil::Controller
+    {
+    public:
+        enum Member : unsigned int
+        {
+            TranslateU = 0,
+            TranslateV = 1,
+            Rotate = 2,
+            ScaleU = 3,
+            ScaleV = 4,
+        };
+
+        TextureTransformController() = default;
+        TextureTransformController(const TextureTransformController&, const osg::CopyOp&);
+        explicit TextureTransformController(unsigned int textureUnit);
+
+        META_Object(NifOsg, TextureTransformController)
+
+        void addTrack(unsigned int member, const FloatInterpolator& track);
+
+        void setDefaults(osg::StateSet* stateset) override;
+        void apply(osg::StateSet* stateset, osg::NodeVisitor* nv) override;
+
+    private:
+        std::vector<std::pair<unsigned int, FloatInterpolator>> mTracks;
+        unsigned int mTextureUnit = 0;
+        osg::Matrixf mBase; // the property's own transform, if any
     };
 
     class VisController : public SceneUtil::NodeCallback<VisController>, public SceneUtil::Controller
@@ -330,6 +416,8 @@ namespace NifOsg
 
     public:
         AlphaController(const Nif::NiAlphaController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial);
         AlphaController();
         AlphaController(const AlphaController& copy, const osg::CopyOp& copyop);
 
@@ -344,6 +432,9 @@ namespace NifOsg
     {
     public:
         MaterialColorController(const Nif::NiMaterialColorController* ctrl, const osg::Material* baseMaterial);
+        // Keys on the timeline of a model's embedded sequences, for a controller driven by its NiControllerManager
+        MaterialColorController(Nif::Vector3KeyMapPtr keys, Nif::NiMaterialColorController::TargetColor targetColor,
+            const osg::Material* baseMaterial);
         MaterialColorController();
         MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop);
 
@@ -398,6 +489,26 @@ namespace NifOsg
     private:
         float mEmitStart{ 0.f };
         float mEmitStop{ 0.f };
+    };
+
+    // NiPSysEmitterCtlr: the emitter's birth rate and whether it emits, over time
+    class PSysEmitterController
+        : public SceneUtil::NodeCallback<PSysEmitterController, osgParticle::ParticleProcessor*>,
+          public SceneUtil::Controller
+    {
+    public:
+        PSysEmitterController(const Nif::NiPSysEmitterCtlr* ctrl, float defaultRate);
+        PSysEmitterController() = default;
+        PSysEmitterController(const PSysEmitterController& copy, const osg::CopyOp& copyop);
+
+        META_Object(NifOsg, PSysEmitterController)
+
+        void operator()(osgParticle::ParticleProcessor* node, osg::NodeVisitor* nv);
+
+    private:
+        FloatInterpolator mBirthRate;
+        BoolInterpolator mActive;
+        float mDefaultRate{ 0.f };
     };
 
     class PathController : public SceneUtil::NodeCallback<PathController, NifOsg::MatrixTransform*>,

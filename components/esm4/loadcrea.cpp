@@ -71,16 +71,34 @@ void ESM4::Creature::load(ESM4::Reader& reader)
             case ESM::fourCC("SNAM"):
                 reader.get(mFaction);
                 reader.adjustFormId(mFaction.faction);
+                mFactions.push_back(mFaction);
                 break;
             case ESM::fourCC("INAM"):
                 reader.getFormId(mDeathItem);
+                break;
+            case ESM::fourCC("VTCK"): // FO3/FONV voice type
+                reader.getFormId(mVoiceType);
                 break;
             case ESM::fourCC("SCRI"):
                 reader.getFormId(mScriptId);
                 break;
             case ESM::fourCC("AIDT"):
-                if (subHdr.dataSize == 20) // FO3
-                    reader.skipSubRecordData();
+                if (subHdr.dataSize == 20) // FO3/FONV
+                {
+                    reader.get(mFO3AIData.aggression);
+                    reader.get(mFO3AIData.confidence);
+                    reader.get(mFO3AIData.energy);
+                    reader.get(mFO3AIData.responsibility);
+                    reader.get(mFO3AIData.mood);
+                    std::uint8_t skipped[9];
+                    reader.get(skipped, 9); // unused, services, teaches, max training level
+                    reader.get(mFO3AIData.assistance);
+                    std::uint8_t aggroBehavior;
+                    reader.get(aggroBehavior);
+                    mFO3AIData.aggroRadiusBehavior = aggroBehavior != 0;
+                    reader.get(mFO3AIData.aggroRadius);
+                    mHasFO3AIData = true;
+                }
                 else
                     reader.get(mAIData); // 12 bytes
                 break;
@@ -92,8 +110,16 @@ void ESM4::Creature::load(ESM4::Reader& reader)
                     reader.get(&mBaseConfig, 16); // TES4
                 break;
             case ESM::fourCC("DATA"):
-                if (subHdr.dataSize == 17) // FO3
-                    reader.skipSubRecordData();
+                if (subHdr.dataSize == 17) // FO3/FONV
+                {
+                    reader.get(mFO3Data);
+                    mHasFO3Data = true;
+                    mData.combat = mFO3Data.combat;
+                    mData.magic = mFO3Data.magic;
+                    mData.stealth = mFO3Data.stealth;
+                    mData.health = mFO3Data.health;
+                    mData.damage = mFO3Data.damage;
+                }
                 else
                     reader.get(mData);
                 break;
@@ -162,7 +188,6 @@ void ESM4::Creature::load(ESM4::Reader& reader)
             case ESM::fourCC("CSDT"):
             case ESM::fourCC("OBND"): // FO3
             case ESM::fourCC("EAMT"): // FO3
-            case ESM::fourCC("VTCK"): // FO3
             case ESM::fourCC("NAM4"): // FO3
             case ESM::fourCC("NAM5"): // FO3
             case ESM::fourCC("CNAM"): // FO3

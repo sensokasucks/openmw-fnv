@@ -66,16 +66,70 @@ void ESM4::Terminal::load(ESM4::Reader& reader)
             case ESM::fourCC("MODL"):
                 reader.getZString(mModel);
                 break;
-            case ESM::fourCC("RNAM"):
-                reader.getZString(mResultText);
+            case ESM::fourCC("DNAM"):
+                if (subHdr.dataSize == 4) // FO3/FNV: difficulty, flags, server type, unused
+                {
+                    std::uint8_t unused;
+                    reader.get(mDifficulty);
+                    reader.get(mTerminalFlags);
+                    reader.get(mServerType);
+                    reader.get(unused);
+                }
+                else
+                    reader.skipSubRecordData();
                 break;
-            case ESM::fourCC("DNAM"): // difficulty
-            case ESM::fourCC("ANAM"): // flags
+            // Menu items: ITXT starts an entry, the subrecords after it belong to it.
+            case ESM::fourCC("ITXT"):
+                mItems.emplace_back();
+                reader.getLocalizedString(mItems.back().mText);
+                break;
+            case ESM::fourCC("RNAM"):
+                if (mItems.empty())
+                    reader.skipSubRecordData();
+                else
+                    reader.getLocalizedString(mItems.back().mResultText);
+                break;
+            case ESM::fourCC("ANAM"):
+                if (mItems.empty() || subHdr.dataSize != 1)
+                    reader.skipSubRecordData();
+                else
+                    reader.get(mItems.back().mFlags);
+                break;
+            case ESM::fourCC("INAM"):
+                if (mItems.empty() || subHdr.dataSize != 4)
+                    reader.skipSubRecordData();
+                else
+                    reader.getFormId(mItems.back().mDisplayNote);
+                break;
+            case ESM::fourCC("TNAM"):
+                if (mItems.empty() || subHdr.dataSize != 4)
+                    reader.skipSubRecordData();
+                else
+                    reader.getFormId(mItems.back().mSubMenu);
+                break;
+            case ESM::fourCC("SCTX"):
+                if (mItems.empty())
+                    reader.skipSubRecordData();
+                else
+                    reader.getString(mItems.back().mScriptSource);
+                break;
             case ESM::fourCC("CTDA"):
+            {
+                if (mItems.empty() || subHdr.dataSize != 28)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                TargetCondition cond;
+                reader.get(cond);
+                if (cond.reference)
+                    reader.adjustFormId(cond.reference);
+                addDialogCondition(reader, mItems.back().mConditions, cond, true);
+                mItems.back().mHasConditions = true;
+                break;
+            }
             case ESM::fourCC("CIS1"):
             case ESM::fourCC("CIS2"):
-            case ESM::fourCC("INAM"):
-            case ESM::fourCC("ITXT"): // Menu Item
             case ESM::fourCC("MODT"): // Model data
             case ESM::fourCC("MODC"):
             case ESM::fourCC("MODS"):
@@ -84,10 +138,8 @@ void ESM4::Terminal::load(ESM4::Reader& reader)
             case ESM::fourCC("SCHR"):
             case ESM::fourCC("SCRO"):
             case ESM::fourCC("SCRV"):
-            case ESM::fourCC("SCTX"):
             case ESM::fourCC("SCVR"):
             case ESM::fourCC("SLSD"):
-            case ESM::fourCC("TNAM"):
             case ESM::fourCC("OBND"):
             case ESM::fourCC("VMAD"):
             case ESM::fourCC("KSIZ"):

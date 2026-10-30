@@ -66,6 +66,7 @@ namespace Settings
         SettingValue<bool> mAlwaysAllowStealingFromKnockedOutActors{ mIndex, "Game",
             "always allow stealing from knocked out actors" };
         SettingValue<bool> mGraphicHerbalism{ mIndex, "Game", "graphic herbalism" };
+        SettingValue<bool> mFnvRagdolls{ mIndex, "Game", "fnv ragdolls" };
         SettingValue<bool> mAllowActorsToFollowOverWaterSurface{ mIndex, "Game",
             "allow actors to follow over water surface" };
         SettingValue<osg::Vec3f> mDefaultActorPathfindHalfExtents{ mIndex, "Game",

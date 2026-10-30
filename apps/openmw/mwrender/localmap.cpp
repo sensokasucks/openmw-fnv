@@ -12,6 +12,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/fogstate.hpp>
+#include <components/esm/util.hpp>
 #include <components/esm3/loadcell.hpp>
 #include <components/files/memorystream.hpp>
 #include <components/misc/constants.hpp>
@@ -198,6 +199,17 @@ namespace MWRender
         segment.mLastRenderNeighbourFlags = neighbourFlags;
     }
 
+    void LocalMap::forceExteriorMap(const MWWorld::CellStore* cell)
+    {
+        if (!cell->isExterior())
+            return;
+        const int cellX = cell->getCell()->getGridX();
+        const int cellY = cell->getCell()->getGridY();
+        MapSegment& segment = mExteriorSegments[std::make_pair(cellX, cellY)];
+        requestExteriorMap(cell, segment);
+        segment.mLastRenderNeighbourFlags = getExteriorNeighbourFlags(cellX, cellY);
+    }
+
     void LocalMap::addCell(MWWorld::CellStore* cell)
     {
         if (cell->isExterior())
@@ -256,6 +268,8 @@ namespace MWRender
     void LocalMap::requestExteriorMap(const MWWorld::CellStore* cell, MapSegment& segment)
     {
         mInterior = false;
+        // one map segment per exterior cell: 8192 units in Morrowind, 4096 in FO3/FNV worldspaces
+        mMapWorldSize = ESM::getCellSize(cell->getCell()->getWorldSpace());
 
         const int x = cell->getCell()->getGridX();
         const int y = cell->getCell()->getGridY();

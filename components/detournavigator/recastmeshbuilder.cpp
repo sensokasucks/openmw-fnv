@@ -9,6 +9,7 @@
 #include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionShapes/btCompoundShape.h>
 #include <BulletCollision/CollisionShapes/btConcaveShape.h>
+#include <BulletCollision/CollisionShapes/btConvexShape.h>
 #include <BulletCollision/CollisionShapes/btHeightfieldTerrainShape.h>
 #include <LinearMath/btAabbUtil2.h>
 #include <LinearMath/btTransform.h>
@@ -156,6 +157,8 @@ namespace DetourNavigator
             return addObject(static_cast<const btConcaveShape&>(shape), transform, areaType);
         else if (shape.getShapeType() == BOX_SHAPE_PROXYTYPE)
             return addObject(static_cast<const btBoxShape&>(shape), transform, areaType);
+        else if (shape.isConvex())
+            return addConvexObject(static_cast<const btConvexShape&>(shape), transform, areaType);
         std::ostringstream message;
         message << "Unsupported shape type: " << BroadphaseNativeTypes(shape.getShapeType());
         throw InvalidArgument(message.str());
@@ -214,6 +217,23 @@ namespace DetourNavigator
             }
             mTriangles.emplace_back(makeRecastMeshTriangle(vertices.data(), areaType));
         }
+    }
+
+    void RecastMeshBuilder::addConvexObject(
+        const btConvexShape& shape, const btTransform& transform, const AreaType areaType)
+    {
+        // Bethesda Havok primitives (spheres, capsules, convex hulls, see NifBullet::BulletNifLoader::makeBhkShape)
+        // stand in the navmesh as the box of their bounds: a touch generous, and solid where they are
+        btVector3 aabbMin;
+        btVector3 aabbMax;
+        shape.getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
+        const btVector3 halfExtents = (aabbMax - aabbMin) * 0.5f;
+        if (halfExtents.x() <= 0.f || halfExtents.y() <= 0.f || halfExtents.z() <= 0.f)
+            return;
+        const btBoxShape box(halfExtents);
+        btTransform centred = transform;
+        centred.setOrigin(transform((aabbMax + aabbMin) * 0.5f));
+        addObject(box, centred, areaType);
     }
 
     void RecastMeshBuilder::addWater(const osg::Vec2i& cellPosition, const Water& water)

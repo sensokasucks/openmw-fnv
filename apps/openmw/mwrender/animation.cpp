@@ -667,14 +667,15 @@ namespace MWRender
     }
 
     std::shared_ptr<Animation::AnimSource> Animation::addSingleAnimSource(
-        VFS::Path::NormalizedView kfname, const std::string& baseModel)
+        VFS::Path::NormalizedView kfname, const std::string& baseModel, bool allowWithoutControllers)
     {
         if (!mResourceSystem->getVFS()->exists(kfname))
             return nullptr;
 
         osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(kfname);
 
-        if (keyframes == nullptr || keyframes->mTextKeys.empty() || keyframes->mKeyframeControllers.empty())
+        if (keyframes == nullptr || keyframes->mTextKeys.empty()
+            || (keyframes->mKeyframeControllers.empty() && !allowWithoutControllers))
             return nullptr;
 
         std::shared_ptr<AnimSource> animsrc = std::make_shared<AnimSource>();
@@ -773,6 +774,25 @@ namespace MWRender
         }
 
         return animsrc;
+    }
+
+    bool Animation::addEmbeddedAnimSource(const std::string& model)
+    {
+        if (!mObjectRoot || model.empty())
+            return false;
+        const VFS::Path::Normalized path = VFS::Path::toNormalized(model);
+
+        // Scripts may ask for a group the model lacks every frame, so don't add the same model twice.
+        if (mResourceSystem->getVFS()->exists(path))
+        {
+            const osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes
+                = mResourceSystem->getKeyframeManager()->get(path);
+            for (const std::shared_ptr<AnimSource>& source : mAnimSources)
+                if (source->mKeyframes == keyframes)
+                    return true;
+        }
+
+        return addSingleAnimSource(path, model, true) != nullptr;
     }
 
     void Animation::clearAnimSources()

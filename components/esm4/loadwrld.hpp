@@ -109,6 +109,15 @@ namespace ESM4
 
         Map mMap;
 
+        struct MapOffset
+        {
+            bool present = false;
+            float scale = 1.f;
+            float cellX = 0.f;
+            float cellY = 0.f;
+        };
+        MapOffset mMapOffset; // FONV ONAM
+
         std::int32_t mMinX;
         std::int32_t mMinY;
         std::int32_t mMaxX;

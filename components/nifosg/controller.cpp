@@ -1,5 +1,7 @@
 #include "controller.hpp"
 
+#include <limits>
+
 #include <osg/Material>
 #include <osg/MatrixTransform>
 #include <osg/TexMat>
@@ -7,12 +9,14 @@
 
 #include <osgAnimation/Bone>
 
+#include <osgParticle/ConstantRateCounter>
 #include <osgParticle/Emitter>
 
 #include <components/nif/data.hpp>
 #include <components/sceneutil/morphgeometry.hpp>
 
 #include "matrixtransform.hpp"
+#include "particle.hpp"
 
 namespace NifOsg
 {
@@ -24,6 +28,27 @@ namespace NifOsg
         , mStopTime(ctrl->mTimeStop)
         , mExtrapolationMode(ctrl->extrapolationMode())
     {
+    }
+
+    ControllerFunction::ControllerFunction(const Nif::NiControllerSequence* sequence)
+        : mFrequency(sequence->mFrequency)
+        , mPhase(0.f)
+        , mStartTime(sequence->mStartTime)
+        , mStopTime(sequence->mStopTime)
+    {
+        // Sequences store their cycle type as 0 = loop, 1 = reverse, 2 = clamp
+        switch (static_cast<uint32_t>(sequence->mExtrapolationMode))
+        {
+            case 0:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Cycle;
+                break;
+            case 1:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Reverse;
+                break;
+            default:
+                mExtrapolationMode = Nif::NiTimeController::ExtrapolationMode::Constant;
+                break;
+        }
     }
 
     float ControllerFunction::calculate(float value) const
@@ -90,33 +115,215 @@ namespace NifOsg
     {
     }
 
+    namespace
+    {
+        // Gamebryo stores KF curves as open uniform cubic B-splines (NiBSplineBasis<float, 3>).
+        float evaluateBSpline(const std::vector<float>& points, size_t dimension, size_t component, float u)
+        {
+            constexpr size_t degree = 3;
+            const size_t count = points.size() / dimension;
+            if (count == 0)
+                return 0.f;
+            if (count <= degree)
+                return points[component];
+            const auto knot = [&](size_t j) -> float {
+                if (j <= degree)
+                    return 0.f;
+                return static_cast<float>(std::min(j, count) - degree);
+            };
+            size_t span = degree;
+            while (span + 1 < count && knot(span + 1) <= u)
+                ++span;
+            float d[degree + 1];
+            for (size_t j = 0; j <= degree; ++j)
+                d[j] = points[(span - degree + j) * dimension + component];
+            for (size_t r = 1; r <= degree; ++r)
+            {
+                for (size_t j = degree; j >= r; --j)
+                {
+                    const float left = knot(span - degree + j);
+                    const float right = knot(span + 1 + j - r);
+                    const float alpha = right > left ? (u - left) / (right - left) : 0.f;
+                    d[j] = (1.f - alpha) * d[j - 1] + alpha * d[j];
+                }
+            }
+            return d[degree];
+        }
+
+        bool isValidHandle(uint32_t handle)
+        {
+            return handle != 0xffff && handle != 0xffffffff;
+        }
+
+        std::vector<float> getControlPoints(const Nif::NiBSplineInterpolator& interp, uint32_t handle,
+            size_t dimension, float offset, float halfRange, bool compact)
+        {
+            const size_t count = interp.mBasisData->mNumControlPoints;
+            std::vector<float> result(count * dimension);
+            const Nif::NiBSplineData& data = *interp.mSplineData.getPtr();
+            for (size_t i = 0; i < result.size(); ++i)
+            {
+                const size_t index = handle + i;
+                if (compact)
+                    result[i] = index < data.mCompactControlPoints.size()
+                        ? offset + halfRange * (data.mCompactControlPoints[index] / 32767.f)
+                        : 0.f;
+                else
+                    result[i] = index < data.mFloatControlPoints.size() ? data.mFloatControlPoints[index] : 0.f;
+            }
+            return result;
+        }
+
+        // Resample a B-spline transform into linear keys so the regular interpolators can play it.
+        void sampleBSpline(const Nif::NiBSplineTransformInterpolator& interp, Nif::Vector3KeyMapPtr& translations,
+            Nif::QuaternionKeyMapPtr& rotations, Nif::FloatKeyMapPtr& scales)
+        {
+            if (interp.mSplineData.empty() || interp.mBasisData.empty())
+                return;
+            const auto* comp = interp.mRecordType == Nif::RC_NiBSplineCompTransformInterpolator
+                ? static_cast<const Nif::NiBSplineCompTransformInterpolator*>(&interp)
+                : nullptr;
+            const bool compact = comp != nullptr;
+            const size_t count = interp.mBasisData->mNumControlPoints;
+            const float duration = interp.mStopTime - interp.mStartTime;
+            if (count == 0 || duration <= 0.f)
+                return;
+            const float range = static_cast<float>(count > 3 ? count - 3 : 1);
+            const size_t samples = std::max<size_t>(2, static_cast<size_t>(duration * 30.f) + 1);
+
+            auto forEachSample = [&](auto&& fn) {
+                for (size_t i = 0; i < samples; ++i)
+                {
+                    const float t = interp.mStartTime + duration * i / (samples - 1);
+                    fn(t, std::min(range, range * (t - interp.mStartTime) / duration));
+                }
+            };
+
+            if (isValidHandle(interp.mTranslationHandle))
+            {
+                const std::vector<float> points = getControlPoints(interp, interp.mTranslationHandle, 3,
+                    compact ? comp->mTranslationOffset : 0.f, compact ? comp->mTranslationHalfRange : 0.f, compact);
+                translations = std::make_shared<Nif::Vector3KeyMap>();
+                translations->mInterpolationType = Nif::InterpolationType_Linear;
+                forEachSample([&](float t, float u) {
+                    const osg::Vec3f value(evaluateBSpline(points, 3, 0, u), evaluateBSpline(points, 3, 1, u),
+                        evaluateBSpline(points, 3, 2, u));
+                    translations->mKeys.emplace_back(t, Nif::KeyT<osg::Vec3f>{ value, {}, {} });
+                });
+            }
+            if (isValidHandle(interp.mRotationHandle))
+            {
+                const std::vector<float> points = getControlPoints(interp, interp.mRotationHandle, 4,
+                    compact ? comp->mRotationOffset : 0.f, compact ? comp->mRotationHalfRange : 0.f, compact);
+                rotations = std::make_shared<Nif::QuaternionKeyMap>();
+                rotations->mInterpolationType = Nif::InterpolationType_Linear;
+                forEachSample([&](float t, float u) {
+                    // Control points are stored as w, x, y, z
+                    osg::Quat value(evaluateBSpline(points, 4, 1, u), evaluateBSpline(points, 4, 2, u),
+                        evaluateBSpline(points, 4, 3, u), evaluateBSpline(points, 4, 0, u));
+                    const double length = value.length();
+                    if (length > 0)
+                        value /= length;
+                    rotations->mKeys.emplace_back(t, Nif::KeyT<osg::Quat>{ value, {}, {} });
+                });
+            }
+            if (isValidHandle(interp.mScaleHandle))
+            {
+                const std::vector<float> points = getControlPoints(interp, interp.mScaleHandle, 1,
+                    compact ? comp->mScaleOffset : 0.f, compact ? comp->mScaleHalfRange : 0.f, compact);
+                scales = std::make_shared<Nif::FloatKeyMap>();
+                scales->mInterpolationType = Nif::InterpolationType_Linear;
+                forEachSample([&](float t, float u) {
+                    scales->mKeys.emplace_back(t, Nif::KeyT<float>{ evaluateBSpline(points, 1, 0, u), 0.f, 0.f });
+                });
+            }
+        }
+    }
+
+    namespace
+    {
+        // Gamebryo marks unused interpolator defaults with -FLT_MAX
+        bool isValidDefault(float value)
+        {
+            return value != -std::numeric_limits<float>::max() && value != std::numeric_limits<float>::max();
+        }
+
+        template <class MapPtr, class Value>
+        MapPtr makeConstantKeys(const Value& value)
+        {
+            auto keys = std::make_shared<typename MapPtr::element_type>();
+            keys->mInterpolationType = Nif::InterpolationType_Linear;
+            keys->mKeys.emplace_back(0.f, typename MapPtr::element_type::KeyType{ value, {}, {} });
+            return keys;
+        }
+    }
+
+    KeyframeController::KeyframeController(const Nif::NiInterpolator* interpolator)
+    {
+        initFromInterpolator(interpolator);
+
+        // In a sequence, a channel without keys holds its pose in the interpolator's default value.
+        Nif::NiQuatTransform defaultTransform;
+        if (interpolator->mRecordType == Nif::RC_NiTransformInterpolator)
+            defaultTransform = static_cast<const Nif::NiTransformInterpolator*>(interpolator)->mDefaultValue;
+        else
+            defaultTransform = static_cast<const Nif::NiBSplineTransformInterpolator*>(interpolator)->mValue;
+        const osg::Quat& rotation = defaultTransform.mRotation;
+        const osg::Vec3f& translation = defaultTransform.mTranslation;
+        if (mRotations.empty() && mXRotations.empty() && mYRotations.empty() && mZRotations.empty()
+            && isValidDefault(rotation.w()))
+            mRotations = QuaternionInterpolator(makeConstantKeys<Nif::QuaternionKeyMapPtr>(rotation));
+        if (mTranslations.empty() && isValidDefault(translation.x()))
+            mTranslations = Vec3Interpolator(makeConstantKeys<Nif::Vector3KeyMapPtr>(translation));
+        if (mScales.empty() && isValidDefault(defaultTransform.mScale))
+            mScales = FloatInterpolator(makeConstantKeys<Nif::FloatKeyMapPtr>(defaultTransform.mScale));
+    }
+
+    void KeyframeController::initFromInterpolator(const Nif::NiInterpolator* interpolator)
+    {
+        if (interpolator->mRecordType == Nif::RC_NiTransformInterpolator)
+        {
+            const Nif::NiTransformInterpolator* interp = static_cast<const Nif::NiTransformInterpolator*>(interpolator);
+            const Nif::NiQuatTransform& defaultTransform = interp->mDefaultValue;
+            if (!interp->mData.empty())
+            {
+                mRotations = QuaternionInterpolator(interp->mData->mRotations, defaultTransform.mRotation);
+                mXRotations = FloatInterpolator(interp->mData->mXRotations);
+                mYRotations = FloatInterpolator(interp->mData->mYRotations);
+                mZRotations = FloatInterpolator(interp->mData->mZRotations);
+                mTranslations = Vec3Interpolator(interp->mData->mTranslations, defaultTransform.mTranslation);
+                mScales = FloatInterpolator(interp->mData->mScales, defaultTransform.mScale);
+
+                mAxisOrder = interp->mData->mAxisOrder;
+            }
+            else
+            {
+                mRotations = QuaternionInterpolator(Nif::QuaternionKeyMapPtr(), defaultTransform.mRotation);
+                mTranslations = Vec3Interpolator(Nif::Vector3KeyMapPtr(), defaultTransform.mTranslation);
+                mScales = FloatInterpolator(Nif::FloatKeyMapPtr(), defaultTransform.mScale);
+            }
+        }
+        else if (interpolator->mRecordType == Nif::RC_NiBSplineCompTransformInterpolator
+            || interpolator->mRecordType == Nif::RC_NiBSplineTransformInterpolator)
+        {
+            const auto* interp = static_cast<const Nif::NiBSplineTransformInterpolator*>(interpolator);
+            const Nif::NiQuatTransform& defaultTransform = interp->mValue;
+            Nif::Vector3KeyMapPtr translations;
+            Nif::QuaternionKeyMapPtr rotations;
+            Nif::FloatKeyMapPtr scales;
+            sampleBSpline(*interp, translations, rotations, scales);
+            mRotations = QuaternionInterpolator(rotations, defaultTransform.mRotation);
+            mTranslations = Vec3Interpolator(translations, defaultTransform.mTranslation);
+            mScales = FloatInterpolator(scales, defaultTransform.mScale);
+        }
+    }
+
     KeyframeController::KeyframeController(const Nif::NiKeyframeController* keyctrl)
     {
         if (!keyctrl->mInterpolator.empty())
         {
             if (keyctrl->mInterpolator->mRecordType == Nif::RC_NiTransformInterpolator)
-            {
-                const Nif::NiTransformInterpolator* interp
-                    = static_cast<const Nif::NiTransformInterpolator*>(keyctrl->mInterpolator.getPtr());
-                const Nif::NiQuatTransform& defaultTransform = interp->mDefaultValue;
-                if (!interp->mData.empty())
-                {
-                    mRotations = QuaternionInterpolator(interp->mData->mRotations, defaultTransform.mRotation);
-                    mXRotations = FloatInterpolator(interp->mData->mXRotations);
-                    mYRotations = FloatInterpolator(interp->mData->mYRotations);
-                    mZRotations = FloatInterpolator(interp->mData->mZRotations);
-                    mTranslations = Vec3Interpolator(interp->mData->mTranslations, defaultTransform.mTranslation);
-                    mScales = FloatInterpolator(interp->mData->mScales, defaultTransform.mScale);
-
-                    mAxisOrder = interp->mData->mAxisOrder;
-                }
-                else
-                {
-                    mRotations = QuaternionInterpolator(Nif::QuaternionKeyMapPtr(), defaultTransform.mRotation);
-                    mTranslations = Vec3Interpolator(Nif::Vector3KeyMapPtr(), defaultTransform.mTranslation);
-                    mScales = FloatInterpolator(Nif::FloatKeyMapPtr(), defaultTransform.mScale);
-                }
-            }
+                initFromInterpolator(keyctrl->mInterpolator.getPtr());
         }
         else if (!keyctrl->mData.empty())
         {
@@ -130,6 +337,11 @@ namespace NifOsg
 
             mAxisOrder = keydata->mAxisOrder;
         }
+    }
+
+    KeyframeController::KeyframeController(const Nif::NiTransformInterpolator* interp)
+    {
+        initFromInterpolator(interp);
     }
 
     osg::Quat KeyframeController::getXYZRotation(float time) const
@@ -200,25 +412,92 @@ namespace NifOsg
 
     KeyframeController::KfTransform KeyframeController::getCurrentTransformation(osg::NodeVisitor* nv)
     {
+        if (hasInput())
+            return getTransformation(getInputValue(nv));
+
+        return KfTransform();
+    }
+
+    KeyframeController::KfTransform KeyframeController::getTransformation(float time) const
+    {
         KfTransform out;
 
-        if (hasInput())
-        {
-            float time = getInputValue(nv);
+        if (!mRotations.empty())
+            out.mRotation = mRotations.interpKey(time);
+        else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
+            out.mRotation = getXYZRotation(time);
 
-            if (!mRotations.empty())
-                out.mRotation = mRotations.interpKey(time);
-            else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
-                out.mRotation = getXYZRotation(time);
+        if (!mTranslations.empty())
+            out.mTranslation = mTranslations.interpKey(time);
 
-            if (!mTranslations.empty())
-                out.mTranslation = mTranslations.interpKey(time);
-
-            if (!mScales.empty())
-                out.mScale = mScales.interpKey(time);
-        }
+        if (!mScales.empty())
+            out.mScale = mScales.interpKey(time);
 
         return out;
+    }
+
+    SequenceKeyframeController::SequenceKeyframeController(
+        const SequenceKeyframeController& copy, const osg::CopyOp& copyop)
+        : osg::Object(copy, copyop)
+        , SceneUtil::KeyframeController(copy)
+        , SceneUtil::NodeCallback<SequenceKeyframeController, NifOsg::MatrixTransform*>(copy, copyop)
+        , mSegments(copy.mSegments)
+    {
+        // Interpolators cache their last key, so each copy gets its own.
+        for (Segment& segment : mSegments)
+            segment.mController = new NifOsg::KeyframeController(*segment.mController, copyop);
+    }
+
+    const SequenceKeyframeController::Segment* SequenceKeyframeController::findSegment(float time) const
+    {
+        // Animation time can overshoot the stop key slightly, so fall back to the closest segment that started.
+        const Segment* found = nullptr;
+        for (const Segment& segment : mSegments)
+        {
+            if (time < segment.mStart)
+                continue;
+            if (time <= segment.mStop)
+                return &segment;
+            if (found == nullptr || segment.mStart > found->mStart)
+                found = &segment;
+        }
+        return found;
+    }
+
+    osg::Vec3f SequenceKeyframeController::getTranslation(float time) const
+    {
+        const Segment* segment = findSegment(time);
+        if (segment == nullptr)
+            return osg::Vec3f();
+        return segment->mController->getTranslation(time - segment->mOffset);
+    }
+
+    SequenceKeyframeController::KfTransform SequenceKeyframeController::getCurrentTransformation(osg::NodeVisitor* nv)
+    {
+        if (!hasInput())
+            return KfTransform();
+
+        const float time = getInputValue(nv);
+        const Segment* segment = findSegment(time);
+        if (segment == nullptr)
+            return KfTransform();
+        return segment->mController->getTransformation(time - segment->mOffset);
+    }
+
+    void SequenceKeyframeController::operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+    {
+        auto [translation, rotation, scale] = getCurrentTransformation(nv);
+
+        if (rotation)
+            node->setRotation(*rotation);
+
+        if (translation)
+            node->setTranslation(*translation);
+
+        if (scale)
+            node->setScale(*scale);
+
+        traverse(node, nv);
     }
 
     GeomMorpherController::GeomMorpherController() {}
@@ -254,6 +533,17 @@ namespace NifOsg
                 mKeyFrames[i] = FloatInterpolator(interpolator);
             }
         }
+    }
+
+    GeomMorpherController::GeomMorpherController(const Nif::NiGeomMorpherController* ctrl,
+        const std::vector<const Nif::NiFloatInterpolator*>& sequenceInterpolators)
+    {
+        mKeyFrames.resize(sequenceInterpolators.size());
+        mWeights = ctrl->mWeights;
+
+        for (std::size_t i = 0; i < sequenceInterpolators.size(); ++i)
+            if (sequenceInterpolators[i] != nullptr)
+                mKeyFrames[i] = FloatInterpolator(sequenceInterpolators[i]);
     }
 
     void GeomMorpherController::operator()(SceneUtil::MorphGeometry* node, osg::NodeVisitor* nv)
@@ -338,6 +628,82 @@ namespace NifOsg
                 texMat->setMatrix(mat);
             }
         }
+    }
+
+    TextureTransformController::TextureTransformController(unsigned int textureUnit)
+        : mTextureUnit(textureUnit)
+    {
+    }
+
+    TextureTransformController::TextureTransformController(
+        const TextureTransformController& copy, const osg::CopyOp& copyop)
+        : osg::Object(copy, copyop)
+        , StateSetUpdater(copy, copyop)
+        , Controller(copy)
+        , mTracks(copy.mTracks)
+        , mTextureUnit(copy.mTextureUnit)
+        , mBase(copy.mBase)
+    {
+    }
+
+    void TextureTransformController::addTrack(unsigned int member, const FloatInterpolator& track)
+    {
+        mTracks.emplace_back(member, track);
+    }
+
+    void TextureTransformController::setDefaults(osg::StateSet* stateset)
+    {
+        osg::ref_ptr<osg::TexMat> texMat(new osg::TexMat);
+        if (const auto* existing
+            = static_cast<const osg::TexMat*>(stateset->getTextureAttribute(mTextureUnit, osg::StateAttribute::TEXMAT)))
+            mBase = existing->getMatrix();
+        texMat->setMatrix(mBase);
+        stateset->setTextureAttributeAndModes(mTextureUnit, texMat, osg::StateAttribute::ON);
+    }
+
+    void TextureTransformController::apply(osg::StateSet* stateset, osg::NodeVisitor* nv)
+    {
+        if (!hasInput())
+            return;
+        const float time = getInputValue(nv);
+        osg::Vec2f translate(0.f, 0.f);
+        osg::Vec2f scale(1.f, 1.f);
+        float rotation = 0.f;
+        for (const auto& [member, track] : mTracks)
+        {
+            const float value = track.interpKey(time);
+            switch (member)
+            {
+                case TranslateU:
+                    translate.x() = value;
+                    break;
+                case TranslateV:
+                    translate.y() = value;
+                    break;
+                case Rotate:
+                    rotation = value;
+                    break;
+                case ScaleU:
+                    scale.x() = value;
+                    break;
+                case ScaleV:
+                    scale.y() = value;
+                    break;
+            }
+        }
+        // Scale and turn about the texture's centre, then offset; the offsets are negated as the loader does
+        // for the property's own UV offset (BSShaderNoLightingProperty), the other way round from DirectX.
+        const osg::Vec3f origin(0.5f, 0.5f, 0.f);
+        osg::Matrixf mat = osg::Matrixf::translate(origin);
+        mat.preMultScale(osg::Vec3f(scale.x(), scale.y(), 1.f));
+        if (rotation != 0.f)
+            mat.preMultRotate(osg::Quat(rotation, osg::Vec3f(0.f, 0.f, 1.f)));
+        mat.preMultTranslate(-origin);
+        mat.setTrans(mat.getTrans() + osg::Vec3f(-translate.x(), -translate.y(), 0.f));
+
+        if (auto* texMat
+            = static_cast<osg::TexMat*>(stateset->getTextureAttribute(mTextureUnit, osg::StateAttribute::TEXMAT)))
+            texMat->setMatrix(mat * mBase);
     }
 
     VisController::VisController(const Nif::NiVisController* ctrl, unsigned int mask)
@@ -447,6 +813,12 @@ namespace NifOsg
             mData = FloatInterpolator(ctrl->mData->mKeyList, 1.f);
     }
 
+    AlphaController::AlphaController(Nif::FloatKeyMapPtr keys, const osg::Material* baseMaterial)
+        : mData(std::move(keys), 1.f)
+        , mBaseMaterial(baseMaterial)
+    {
+    }
+
     AlphaController::AlphaController(const AlphaController& copy, const osg::CopyOp& copyop)
         : StateSetUpdater(copy, copyop)
         , Controller(copy)
@@ -459,6 +831,9 @@ namespace NifOsg
     {
         stateset->setAttribute(
             static_cast<osg::Material*>(mBaseMaterial->clone(osg::CopyOp::DEEP_COPY_ALL)), osg::StateAttribute::ON);
+        // shaders that keep vertex colours (bs/nolighting) read the material alpha from this uniform
+        stateset->addUniform(
+            new osg::Uniform("materialAlpha", mBaseMaterial->getDiffuse(osg::Material::FRONT_AND_BACK).a()));
     }
 
     void AlphaController::apply(osg::StateSet* stateset, osg::NodeVisitor* nv)
@@ -470,6 +845,8 @@ namespace NifOsg
             osg::Vec4f diffuse = mat->getDiffuse(osg::Material::FRONT_AND_BACK);
             diffuse.a() = value;
             mat->setDiffuse(osg::Material::FRONT_AND_BACK, diffuse);
+            if (osg::Uniform* alpha = stateset->getUniform("materialAlpha"))
+                alpha->set(value);
         }
     }
 
@@ -487,6 +864,14 @@ namespace NifOsg
         }
         else if (!ctrl->mData.empty())
             mData = Vec3Interpolator(ctrl->mData->mKeyList, osg::Vec3f(1, 1, 1));
+    }
+
+    MaterialColorController::MaterialColorController(Nif::Vector3KeyMapPtr keys,
+        Nif::NiMaterialColorController::TargetColor targetColor, const osg::Material* baseMaterial)
+        : mData(std::move(keys), osg::Vec3f(1, 1, 1))
+        , mTargetColor(targetColor)
+        , mBaseMaterial(baseMaterial)
+    {
     }
 
     MaterialColorController::MaterialColorController(const MaterialColorController& copy, const osg::CopyOp& copyop)
@@ -606,6 +991,47 @@ namespace NifOsg
             float time = getInputValue(nv);
             node->getParticleSystem()->setFrozen(false);
             node->setEnabled(time >= mEmitStart && time < mEmitStop);
+        }
+        else
+            node->getParticleSystem()->setFrozen(true);
+        traverse(node, nv);
+    }
+
+    PSysEmitterController::PSysEmitterController(const Nif::NiPSysEmitterCtlr* ctrl, float defaultRate)
+        : mDefaultRate(defaultRate)
+    {
+        if (!ctrl->mInterpolator.empty() && ctrl->mInterpolator->mRecordType == Nif::RC_NiFloatInterpolator)
+            mBirthRate = { static_cast<const Nif::NiFloatInterpolator*>(ctrl->mInterpolator.getPtr()) };
+        else
+            mBirthRate = FloatInterpolator(nullptr, defaultRate);
+        if (!ctrl->mVisInterpolator.empty()
+            && (ctrl->mVisInterpolator->mRecordType == Nif::RC_NiBoolInterpolator
+                || ctrl->mVisInterpolator->mRecordType == Nif::RC_NiBoolTimelineInterpolator))
+            mActive = { static_cast<const Nif::NiBoolInterpolator*>(ctrl->mVisInterpolator.getPtr()) };
+        else
+            mActive = BoolInterpolator(nullptr, true);
+    }
+
+    PSysEmitterController::PSysEmitterController(const PSysEmitterController& copy, const osg::CopyOp& copyop)
+        : SceneUtil::NodeCallback<PSysEmitterController, osgParticle::ParticleProcessor*>(copy, copyop)
+        , Controller(copy)
+        , mBirthRate(copy.mBirthRate)
+        , mActive(copy.mActive)
+        , mDefaultRate(copy.mDefaultRate)
+    {
+    }
+
+    void PSysEmitterController::operator()(osgParticle::ParticleProcessor* node, osg::NodeVisitor* nv)
+    {
+        if (hasInput())
+        {
+            const float time = getInputValue(nv);
+            node->getParticleSystem()->setFrozen(false);
+            const bool active = mActive.interpKey(time);
+            node->setEnabled(active);
+            if (auto* emitter = dynamic_cast<Emitter*>(node))
+                if (auto* counter = dynamic_cast<osgParticle::ConstantRateCounter*>(emitter->getCounter()))
+                    counter->setNumberOfParticlesPerSecondToCreate(active ? std::max(0.f, mBirthRate.interpKey(time)) : 0.f);
         }
         else
             node->getParticleSystem()->setFrozen(true);

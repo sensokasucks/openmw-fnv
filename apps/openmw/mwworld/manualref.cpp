@@ -7,6 +7,7 @@
 #include <components/esm4/loadbook.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadweap.hpp>
@@ -96,10 +97,16 @@ namespace
                 return func(store.get<ESM4::Book>());
             case ESM::REC_CLOT4:
                 return func(store.get<ESM4::Clothing>());
+            case ESM::REC_IMOD4:
+                return func(store.get<ESM4::ItemMod>());
             case ESM::REC_INGR4:
                 return func(store.get<ESM4::Ingredient>());
             case ESM::REC_MISC4:
                 return func(store.get<ESM4::MiscItem>());
+            case ESM::REC_KEYM4:
+                return func(store.get<ESM4::Key>());
+            case ESM::REC_NOTE4:
+                return func(store.get<ESM4::Note>());
             case ESM::REC_STAT4:
                 return func(store.get<ESM4::Static>());
             case ESM::REC_TERM4:

@@ -1,5 +1,8 @@
 #include "esm4npc.hpp"
 
+#include <algorithm>
+#include <limits>
+
 #include <components/esm4/loadarmo.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadlvli.hpp>
@@ -7,11 +10,24 @@
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadotft.hpp>
 #include <components/esm4/loadrace.hpp>
+#include <components/esm4/loadweap.hpp>
 
 #include <components/misc/resourcehelpers.hpp>
 
 #include "../mwworld/customdata.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/worldmodel.hpp"
+
+#include <components/esm3/containerstate.hpp>
+
+#include "../mwbase/environment.hpp"
+#include "../mwbase/windowmanager.hpp"
+#include "../mwbase/world.hpp"
+
+#include "../mwgui/mode.hpp"
+#include "../mwmechanics/esm4combat.hpp"
+#include "../mwworld/actionopen.hpp"
+#include "../mwworld/nullaction.hpp"
 
 #include "esm4base.hpp"
 
@@ -62,12 +78,18 @@ namespace MWClass
     public:
         const ESM4::Npc* mTraits;
         const ESM4::Npc* mBaseData;
+        const ESM4::Npc* mModel; // FO3/FONV: the record that provides the skeleton
+        const ESM4::Npc* mAIPackages; // the record whose package list the NPC runs
         const ESM4::Race* mRace;
         bool mIsFemale;
 
         // TODO: Use InventoryStore instead (currently doesn't support ESM4 objects)
         std::vector<const ESM4::Armor*> mEquippedArmor;
         std::vector<const ESM4::Clothing*> mEquippedClothing;
+        const ESM4::Weapon* mEquippedWeapon = nullptr; // FO3/FONV: what the NPC fights with
+        std::vector<const ESM4::Weapon*> mWeapons; // FO3/FONV: every weapon it carries (the combat planner switches)
+        std::vector<int> mWeaponCounts; // how many of each (grenades)
+        MWWorld::ContainerStore mStore; // FO3/FONV: everything it carries
 
         ESM4NpcCustomData& asESM4NpcCustomData() override { return *this; }
         const ESM4NpcCustomData& asESM4NpcCustomData() const override { return *this; }
@@ -103,6 +125,17 @@ namespace MWClass
             Log(Debug::Warning) << "Base data is not found for ESM4 NPC base record: \"" << base->mEditorId << "\" ("
                                 << ESM::RefId(base->mId) << ")";
 
+        data->mModel = chooseTemplate(npcRecs, ESM4::Npc::Template_UseModel);
+        {
+            std::string chain;
+            for (const ESM4::Npc* rec : npcRecs)
+                chain += " " + rec->mEditorId + "(flags=" + std::to_string(rec->mBaseConfig.fo3.templateFlags) + ")";
+            Log(Debug::Verbose) << "ESM4 NPC " << base->mEditorId << " chain:" << chain
+                                << " traits=" << (data->mTraits ? data->mTraits->mEditorId : "none")
+                                << " model=" << (data->mModel ? data->mModel->mEditorId : "none");
+        }
+        data->mAIPackages = chooseTemplate(npcRecs, ESM4::Npc::Template_UseAIPackage);
+
         if (data->mTraits != nullptr)
         {
             data->mRace = store->get<ESM4::Race>().find(data->mTraits->mRace);
@@ -119,11 +152,30 @@ namespace MWClass
 
         if (auto inv = chooseTemplate(npcRecs, ESM4::Npc::Template_UseInventory))
         {
+            data->mStore.fillESM4(inv->mInventory, MWBase::Environment::get().getWorld()->getPrng());
             for (const ESM4::InventoryItem& item : inv->mInventory)
             {
                 if (auto* armor
                     = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Armor>(ESM::FormId::fromUint32(item.item)))
                     data->mEquippedArmor.push_back(armor);
+                else if (auto* weapon = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Weapon>(
+                             ESM::FormId::fromUint32(item.item)))
+                {
+                    // Guns are preferred over melee weapons and grenades
+                    auto isGun = [](const ESM4::Weapon* w) {
+                        return w->mHasFO3Data && w->mFO3Data.animType >= 3 && w->mFO3Data.animType <= 9;
+                    };
+                    if (data->mEquippedWeapon == nullptr || (isGun(weapon) && !isGun(data->mEquippedWeapon)))
+                        data->mEquippedWeapon = weapon;
+                    const auto found = std::find(data->mWeapons.begin(), data->mWeapons.end(), weapon);
+                    if (found == data->mWeapons.end())
+                    {
+                        data->mWeapons.push_back(weapon);
+                        data->mWeaponCounts.push_back(std::max<int>(1, item.count));
+                    }
+                    else
+                        data->mWeaponCounts[found - data->mWeapons.begin()] += std::max<int>(1, item.count);
+                }
                 else if (data->mTraits != nullptr && data->mTraits->mIsTES4)
                 {
                     const auto* clothing = ESM4Impl::resolveLevelled<ESM4::LevelledItem, ESM4::Clothing>(
@@ -150,6 +202,131 @@ namespace MWClass
         return res;
     }
 
+    MWWorld::ContainerStore& ESM4Npc::getContainerStore(const MWWorld::Ptr& ptr) const
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mStore.getPtr().isEmpty())
+        {
+            MWBase::Environment::get().getWorldModel()->registerPtr(ptr);
+            data.mStore.setPtr(ptr);
+        }
+        return data.mStore;
+    }
+
+    std::unique_ptr<MWWorld::Action> ESM4Npc::activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const
+    {
+        if (!MWMechanics::ESM4Combat::isDead(ptr))
+            return std::make_unique<MWWorld::NullAction>();
+        if (!MWBase::Environment::get().getWindowManager()->isAllowed(MWGui::GW_Inventory))
+            return std::make_unique<MWWorld::NullAction>();
+        // the body's levelled items are rolled when first looted (ESM4Container does the same)
+        getContainerStore(ptr);
+        return std::make_unique<MWWorld::ActionOpen>(ptr);
+    }
+
+    float ESM4Npc::getCapacity(const MWWorld::Ptr& ptr) const
+    {
+        return std::numeric_limits<float>::max(); // NPCs are not held to a carry weight
+    }
+
+    float ESM4Npc::getEncumbrance(const MWWorld::Ptr& ptr) const
+    {
+        return getContainerStore(ptr).getWeight();
+    }
+
+    void ESM4Npc::readAdditionalState(const MWWorld::Ptr& ptr, const ESM::ObjectState& state) const
+    {
+        if (!state.mHasCustomState)
+            return;
+        const ESM::ContainerState& containerState = state.asContainerState();
+        // Saves from before NPCs had inventories carry none: keep the freshly rolled one
+        if (containerState.mInventory.mItems.empty())
+            return;
+        MWWorld::ContainerStore& store = getContainerStore(ptr);
+        store.readState(containerState.mInventory);
+    }
+
+    void ESM4Npc::writeAdditionalState(const MWWorld::ConstPtr& ptr, ESM::ObjectState& state) const
+    {
+        if (!ptr.getRefData().getCustomData())
+        {
+            state.mHasCustomState = false;
+            return;
+        }
+        ESM::ContainerState& containerState = state.asContainerState();
+        getCustomData(ptr).mStore.writeState(containerState.mInventory);
+    }
+
+    const ESM4::Weapon* ESM4Npc::getEquippedWeapon(const MWWorld::Ptr& ptr)
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mEquippedWeapon != nullptr)
+        {
+            // A weapon that left the inventory (taken by a script, dropped) is no longer held: run 17 had an NPC
+            // firing a revolver that had been removed from it
+            bool held = false;
+            for (MWWorld::ConstContainerStoreIterator it
+                 = data.mStore.cbegin(MWWorld::ContainerStore::Type_ESM4Weapon);
+                 it != data.mStore.cend(); ++it)
+            {
+                if (it->getCellRef().getCount() > 0 && it->get<ESM4::Weapon>()->mBase == data.mEquippedWeapon)
+                {
+                    held = true;
+                    break;
+                }
+            }
+            if (!held)
+                data.mEquippedWeapon = nullptr;
+        }
+        return data.mEquippedWeapon;
+    }
+
+    // The weapon list follows the inventory, so a gun picked up in a fight (or taken by a script) counts
+    const std::vector<const ESM4::Weapon*>& ESM4Npc::getWeapons(const MWWorld::Ptr& ptr)
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        std::vector<const ESM4::Weapon*> weapons;
+        std::vector<int> counts;
+        for (MWWorld::ConstContainerStoreIterator it = data.mStore.cbegin(MWWorld::ContainerStore::Type_ESM4Weapon);
+             it != data.mStore.cend(); ++it)
+        {
+            if (it->getCellRef().getCount() <= 0)
+                continue;
+            const ESM4::Weapon* weapon = it->get<ESM4::Weapon>()->mBase;
+            const auto found = std::find(weapons.begin(), weapons.end(), weapon);
+            if (found == weapons.end())
+            {
+                weapons.push_back(weapon);
+                counts.push_back(it->getCellRef().getCount());
+            }
+            else
+                counts[found - weapons.begin()] += it->getCellRef().getCount();
+        }
+        // a weapon given by a script without the inventory (setEquippedWeapon) stays usable
+        if (data.mEquippedWeapon != nullptr
+            && std::find(weapons.begin(), weapons.end(), data.mEquippedWeapon) == weapons.end())
+        {
+            weapons.push_back(data.mEquippedWeapon);
+            counts.push_back(1);
+        }
+        data.mWeapons = std::move(weapons);
+        data.mWeaponCounts = std::move(counts);
+        return data.mWeapons;
+    }
+
+    int ESM4Npc::getWeaponCount(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)
+    {
+        const std::vector<const ESM4::Weapon*>& weapons = getWeapons(ptr);
+        const ESM4NpcCustomData& data = getCustomData(ptr);
+        const auto found = std::find(weapons.begin(), weapons.end(), weapon);
+        return found == weapons.end() ? 0 : data.mWeaponCounts[found - weapons.begin()];
+    }
+
+    void ESM4Npc::setEquippedWeapon(const MWWorld::Ptr& ptr, const ESM4::Weapon* weapon)
+    {
+        getCustomData(ptr).mEquippedWeapon = weapon;
+    }
+
     const std::vector<const ESM4::Armor*>& ESM4Npc::getEquippedArmor(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mEquippedArmor;
@@ -160,9 +337,45 @@ namespace MWClass
         return getCustomData(ptr).mEquippedClothing;
     }
 
+    void ESM4Npc::setAppearance(const MWWorld::Ptr& ptr, bool female, const std::vector<const ESM4::Armor*>* apparel)
+    {
+        ESM4NpcCustomData& data = getCustomData(ptr);
+        data.mIsFemale = female;
+        if (apparel != nullptr)
+        {
+            data.mEquippedArmor = *apparel;
+            data.mEquippedClothing.clear();
+        }
+    }
+
     const ESM4::Npc* ESM4Npc::getTraitsRecord(const MWWorld::Ptr& ptr)
     {
         return getCustomData(ptr).mTraits;
+    }
+
+    const ESM4::Npc* ESM4Npc::getAIPackagesRecord(const MWWorld::Ptr& ptr)
+    {
+        return getCustomData(ptr).mAIPackages;
+    }
+
+    void ESM4Npc::insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
+        MWPhysics::PhysicsSystem& physics) const
+    {
+        // The skeleton only carries ragdoll shapes, and arms make the model's bounds too wide: a standing
+        // human, about 128 units tall and 40 wide, of the race's height.
+        const ESM4::Race* race = getRace(ptr);
+        const float height = race == nullptr ? 1.f : (isFemale(ptr) ? race->mHeightFemale : race->mHeightMale);
+        ESM4Impl::insertActorBody(ptr, rotation, physics, osg::Vec3f(20.f, 20.f, 64.f * height), false);
+    }
+
+    void ESM4Npc::adjustScale(const MWWorld::ConstPtr& ptr, osg::Vec3f& scale, bool rendering) const
+    {
+        if (!rendering)
+            return; // the collision body is sized by race height already (insertObjectPhysics)
+        const ESM4NpcCustomData& data = getCustomData(ptr);
+        if (data.mRace == nullptr)
+            return;
+        scale *= data.mIsFemale ? data.mRace->mHeightFemale : data.mRace->mHeightMale;
     }
 
     const ESM4::Race* ESM4Npc::getRace(const MWWorld::Ptr& ptr)
@@ -182,6 +395,12 @@ namespace MWClass
             return {};
         if (data.mTraits->mIsTES4)
             return data.mTraits->mModel.getNormalized();
+        if (data.mTraits->mIsFONV)
+        {
+            if (data.mModel == nullptr)
+                return {};
+            return data.mModel->mModel.getNormalized();
+        }
         return data.mIsFemale ? data.mRace->mModelFemale.getNormalized() : data.mRace->mModelMale.getNormalized();
     }
 
@@ -191,5 +410,18 @@ namespace MWClass
         if (baseData == nullptr)
             return {};
         return baseData->mFullName;
+    }
+
+    const ESM4::Npc* ESM4Npc::getStatsRecord(const MWWorld::Ptr& ptr)
+    {
+        const ESM4::Npc* const base = ptr.get<ESM4::Npc>()->mBase;
+        return chooseTemplate(withBaseTemplates<ESM4::LevelledNpc, ESM4::Npc>(base), ESM4::Npc::Template_UseStats);
+    }
+
+    const ESM4::Npc* ESM4Npc::getFactionsRecord(const MWWorld::Ptr& ptr)
+    {
+        const ESM4::Npc* const base = ptr.get<ESM4::Npc>()->mBase;
+        return chooseTemplate(
+            withBaseTemplates<ESM4::LevelledNpc, ESM4::Npc>(base), ESM4::Npc::Template_UseFactions);
     }
 }

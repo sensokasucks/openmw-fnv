@@ -198,6 +198,23 @@ namespace MWWorld
 
         MWWorld::Ptr toActivate = MWBase::Environment::get().getWorld()->getFocusObject();
 
+        // OPENMW_FNV_UI_TRACE=1 (scripts/omw/fnvuitrace.lua): what the engine itself picked to activate
+        static const bool trace = [] {
+            const char* value = std::getenv("OPENMW_FNV_UI_TRACE");
+            return value != nullptr && *value != '\0' && std::string_view(value) != "0";
+        }();
+        if (trace)
+        {
+            if (toActivate.isEmpty())
+                Log(Debug::Info) << "[activate-engine] nothing in focus";
+            else
+                Log(Debug::Info) << "[activate-engine] focus " << toActivate.getCellRef().getRefId() << " ("
+                                 << toActivate.getCellRef().getRefNum().toString() << ") name \""
+                                 << toActivate.getClass().getName(toActivate) << "\" tooltip "
+                                 << toActivate.getClass().hasToolTip(toActivate) << " enabled "
+                                 << toActivate.getRefData().isEnabled();
+        }
+
         if (toActivate.isEmpty())
             return;
 

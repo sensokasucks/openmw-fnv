@@ -105,6 +105,19 @@ namespace ESM4
             std::uint16_t damage;
             AttributeValues attribs;
         };
+
+        // FO3/FONV DATA
+        struct DataFO3
+        {
+            std::uint8_t type; // 0 animal, 1 mutated animal, 2 mutated insect, 3 abomination, 4 super mutant, ...
+            std::uint8_t combat;
+            std::uint8_t magic;
+            std::uint8_t stealth;
+            std::uint16_t health;
+            std::uint16_t unused;
+            std::uint16_t damage;
+            std::uint8_t special[7]; // strength, perception, endurance, charisma, intelligence, agility, luck
+        };
 #pragma pack(pop)
 
         ESM::FormId mId; // from the header
@@ -117,12 +130,31 @@ namespace ESM4
         ESM::FormId mDeathItem;
         std::vector<ESM::FormId> mSpell;
         ESM::FormId mScriptId;
+        ESM::FormId mVoiceType; // VTCK, FO3/FONV
 
         AIData mAIData;
         std::vector<ESM::FormId> mAIPackages;
         ActorBaseConfig mBaseConfig;
         ActorFaction mFaction;
+        std::vector<ActorFaction> mFactions; // every SNAM
         Data mData;
+        DataFO3 mFO3Data{};
+        bool mHasFO3Data = false;
+
+        // FO3/FONV AIDT
+        struct AIDataFO3
+        {
+            std::uint8_t aggression = 0; // 0 unaggressive, 1 aggressive, 2 very aggressive, 3 frenzied
+            std::uint8_t confidence = 2; // 0 cowardly, 1 cautious, 2 average, 3 brave, 4 foolhardy
+            std::uint8_t energy = 50;
+            std::uint8_t responsibility = 50;
+            std::uint8_t mood = 0;
+            std::int8_t assistance = 0; // 0 helps nobody, 1 allies, 2 friends and allies
+            bool aggroRadiusBehavior = false;
+            std::int32_t aggroRadius = 0;
+        };
+        AIDataFO3 mFO3AIData;
+        bool mHasFO3AIData = false;
         ESM::FormId mCombatStyle;
         ESM::FormId mSoundBase;
         ESM::FormId mSound;

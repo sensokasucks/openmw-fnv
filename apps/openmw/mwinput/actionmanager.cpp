@@ -131,11 +131,15 @@ namespace MWInput
                 quickLoad();
                 break;
             case A_CycleSpellLeft:
-                if (checkAllowedToUseItems() && windowManager->isAllowed(MWGui::GW_Magic))
+                // FO3/FNV have no spells to cycle
+                if (!windowManager->isFalloutHud() && checkAllowedToUseItems()
+                    && windowManager->isAllowed(MWGui::GW_Magic))
                     MWBase::Environment::get().getWindowManager()->cycleSpell(false);
                 break;
             case A_CycleSpellRight:
-                if (checkAllowedToUseItems() && windowManager->isAllowed(MWGui::GW_Magic))
+                // FO3/FNV have no spells to cycle
+                if (!windowManager->isFalloutHud() && checkAllowedToUseItems()
+                    && windowManager->isAllowed(MWGui::GW_Magic))
                     MWBase::Environment::get().getWindowManager()->cycleSpell(true);
                 break;
             case A_CycleWeaponLeft:
@@ -194,6 +198,9 @@ namespace MWInput
 
         if (!MWBase::Environment::get().getWindowManager()->isGuiMode()) // No open GUIs, open up the MainMenu
         {
+            // the FNV pause menu (scripts/omw/fnvmenus) opens on the GameMenu action instead
+            if (MWBase::Environment::get().getWindowManager()->isFalloutHud())
+                return;
             MWBase::Environment::get().getWindowManager()->pushGuiMode(MWGui::GM_MainMenu);
         }
         else // Close current GUI
@@ -217,6 +224,10 @@ namespace MWInput
     void ActionManager::rest()
     {
         if (!MWBase::Environment::get().getInputManager()->getControlSwitch("playercontrols"))
+            return;
+
+        // the FNV wait menu (scripts/omw/fnvmenus) opens on the Rest action instead
+        if (MWBase::Environment::get().getWindowManager()->isFalloutHud())
             return;
 
         if (!MWBase::Environment::get().getWindowManager()->getRestEnabled()

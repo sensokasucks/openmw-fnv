@@ -95,6 +95,7 @@ namespace MWRender
     class FogManager;
     class SkyManager;
     class NpcAnimation;
+    class ESM4NpcAnimation;
     class Pathgrid;
     class Camera;
     class Water;
@@ -226,6 +227,19 @@ namespace MWRender
 
         void rebuildPtr(const MWWorld::Ptr& ptr);
 
+        // FO3/FNV: the player's body in third person, built like an NPC from the game's "Player" NPC_ record (race,
+        // hair, FaceGen), since the player itself stays a Morrowind NPC. It replaces the Morrowind body outside
+        // first person, follows the player, walks and runs with it, and plays furniture idles.
+        bool hasPlayerBody() const { return mPlayerBody != nullptr; }
+        // Apparel (ARMO form ids) the body wears, as worn through the Pip-Boy.
+        void setPlayerBodyApparel(const std::vector<ESM::FormId>& apparel);
+        // Loops an idle KF (e.g. a furniture sit) on the body; empty goes back to standing and walking.
+        void setPlayerBodyIdle(std::string_view model);
+        // FO3/FNV: keeps the first-person arms (and the weapon in them) out of view, as in conversations
+        void setPlayerArmsHidden(bool hidden) { mPlayerArmsHidden = hidden; }
+        // The weapon in the body's hand (a WEAP model) and the aim idle of its animation type; empty puts it away.
+        void setPlayerBodyWeapon(std::string_view model, std::string_view aimIdle);
+
         void processChangedSettings(const Settings::CategorySettingVector& settings);
 
         float getNearClipDistance() const { return mNearClip; }
@@ -342,6 +356,29 @@ namespace MWRender
         std::unique_ptr<SceneUtil::ShadowManager> mShadowManager;
         osg::ref_ptr<PostProcessor> mPostProcessor;
         osg::ref_ptr<NpcAnimation> mPlayerAnimation;
+        std::shared_ptr<void> mPlayerBodyRef; // the MWWorld::LiveCellRef<ESM4::Npc> the body is drawn from
+        osg::ref_ptr<osg::Group> mPlayerBodyNode;
+        osg::ref_ptr<ESM4NpcAnimation> mPlayerBody;
+        // The FO3/FNV first-person arms: the same record on characters/_1stperson/skeleton.nif, kept at the camera
+        std::shared_ptr<void> mPlayerArmsRef;
+        osg::ref_ptr<osg::MatrixTransform> mPlayerArmsNode;
+        osg::ref_ptr<ESM4NpcAnimation> mPlayerArms;
+        osg::Matrixf mPlayerArmsCamera; // Camera1st in the arms skeleton, at rest
+        bool mPlayerArmsHidden = false;
+        osg::ref_ptr<osg::Callback> mHideMorrowindBody;
+        std::vector<ESM::FormId> mPlayerBodyApparel;
+        std::string mPlayerBodyIdle;
+        std::string mPlayerBodyWeapon;
+        std::string mPlayerBodyAimIdle;
+        osg::Vec3f mPlayerBodyLastPosition;
+        float mPlayerBodySpeed = 0.f;
+        osg::Vec3f mPlayerBodyVelocity;
+
+        void createPlayerBody();
+        void createPlayerArms(const MWWorld::Ptr& ptr);
+        void updatePlayerBody(float dt, bool paused);
+        // Walks, runs or stands the body or the arms with the player's movement
+        void updatePlayerLocomotion(ESM4NpcAnimation& animation);
         osg::ref_ptr<SceneUtil::PositionAttitudeTransform> mPlayerNode;
         std::unique_ptr<Camera> mCamera;
         osg::ref_ptr<Debug::DebugDrawer> mDebugDraw;

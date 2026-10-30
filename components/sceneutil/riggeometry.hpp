@@ -49,6 +49,8 @@ namespace SceneUtil
         using BoneWeights = std::vector<BoneWeight>;
 
         void setBoneInfo(std::vector<BoneInfo>&& bones);
+        /// Returns the inverse bind matrix of the named bone, if this geometry is skinned to it.
+        const osg::Matrixf* getInvBindMatrix(std::string_view boneName) const;
         // Convert influences in bone and weight list per vertex format
         void setInfluences(const std::vector<BoneWeights>& influences);
 
@@ -61,6 +63,13 @@ namespace SceneUtil
         void setRootBone(std::string_view name);
 
         osg::ref_ptr<osg::Geometry> getSourceGeometry() const;
+
+        /// Draw these primitive sets of the source geometry instead of all of them (dismembered limbs). Shared by
+        /// copies of the source geometry; this RigGeometry's own geometry keeps its own list.
+        void setPrimitiveSets(const osg::Geometry::PrimitiveSetList& primitives);
+
+        /// Names of the bones the geometry is skinned to (lower case).
+        std::vector<std::string> getBoneNames() const;
 
         void accept(osg::NodeVisitor& nv) override;
         bool supports(const osg::PrimitiveFunctor&) const override { return true; }

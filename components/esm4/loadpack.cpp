@@ -37,6 +37,8 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
     mId = reader.getFormIdFromHeader();
     mFlags = reader.hdr().record.flags;
 
+    Event* event = nullptr; // the POBA/POEA/POCA block being read
+
     while (reader.getSubRecordHeader())
     {
         const ESM4::SubRecordHeader& subHdr = reader.subRecordHeader();
@@ -47,56 +49,104 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
                 break;
             case ESM::fourCC("PKDT"):
             {
-                if (subHdr.dataSize != sizeof(PKDT) && subHdr.dataSize == 4)
+                if (subHdr.dataSize == 12) // FO3/FONV
                 {
-                    // std::cout << "skip fallout" << mEditorId << std::endl; // FIXME
+                    std::uint8_t type = 0;
+                    std::uint8_t unused = 0;
+                    std::uint16_t padding = 0;
+                    reader.get(mData.flags);
+                    reader.get(type);
+                    reader.get(unused);
+                    reader.get(mBehaviourFlags);
+                    reader.get(mSpecificFlags);
+                    reader.get(padding);
+                    mData.type = type;
+                }
+                else if (subHdr.dataSize == sizeof(mData))
+                    reader.get(mData);
+                else if (subHdr.dataSize == 4)
+                {
                     reader.get(mData.flags);
                     mData.type = 0; // FIXME
                 }
-                else if (subHdr.dataSize != sizeof(mData))
-                    reader.skipSubRecordData(); // FIXME: FO3
                 else
-                    reader.get(mData);
+                    reader.skipSubRecordData();
 
                 break;
             }
-            case ESM::fourCC("PSDT"): // reader.get(mSchedule); break;
+            case ESM::fourCC("PSDT"):
             {
                 if (subHdr.dataSize != sizeof(mSchedule))
-                    reader.skipSubRecordData(); // FIXME:
+                    reader.skipSubRecordData(); // FIXME: TES5
                 else
-                    reader.get(mSchedule); // TES4
+                    reader.get(mSchedule);
 
                 break;
             }
             case ESM::fourCC("PLDT"):
+            case ESM::fourCC("PLD2"):
             {
-                if (subHdr.dataSize != sizeof(mLocation))
+                if (subHdr.dataSize != sizeof(PLDT))
+                {
                     reader.skipSubRecordData(); // FIXME:
+                    break;
+                }
+                PLDT data;
+                reader.get(data);
+                // Location types 4 (object id) and 5 (object type) mean the same in TES4 and FO3/FONV.
+                Location& location = mLocations[subHdr.typeId == ESM::fourCC("PLD2") ? 1 : 0];
+                location.type = data.type;
+                location.radius = data.radius;
+                if (data.type == Location_ObjectType)
+                    location.objectType = data.location;
                 else
                 {
-                    reader.get(mLocation); // TES4
-                    if (mLocation.type != 5)
-                        reader.adjustFormId(mLocation.location);
+                    location.location = ESM::FormId::fromUint32(data.location);
+                    reader.adjustFormId(location.location);
+                    data.location = location.location.toUint32();
                 }
+                if (subHdr.typeId == ESM::fourCC("PLDT"))
+                    mLocation = data;
 
                 break;
             }
             case ESM::fourCC("PTDT"):
+            case ESM::fourCC("PTD2"):
             {
-                if (subHdr.dataSize != sizeof(mTarget))
-                    reader.skipSubRecordData(); // FIXME: FO3
-                else
+                if (subHdr.dataSize == sizeof(mTarget)) // TES4
                 {
-                    reader.get(mTarget); // TES4
-                    if (mLocation.type != 2)
+                    reader.get(mTarget);
+                    if (mTarget.type != 2)
                         reader.adjustFormId(mTarget.target);
                 }
+                else if (subHdr.dataSize == 16) // FO3/FONV
+                {
+                    Target& target = mTargets[subHdr.typeId == ESM::fourCC("PTD2") ? 1 : 0];
+                    std::uint32_t form = 0;
+                    reader.get(target.type);
+                    reader.get(form);
+                    reader.get(target.count);
+                    reader.get(target.unknown);
+                    target.target = ESM::FormId::fromUint32(form);
+                    if (target.type != 2)
+                        reader.adjustFormId(target.target);
+                }
+                else
+                    reader.skipSubRecordData();
 
                 break;
             }
             case ESM::fourCC("CTDA"):
             {
+                if (subHdr.dataSize == 28) // FO3/FONV
+                {
+                    TargetCondition condition;
+                    reader.get(condition);
+                    if (condition.reference)
+                        reader.adjustFormId(condition.reference);
+                    addDialogCondition(reader, mFoConditions, condition, true);
+                    break;
+                }
                 if (subHdr.dataSize != sizeof(CTDA))
                 {
                     reader.skipSubRecordData(); // FIXME: FO3
@@ -112,32 +162,176 @@ void ESM4::AIPackage::load(ESM4::Reader& reader)
 
                 break;
             }
-            case ESM::fourCC("CTDT"): // always 20 for TES4
-            case ESM::fourCC("TNAM"): // FO3
-            case ESM::fourCC("INAM"): // FO3
-            case ESM::fourCC("CNAM"): // FO3
-            case ESM::fourCC("SCHR"): // FO3
             case ESM::fourCC("POBA"): // FO3
-            case ESM::fourCC("POCA"): // FO3
             case ESM::fourCC("POEA"): // FO3
-            case ESM::fourCC("SCTX"): // FO3
+            case ESM::fourCC("POCA"): // FO3
+            {
+                if (subHdr.typeId == ESM::fourCC("POBA"))
+                    event = &mOnBegin;
+                else if (subHdr.typeId == ESM::fourCC("POEA"))
+                    event = &mOnEnd;
+                else
+                    event = &mOnChange;
+                reader.skipSubRecordData();
+                break;
+            }
+            case ESM::fourCC("INAM"): // FO3: the event's idle
+            case ESM::fourCC("TNAM"): // FO3: the event's topic
+            {
+                if (event == nullptr || subHdr.dataSize != 4)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                // 0 means none; adjusting it would turn it into a form id of this plugin
+                std::uint32_t form = 0;
+                reader.get(form);
+                if (form != 0)
+                {
+                    ESM::FormId& id = subHdr.typeId == ESM::fourCC("INAM") ? event->mIdle : event->mTopic;
+                    id = ESM::FormId::fromUint32(form);
+                    reader.adjustFormId(id);
+                }
+                break;
+            }
+            case ESM::fourCC("SCTX"): // FO3: the event's script source
+            {
+                if (event == nullptr)
+                    reader.skipSubRecordData();
+                else
+                    reader.getString(event->mScript);
+                break;
+            }
+            case ESM::fourCC("PKDD"): // FO3
+            {
+                if (subHdr.dataSize < 8)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                reader.get(mDialogueFov);
+                std::uint32_t topic = 0;
+                reader.get(topic);
+                if (topic != 0)
+                {
+                    mDialogueTopic = ESM::FormId::fromUint32(topic);
+                    reader.adjustFormId(mDialogueTopic);
+                }
+                std::uint32_t left = subHdr.dataSize - 8;
+                if (left >= 4)
+                {
+                    reader.get(mDialogueFlags);
+                    left -= 4;
+                }
+                if (left >= 8)
+                {
+                    reader.skipSubRecordData(4); // unused
+                    reader.get(mDialogueType);
+                    left -= 8;
+                }
+                if (left > 0)
+                    reader.skipSubRecordData(left);
+                break;
+            }
+            case ESM::fourCC("IDLF"): // FO3
+                if (subHdr.dataSize >= 1)
+                {
+                    reader.get(mIdleFlags);
+                    if (subHdr.dataSize > 1)
+                        reader.skipSubRecordData(subHdr.dataSize - 1);
+                }
+                break;
+            case ESM::fourCC("IDLT"): // FO3
+                if (subHdr.dataSize == 4)
+                    reader.get(mIdleTimer);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("IDLA"): // FO3
+            {
+                for (std::uint32_t i = 0; i + 4 <= subHdr.dataSize; i += 4)
+                {
+                    std::uint32_t form = 0;
+                    reader.get(form);
+                    if (form == 0)
+                        continue;
+                    ESM::FormId id = ESM::FormId::fromUint32(form);
+                    reader.adjustFormId(id);
+                    mIdles.push_back(id);
+                }
+                if (subHdr.dataSize % 4 != 0)
+                    reader.skipSubRecordData(subHdr.dataSize % 4);
+                break;
+            }
+            case ESM::fourCC("PKPT"): // FO3
+            {
+                std::uint8_t repeatable = 0;
+                if (subHdr.dataSize >= 1)
+                {
+                    reader.get(repeatable);
+                    if (subHdr.dataSize > 1)
+                        reader.skipSubRecordData(subHdr.dataSize - 1);
+                }
+                mPatrolRepeatable = repeatable != 0;
+                break;
+            }
+            case ESM::fourCC("PKE2"): // FO3
+                if (subHdr.dataSize == 4)
+                    reader.get(mEscortDistance);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("PKFD"): // FO3
+                if (subHdr.dataSize == 4)
+                    reader.get(mFollowTriggerRadius);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("CNAM"): // FO3: combat style
+            {
+                if (subHdr.dataSize != 4)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                std::uint32_t form = 0;
+                reader.get(form);
+                if (form != 0)
+                {
+                    mCombatStyle = ESM::FormId::fromUint32(form);
+                    reader.adjustFormId(mCombatStyle);
+                }
+                break;
+            }
+            case ESM::fourCC("PKW3"): // FO3
+            {
+                if (subHdr.dataSize < 20)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                reader.get(mUseWeapon.flags);
+                reader.get(mUseWeapon.fireRate);
+                reader.get(mUseWeapon.fireCount);
+                reader.get(mUseWeapon.bursts);
+                reader.get(mUseWeapon.shotsPerVolleyMin);
+                reader.get(mUseWeapon.shotsPerVolleyMax);
+                reader.get(mUseWeapon.pauseMin);
+                reader.get(mUseWeapon.pauseMax);
+                if (subHdr.dataSize > 20)
+                    reader.skipSubRecordData(subHdr.dataSize - 20);
+                mHasUseWeapon = true;
+                break;
+            }
+            case ESM::fourCC("CTDT"): // always 20 for TES4
+            case ESM::fourCC("SCHR"): // FO3
             case ESM::fourCC("SCDA"): // FO3
             case ESM::fourCC("SCRO"): // FO3
-            case ESM::fourCC("IDLA"): // FO3
             case ESM::fourCC("IDLC"): // FO3
-            case ESM::fourCC("IDLF"): // FO3
-            case ESM::fourCC("IDLT"): // FO3
-            case ESM::fourCC("PKDD"): // FO3
             case ESM::fourCC("PKD2"): // FO3
-            case ESM::fourCC("PKPT"): // FO3
             case ESM::fourCC("PKED"): // FO3
-            case ESM::fourCC("PKE2"): // FO3
             case ESM::fourCC("PKAM"): // FO3
             case ESM::fourCC("PUID"): // FO3
-            case ESM::fourCC("PKW3"): // FO3
-            case ESM::fourCC("PTD2"): // FO3
-            case ESM::fourCC("PLD2"): // FO3
-            case ESM::fourCC("PKFD"): // FO3
             case ESM::fourCC("SLSD"): // FO3
             case ESM::fourCC("SCVR"): // FO3
             case ESM::fourCC("SCRV"): // FO3

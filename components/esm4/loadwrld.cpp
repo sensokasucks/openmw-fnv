@@ -149,8 +149,20 @@ void ESM4::World::load(ESM4::Reader& reader)
             case ESM::fourCC("XLCN"):
             case ESM::fourCC("NAM3"):
             case ESM::fourCC("NAM4"):
-            case ESM::fourCC("NAMA"):
             case ESM::fourCC("ONAM"):
+                // FONV world map offset: scale, cell X offset, cell Y offset (, Z offset)
+                if (subHdr.dataSize >= 12)
+                {
+                    reader.get(mMapOffset.scale);
+                    reader.get(mMapOffset.cellX);
+                    reader.get(mMapOffset.cellY);
+                    mMapOffset.present = true;
+                    reader.skipSubRecordData(subHdr.dataSize - 12);
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("NAMA"):
             case ESM::fourCC("TNAM"):
             case ESM::fourCC("UNAM"):
             case ESM::fourCC("XWEM"):

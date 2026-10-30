@@ -305,7 +305,7 @@ namespace MWGui
         }
         else
         {
-            if (!mFocusObject.isEmpty())
+            if (!mFocusObject.isEmpty() && !mFocusTooltipHidden)
             {
                 MyGUI::IntSize tooltipSize = getToolTipViaPtr(mFocusObject.getCellRef().getCount(), true, checkOwned());
 

@@ -154,7 +154,11 @@ namespace MWGui
 
     void ContainerWindow::setPtr(const MWWorld::Ptr& container)
     {
-        if (container.isEmpty() || (container.getType() != ESM::REC_CONT && !container.getClass().isActor()))
+        // FO3/FNV NPCs and creatures (REC_NPC_4, REC_CREA4) are looted through here too; they aren't actors to
+        // the engine
+        if (container.isEmpty() || (container.getType() != ESM::REC_CONT && container.getType() != ESM::REC_CONT4
+                && container.getType() != ESM::REC_NPC_4 && container.getType() != ESM::REC_CREA4
+                && !container.getClass().isActor()))
             throw std::runtime_error("Invalid argument in ContainerWindow::setPtr");
         bool lootAnyway = mTreatNextOpenAsLoot;
         mTreatNextOpenAsLoot = false;

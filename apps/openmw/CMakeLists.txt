@@ -18,7 +18,7 @@ set(OPENMW_HEADERS
 source_group(apps/openmw FILES main.cpp androidmain.cpp ${OPENMW_SOURCES} ${OPENMW_HEADERS} ${OPENMW_RESOURCES})
 
 add_openmw_dir (mwrender
-    actors objects renderingmanager animation rotatecontroller sky skyutil npcanimation esm4npcanimation vismask
+    actors objects renderingmanager animation rotatecontroller sky skyutil npcanimation esm4npcanimation esm4dismember esm4facegen vismask
     creatureanimation effectmanager util renderinginterface pathgrid rendermode weaponanimation screenshotmanager
     bulletdebugdraw globalmap characterpreview camera localmap water terrainstorage ripplesimulation
     renderbin actoranimation landmanager navmesh actorspaths recastmesh fogmanager objectpaging groundcover
@@ -64,10 +64,10 @@ add_openmw_dir (mwlua
     mwscriptbindings camerabindings vfsbindings uibindings soundbindings inputbindings nearbybindings dialoguebindings
     postprocessingbindings stats recordstore debugbindings corebindings worldbindings worker landbindings magicbindings factionbindings
     classbindings itemdata inputprocessor animationbindings birthsignbindings racebindings markupbindings weatherbindings regionbindings 
-    obscriptbindings obscriptcompiler types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
+    obscriptbindings obscriptcompiler obscriptdialoguebindings obscriptaibindings obscriptcombatbindings obscriptphysicalbindings obscriptstatsbindings obscripteffectbindings obscriptradiobindings types/types types/door types/item types/actor types/container types/lockable types/weapon types/npc
     types/bodypart types/creature types/player types/activator types/book types/lockpick types/probe types/apparatus
     types/potion types/ingredient types/misc types/repair types/armor types/light types/static
-    types/clothing types/levelledlist types/terminal magictypebindings
+    types/clothing types/levelledlist types/terminal types/furniture types/idlemarker types/note magictypebindings
     )
 
 add_openmw_dir (mwsound
@@ -80,7 +80,7 @@ add_openmw_dir (mwworld
     containerstore actiontalk actiontake manualref player cellvisitors failedaction
     worldmodel localscripts customdata inventorystore ptr actionopen actionread actionharvest
     actionequip timestamp actionalchemy cellstore actionapply actioneat
-    store esmstore fallback actionrepair actionsoulgem livecellref actiondoor
+    store esmstore esm4gamesettings esm4gamesettingdefaults fallback actionrepair actionsoulgem livecellref actiondoor
     contentloader esmloader actiontrap cellreflist cellref weather projectilemanager
     cellpreloader datetimemanager groundcoverstore magiceffects cell ptrregistry
     positioncellgrid
@@ -89,13 +89,13 @@ add_openmw_dir (mwworld
 add_openmw_dir (mwphysics
     physicssystem trace collisiontype actor convert object heightfield closestnotmerayresultcallback
     contacttestresultcallback stepper movementsolver projectile
-    actorconvexcallback raycasting mtphysics contacttestwrapper projectileconvexcallback
+    actorconvexcallback raycasting mtphysics contacttestwrapper projectileconvexcallback ragdoll
     )
 
 add_openmw_dir (mwclass
-    classes activator creature npc weapon armor potion apparatus book clothing container door
+    classes activator creature npc weapon armor potion apparatus book clothing container door esm4lock
     ingredient creaturelevlist itemlevlist light lockpick misc probe repair static actor bodypart
-    esm4base esm4npc light4
+    esm4base esm4container esm4creature esm4door esm4item esm4npc esm4stats light4
     )
 
 add_openmw_dir (mwmechanics
@@ -104,7 +104,7 @@ add_openmw_dir (mwmechanics
     aicast aiescort aiface aiactivate aicombat recharge repair enchanting pathfinding pathgrid security spellcasting spellresistance
     disease pickpocket levelledlist combat steering obstacle autocalcspell difficultyscaling aicombataction summoning
     character actors objects aistate weaponpriority spellpriority weapontype spellutil
-    spelleffects
+    spelleffects esm4navigation esm4actors esm4combat esm4gore esm4physical
     )
 
 add_openmw_dir (mwstate

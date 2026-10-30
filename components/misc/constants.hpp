@@ -31,11 +31,17 @@ namespace Constants
     // ESM4 cells are twice smaller, so the active grid should have more cells.
     constexpr int ESM4CellGridRadius = CellGridRadius * 2;
 
+    // User value (string) on the root of a loaded FO3/FONV NIF: the bone the model hangs off ("Prn" extra data)
+    const std::string AttachmentBone = "AttachmentBone";
+
     // A label to mark night/day visual switches
     const std::string NightDayLabel = "NightDaySwitch";
 
     // A label to mark visual switches for herbalism feature
     const std::string HerbalismLabel = "HerbalismSwitch";
+
+    // A label to mark Gamebryo models that loop an embedded "Idle" sequence (e.g. waving flags)
+    const std::string EmbeddedIdleLabel = "EmbeddedIdleAnimation";
 
     // Percentage height at which projectiles are spawned from an actor
     constexpr float TorsoHeight = 0.75f;

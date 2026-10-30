@@ -43,6 +43,7 @@ namespace MyGUIPlatform
         osg::StateSet* getInjectState() { return mInjectState; }
 
         const std::string& getName() const override { return mName; }
+        void setName(const std::string& name) { mName = name; }
 
         void createManual(int width, int height, MyGUI::TextureUsage usage, MyGUI::PixelFormat format) override;
         void loadFromFile(const std::string& fname) override;

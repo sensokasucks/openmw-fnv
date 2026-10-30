@@ -47,6 +47,7 @@ namespace ESM4
 
         std::string mEditorId;
         std::string mMusicFile;
+        float mAttenuation = 0.f; // FONV ANAM, dB
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

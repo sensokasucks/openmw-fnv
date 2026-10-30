@@ -71,10 +71,15 @@ namespace ESM4
     struct Door;
     struct Furniture;
     struct Flora;
+    struct IdleMarker;
     struct Ingredient;
     struct ItemMod;
+    struct Key;
     struct MiscItem;
     struct MovableStatic;
+    struct Note;
+    struct Projectile;
+    struct TalkingActivator;
     struct StaticCollection;
     struct Terminal;
     struct Tree;
@@ -99,8 +104,10 @@ namespace MWWorld
         CellRefList<ESM4::Ammunition>, CellRefList<ESM4::Armor>, CellRefList<ESM4::Book>, CellRefList<ESM4::Clothing>,
         CellRefList<ESM4::Container>, CellRefList<ESM4::Door>, CellRefList<ESM4::Flora>, CellRefList<ESM4::Ingredient>,
         CellRefList<ESM4::ItemMod>, CellRefList<ESM4::Terminal>, CellRefList<ESM4::Tree>, CellRefList<ESM4::MiscItem>,
-        CellRefList<ESM4::MovableStatic>, CellRefList<ESM4::Weapon>, CellRefList<ESM4::Furniture>,
-        CellRefList<ESM4::Creature>, CellRefList<ESM4::Npc>, CellRefList<ESM4::StaticCollection>>;
+        CellRefList<ESM4::Key>, CellRefList<ESM4::MovableStatic>, CellRefList<ESM4::Weapon>, CellRefList<ESM4::Furniture>,
+        CellRefList<ESM4::Creature>, CellRefList<ESM4::Npc>, CellRefList<ESM4::StaticCollection>,
+        CellRefList<ESM4::Note>, CellRefList<ESM4::IdleMarker>, CellRefList<ESM4::Projectile>,
+        CellRefList<ESM4::TalkingActivator>>;
 
     /// \brief Mutable state of a cell
     class CellStore
@@ -202,6 +209,14 @@ namespace MWWorld
 
         void preload();
         ///< Build ID list from content file.
+
+        /// Load one content-file reference flagged persistent (ESM4) and register it, so that scripts and AI reach it
+        /// while the cell is not loaded, as in the original engine. A later load() adds the other references. Does
+        /// nothing if the cell is loaded already.
+        void loadPersistentRef(const ESM4::Reference& ref);
+        void loadPersistentRef(const ESM4::ActorCharacter& ref);
+
+        bool hasPersistentRefs() const { return mHasPersistentRefs; }
 
         /// Call visitor (MWWorld::Ptr) for each reference. visitor must return a bool. Returning
         /// false will abort the iteration.
@@ -351,6 +366,8 @@ namespace MWWorld
         MWWorld::Cell mCellVariant;
         State mState;
         bool mHasState;
+        // Persistent references were loaded while the cell was not; load() skips them.
+        bool mHasPersistentRefs = false;
         std::vector<ESM::RefId> mIds;
         float mWaterLevel;
 
@@ -424,6 +441,8 @@ namespace MWWorld
 
         void loadRef(const ESM4::Reference& ref);
         void loadRef(const ESM4::ActorCharacter& ref);
+        template <class R>
+        void loadPersistentRefImpl(const R& ref);
         void loadRef(ESM::CellRef& ref, bool deleted, std::map<ESM::RefNum, ESM::RefId>& refNumToID);
         ///< Make case-adjustments to \a ref and insert it into the respective container.
         ///

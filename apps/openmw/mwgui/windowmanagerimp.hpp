@@ -14,6 +14,7 @@
 
 #include "../mwbase/windowmanager.hpp"
 #include "../mwrender/localmap.hpp"
+#include "../mwworld/ptr.hpp"
 
 #include <components/misc/guarded.hpp>
 #include <components/myguiplatform/myguiplatform.hpp>
@@ -208,6 +209,7 @@ namespace MWGui
         void changeCell(const MWWorld::CellStore* cell) override; ///< change the active cell
 
         void setFocusObject(const MWWorld::Ptr& focus) override;
+        MWWorld::Ptr getFocusObject() const override { return mFocusObject.ptrOrEmpty(); }
         void setFocusObjectScreenCoords(float x, float y) override;
 
         void getMousePosition(int& x, int& y) override;
@@ -253,6 +255,11 @@ namespace MWGui
         /// Turn visibility of HUD on or off
         bool setHudVisibility(bool show) override;
         bool isHudVisible() const override { return mHudEnabled; }
+        void setFalloutHud(bool enabled) override;
+        bool isFalloutHud() const override;
+        void setFalloutContent(bool enabled) override;
+        bool isFalloutContent() const override { return mFalloutContent; }
+        bool isSneakHidden() const override;
 
         void disallowMouse() override;
         void allowMouse() override;
@@ -276,6 +283,8 @@ namespace MWGui
             bool block = false, int defaultFocus = -1) override;
 
         int readPressedButton() override; ///< returns the index of the pressed button or -1 if no button was pressed
+
+        MWRender::LocalMap* getLocalMapRender() override { return mLocalMapRender.get(); }
                                           ///< (->MessageBoxmanager->InteractiveMessageBox)
 
         void update(float duration);
@@ -423,6 +432,8 @@ namespace MWGui
         osgViewer::Viewer* mViewer;
 
         std::unique_ptr<Gui::FontLoader> mFontLoader;
+
+        bool mFalloutContent = false;
         std::unique_ptr<StatsWatcher> mStatsWatcher;
 
         bool mConsoleOnlyScripts;
@@ -488,6 +499,7 @@ namespace MWGui
         MyGUI::Widget* mInputBlocker;
 
         bool mHudEnabled;
+        MWWorld::SafePtr mFocusObject;
         bool mCursorVisible;
         bool mCursorActive;
 
@@ -601,6 +613,14 @@ namespace MWGui
         void onClipboardRequested(std::string_view type, std::string& data);
 
         void createTextures();
+        void createFalloutTextures();
+
+    public:
+        /// FO3/FNV content, known before the window manager is made: its skins and fonts take FNV's look
+        static void setFalloutUi(bool enabled) { sFalloutUi = enabled; }
+
+    private:
+        static inline bool sFalloutUi = false;
         void createCursors();
         void setMenuTransparency(float value);
 

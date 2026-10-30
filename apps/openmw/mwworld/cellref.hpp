@@ -3,6 +3,8 @@
 
 #include <string_view>
 
+#include <osg/Vec3f>
+
 #include <components/esm/esmbridge.hpp>
 #include <components/esm3/cellref.hpp>
 #include <components/esm4/loadrefr.hpp>
@@ -40,6 +42,91 @@ namespace MWWorld
 
         /// Does the RefNum have a content file?
         bool hasContentFile() const { return getRefNum().hasContentFile(); }
+
+        // Half extents of a trigger volume primitive (ESM4 REFR XPRM); all zero if none.
+        osg::Vec3f getPrimitiveBounds() const
+        {
+            struct Visitor
+            {
+                osg::Vec3f operator()(const ESM::CellRef&) { return osg::Vec3f(); }
+                osg::Vec3f operator()(const ESM4::Reference& ref)
+                {
+                    return osg::Vec3f(ref.mPrimitiveBounds[0], ref.mPrimitiveBounds[1], ref.mPrimitiveBounds[2]);
+                }
+                osg::Vec3f operator()(const ESM4::ActorCharacter&) { return osg::Vec3f(); }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
+        // The ragdoll pose a placed dead FO3/FNV actor was given (ESM4 XRGD); nullptr for other references
+        const std::vector<ESM4::ActorCharacter::RagdollBone>* getRagdollPose() const
+        {
+            struct Visitor
+            {
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM::CellRef&) { return nullptr; }
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM4::Reference&) { return nullptr; }
+                const std::vector<ESM4::ActorCharacter::RagdollBone>* operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return ref.mRagdollPose.empty() ? nullptr : &ref.mRagdollPose;
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
+        // The Euler rotation of the skeleton's Bip01 for that pose (ESM4 XRGB); nullptr if the reference has none
+        const float* getRagdollRootRotation() const
+        {
+            struct Visitor
+            {
+                const float* operator()(const ESM::CellRef&) { return nullptr; }
+                const float* operator()(const ESM4::Reference&) { return nullptr; }
+                const float* operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return ref.mHasRagdollRootRotation ? ref.mRagdollRootRotation : nullptr;
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
+        // A placed FO3/FNV actor the designers put down dead: the "starts dead" record flag, or a ragdoll pose
+        // (FalloutNV.esm sets no flag on its corpses, only XRGD)
+        bool startsDead() const
+        {
+            struct Visitor
+            {
+                bool operator()(const ESM::CellRef&) { return false; }
+                bool operator()(const ESM4::Reference&) { return false; }
+                bool operator()(const ESM4::ActorCharacter& ref)
+                {
+                    return (ref.mFlags & ESM4::Rec_StartDead) != 0 || !ref.mRagdollPose.empty();
+                }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
+        // Linked reference (ESM4 XLKR, GetLinkedRef); zero if none.
+        ESM::FormId getLinkedRef() const
+        {
+            struct Visitor
+            {
+                ESM::FormId operator()(const ESM::CellRef&) { return {}; }
+                ESM::FormId operator()(const ESM4::Reference& ref) { return ref.mLinkedRef; }
+                ESM::FormId operator()(const ESM4::ActorCharacter& ref) { return ref.mLinkedRef; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
+        // Patrol idle time (ESM4 XPRD) in seconds; negative when the reference is not a patrol point.
+        float getPatrolIdleTime() const
+        {
+            struct Visitor
+            {
+                float operator()(const ESM::CellRef&) { return -1.f; }
+                float operator()(const ESM4::Reference& ref) { return ref.mPatrolIdleTime; }
+                float operator()(const ESM4::ActorCharacter&) { return -1.f; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
 
         // Id of object being referenced
         ESM::RefId getRefId() const
@@ -142,6 +229,18 @@ namespace MWWorld
         }
         void setOwner(const ESM::RefId& owner);
 
+        // ESM4: the global (XGLB) that, when set, lets anyone use the owned reference (rented beds)
+        ESM::FormId getOwnerGlobal() const
+        {
+            struct Visitor
+            {
+                ESM::FormId operator()(const ESM::CellRef&) { return {}; }
+                ESM::FormId operator()(const ESM4::Reference& ref) { return ref.mGlobal; }
+                ESM::FormId operator()(const ESM4::ActorCharacter& ref) { return ref.mGlobal; }
+            };
+            return std::visit(Visitor(), mCellRef.mVariant);
+        }
+
         // Name of a global variable. If the global variable is set to '1', using the object is temporarily allowed
         // even if it has an Owner field.
         // Used by bed rent scripts to allow the player to use the bed for the duration of the rent.
@@ -156,7 +255,8 @@ namespace MWWorld
             {
                 ESM::RefId operator()(const ESM::CellRef& ref) { return ref.mSoul; }
                 ESM::RefId operator()(const ESM4::Reference& /*ref*/) { return ESM::RefId(); }
-                ESM::RefId operator()(const ESM4::ActorCharacter&) { throw std::logic_error("Not applicable"); }
+                // Asked of every reference read from a saved game.
+                ESM::RefId operator()(const ESM4::ActorCharacter& /*ref*/) { return ESM::RefId(); }
             };
             return std::visit(Visitor(), mCellRef.mVariant);
         }
@@ -260,6 +360,10 @@ namespace MWWorld
 
         // Write the content of this CellRef into the given ObjectState
         void writeState(ESM::ObjectState& state) const;
+
+        // Read state written by writeState(). An ESM4 reference keeps its content file data and only takes the
+        // fields that change during play; an ESM3 one is replaced entirely.
+        void loadState(const ESM::ObjectState& state);
 
         // Has this CellRef changed since it was originally loaded?
         bool hasChanged() const { return mChanged; }

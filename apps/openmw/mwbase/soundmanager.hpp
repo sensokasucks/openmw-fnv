@@ -124,6 +124,10 @@ namespace MWBase
         /// \param fade time in seconds to fade out current track before start this one.
 
         virtual bool isMusicPlaying() = 0;
+
+        /// FO3/FNV: turns every sound but voices (and the movie) down to factor of its volume, reaching it over
+        /// seconds; factor 1 brings them back. The original does this while someone talks to the player.
+        virtual void setDucking(float factor, float seconds) = 0;
         ///< Returns true if music is playing
 
         virtual void say(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename) = 0;
@@ -133,6 +137,15 @@ namespace MWBase
         virtual void say(VFS::Path::NormalizedView filename) = 0;
         ///< Say some text, without an actor ref
         /// \param filename name of a sound file in the VFS
+
+        virtual void sayFrom(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename, float offset,
+            float volume, float minDistance, float maxDistance)
+            = 0;
+        ///< Like say, starting offset seconds into the file (FNV radio stations broadcast whether anyone
+        /// listens). The player's lines play in 2D. Distances <= 0 take the voice defaults.
+
+        virtual void setSayVolume(const MWWorld::ConstPtr& reference, float volume) = 0;
+        ///< Volume (0..1) of what the reference is saying now
 
         virtual bool sayActive(const MWWorld::ConstPtr& reference = MWWorld::ConstPtr()) const = 0;
         ///< Is actor not speaking?

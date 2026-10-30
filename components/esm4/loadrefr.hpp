@@ -67,10 +67,11 @@ namespace ESM4
 
     struct RadioStationData
     {
-        float rangeRadius;
+        bool present = false;
+        float rangeRadius = 0.f;
         // 0 radius, 1 everywhere, 2 worldspace and linked int, 3 linked int, 4 current cell only
-        std::uint32_t broadcastRange;
-        float staticPercentage;
+        std::uint32_t broadcastRange = 0;
+        float staticPercentage = 0.f;
         ESM::FormId posReference; // only used if broadcastRange == 0
     };
 
@@ -94,22 +95,37 @@ namespace ESM4
         std::int32_t mFactionRank = -1;
 
         bool mIsMapMarker = false;
-        std::uint16_t mMapMarker;
+        std::uint16_t mMapMarker = 0; // type; FO3/FONV keep it in the low byte
+        std::uint8_t mMapMarkerFlags = 0;
 
         EnableParent mEsp;
 
         std::int32_t mCount = 1; // only if > 1
 
-        ESM::FormId mAudioLocation;
+        ESM::FormId mAudioLocation; // CNAM: FONV audio marker's media location controller (ALOC)
+
+        // FONV audio markers (MMRK): music of the controller plays within mRadius; the layers start at those
+        // fractions of the radius, counted from the edge
+        bool mIsAudioMarker = false;
+        std::uint32_t mAudioMarkerFlags = 0; // BNAM
+        float mAudioLayer2 = 0.f; // MNAM
+        float mAudioLayer3 = 0.f; // NNAM
+        float mRadius = 0.f; // XRDS
 
         RadioStationData mRadio;
 
         TeleportDest mDoor;
-        bool mIsLocked;
-        std::int8_t mLockLevel;
+        bool mIsLocked = false;
+        std::int8_t mLockLevel = 0; // 0-100; 255 (read as -1) means only a key opens it
         ESM::FormId mKey;
 
         ESM::FormId mTargetRef;
+        ESM::FormId mLinkedRef; // XLKR (FO3/FONV), GetLinkedRef
+        float mPatrolIdleTime = -1.f; // XPRD (FO3/FONV): seconds a patrol waits at this point, -1 when not a patrol point
+
+        // XPRM (FO3/FNV): primitive half extents of a trigger volume, zero if none
+        float mPrimitiveBounds[3] = { 0.f, 0.f, 0.f };
+        std::uint32_t mPrimitiveType = 0; // 1 box, 2 sphere, 3 portal box
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

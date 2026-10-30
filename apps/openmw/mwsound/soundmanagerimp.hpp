@@ -106,6 +106,12 @@ namespace MWSound
 
         float mTimePassed;
 
+        // setDucking: where the duck factor heads, and how fast (per second)
+        float mDuckTarget = 1.f;
+        float mDuckRate = 0.f;
+        void updateDucking(float duration);
+        void applyBaseVolumes();
+
         const MWWorld::Cell* mLastCell;
 
         Sound* mCurrentRegionSound;
@@ -179,6 +185,8 @@ namespace MWSound
         /// \param fade time in seconds to fade out current track before start this one.
 
         bool isMusicPlaying() override;
+
+        void setDucking(float factor, float seconds) override;
         ///< Returns true if music is playing
 
         void say(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename) override;
@@ -186,6 +194,11 @@ namespace MWSound
         /// \param filename name of a sound file in the VFS
 
         void say(VFS::Path::NormalizedView filename) override;
+
+        void sayFrom(const MWWorld::ConstPtr& reference, VFS::Path::NormalizedView filename, float offset,
+            float volume, float minDistance, float maxDistance) override;
+
+        void setSayVolume(const MWWorld::ConstPtr& reference, float volume) override;
         ///< Say some text, without an actor ref
         /// \param filename name of a sound file in the VFS
 

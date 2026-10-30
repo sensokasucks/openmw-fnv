@@ -85,6 +85,15 @@ namespace
                 return seen
             end,
 
+            memberValueRunsCommand = function()
+                -- `player.GetLevel` in value position reaches the GetLevel binding
+                obs.bind('GetLevelForTest', function(ref) return ref == 'player' and 12 or 0 end)
+                local level = obs.mv('player', 'GetLevelForTest')
+                -- a variable of a loaded script still wins over a command of the same name
+                obs.msetv('SomeQuest', 'GetLevelForTest', 3)
+                return level, obs.mv('SomeQuest', 'GetLevelForTest')
+            end,
+
             unknownCommandIsZero = function()
                 local before = obs._unknown['neverimplemented'] or 0
                 local value = obs.f('NeverImplemented', 1, 2, 3)
@@ -127,8 +136,10 @@ namespace
                 if type(h) ~= 'table' then
                     return 'no engineHandlers'
                 end
-                h.onUpdate(0.25)
+                -- engine callbacks queue events; the next update runs the script once,
+                -- its blocks in source order
                 h.onActivated('someactor')
+                h.onUpdate(0.25)
                 local dtSeen = obs._dt
                 local save = h.onSave()
                 return #log, log[1], log[2], dtSeen, type(save.locals)
@@ -148,9 +159,70 @@ namespace
                 end)
                 local h = obs.makeLocalScript().engineHandlers
                 h.onActivated(playerObj)
+                h.onUpdate(0)
                 h.onActivated(npc)
+                h.onUpdate(0)
                 return results[1], results[2], obs.v('GetActionRef'),
                     (obs.v('GetActionRef') == obs.v('player'))
+            end,
+
+            onLoadDispatch = function(log)
+                obs.locals('LoadScript')
+                obs.on('OnLoad', function() log[#log + 1] = 'loaded:' .. tostring(obs._actionRef) end)
+                local h = obs.makeLocalScript().engineHandlers
+                h.onActive()
+                h.onUpdate(0)
+                h.onActive()
+                h.onUpdate(0)
+                return #log, log[1]
+            end,
+
+            localScriptReadyHook = function()
+                local seen = {}
+                obs._onLocalScriptReady = function(entry)
+                    seen[#seen + 1] = entry.name .. ':' .. tostring(entry.handlers['onactivate'] ~= nil)
+                end
+                obs.locals('ReadyScriptA')
+                obs.on('OnActivate', function() end)
+                obs.makeLocalScript()
+                obs.locals('ReadyScriptB')
+                obs.on('GameMode', function() end)
+                obs.makeLocalScript()
+                obs._onLocalScriptReady = nil
+                return #seen, seen[1], seen[2]
+            end,
+
+            triggerBlocks = function(log)
+                local actorA = { id = 'a' }
+                local actorB = { id = 'b' }
+                local inside = {}
+                obs._triggerProbe = function() return inside end
+                obs.locals('TriggerScript')
+                obs.on('OnTriggerEnter', function() log[#log + 1] = 'enter:' .. obs._actionRef.id end)
+                obs.on('OnTrigger', function() log[#log + 1] = 'in:' .. obs._actionRef.id end)
+                obs.on('OnTriggerLeave', function() log[#log + 1] = 'leave:' .. obs._actionRef.id end)
+                local h = obs.makeLocalScript().engineHandlers
+                h.onUpdate(0.1)               -- nobody inside
+                inside = { actorA }
+                h.onUpdate(0.1)               -- A enters
+                h.onUpdate(0.1)               -- A stays
+                inside = { actorB }
+                h.onUpdate(0.1)               -- A leaves, B enters
+                inside = {}
+                h.onUpdate(0.1)               -- B leaves
+                obs._triggerProbe = nil
+                return table.concat(log, ',')
+            end,
+
+            triggerProbeNotCalledWithoutBlocks = function()
+                local calls = 0
+                obs._triggerProbe = function() calls = calls + 1 return {} end
+                obs.locals('NoTriggerScript')
+                obs.on('GameMode', function() end)
+                local h = obs.makeLocalScript().engineHandlers
+                h.onUpdate(0.1)
+                obs._triggerProbe = nil
+                return calls
             end,
 
             makeLocalScriptEmpty = function()
@@ -221,6 +293,9 @@ namespace
         EXPECT_EQ(std::get<1>(r), "x"); // args pass through; name case-insensitive
         EXPECT_EQ(std::get<2>(r), 2);
         EXPECT_EQ(LuaUtil::call(s["memberDispatchResolvesRef"]).get<std::string>(), "resolved:SomeRef");
+        auto member = LuaUtil::call(s["memberValueRunsCommand"]).get<std::tuple<int, int>>();
+        EXPECT_EQ(std::get<0>(member), 12);
+        EXPECT_EQ(std::get<1>(member), 3);
     }
 
     TEST_F(ObScriptRuntimeTest, UnknownCommandsStubToZero)
@@ -275,6 +350,37 @@ namespace
         sol::table s = script();
         auto r = LuaUtil::call(s["makeLocalScriptEmpty"]).get<int>();
         EXPECT_EQ(r, 1);
+    }
+
+    TEST_F(ObScriptRuntimeTest, OnLoadDispatchedFromOnActive)
+    {
+        sol::table s = script();
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table log = view.sol().create_table();
+            auto r = LuaUtil::call(s["onLoadDispatch"], log).get<std::tuple<int, std::string>>();
+            EXPECT_EQ(std::get<0>(r), 2); // once per activation of the object
+            EXPECT_EQ(std::get<1>(r), "loaded:nil"); // no action ref for OnLoad
+        });
+    }
+
+    TEST_F(ObScriptRuntimeTest, LocalScriptReadyHookSeesOnActivate)
+    {
+        sol::table s = script();
+        auto r = LuaUtil::call(s["localScriptReadyHook"]).get<std::tuple<int, std::string, std::string>>();
+        EXPECT_EQ(std::get<0>(r), 2);
+        EXPECT_EQ(std::get<1>(r), "ReadyScriptA:true"); // bindings suppress default activation for this one
+        EXPECT_EQ(std::get<2>(r), "ReadyScriptB:false");
+    }
+
+    TEST_F(ObScriptRuntimeTest, TriggerBlocks)
+    {
+        sol::table s = script();
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table log = view.sol().create_table();
+            const std::string seq = LuaUtil::call(s["triggerBlocks"], log).get<std::string>();
+            EXPECT_EQ(seq, "enter:a,in:a,in:a,enter:b,in:b,leave:a,leave:b");
+        });
+        EXPECT_EQ(LuaUtil::call(s["triggerProbeNotCalledWithoutBlocks"]).get<int>(), 0);
     }
 
     TEST_F(ObScriptRuntimeTest, GetActionRef)

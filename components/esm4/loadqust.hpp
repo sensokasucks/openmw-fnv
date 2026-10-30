@@ -31,6 +31,7 @@
 #include <string>
 #include <vector>
 
+#include "loadinfo.hpp" // DialogCondition
 #include "script.hpp" // TargetCondition, ScriptDefinition
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
@@ -49,6 +50,42 @@ namespace ESM4
         float questDelay; // FO3
     };
 #pragma pack(pop)
+
+    // One log entry of a quest stage (QSDT + CTDA* + CNAM + result script).
+    struct QuestLogEntry
+    {
+        std::uint8_t mFlags = 0; // 0x01 complete quest, 0x02 fail quest (FO3/FONV)
+        std::vector<DialogCondition> mConditions; // evaluated against the player
+        std::string mLogText;
+        ScriptDefinition mScript; // stage result script
+    };
+
+    // One compass target of an objective (QSTA + CTDA*); FO3/FONV.
+    struct QuestTarget
+    {
+        enum Flags
+        {
+            Flag_IgnoresLocks = 0x01, // the compass marker ignores locked doors
+        };
+
+        ESM::FormId mTarget; // the reference the marker points at
+        std::uint8_t mFlags = 0;
+        std::vector<DialogCondition> mConditions; // the marker shows while these pass
+    };
+
+    // One objective (QOBJ + NNAM + QSTA targets); FO3/FONV.
+    struct QuestObjective
+    {
+        std::int32_t mIndex = 0;
+        std::string mText;
+        std::vector<QuestTarget> mTargets;
+    };
+
+    struct QuestStage
+    {
+        std::int32_t mIndex = 0;
+        std::vector<QuestLogEntry> mEntries;
+    };
 
     struct Quest
     {
@@ -71,8 +108,12 @@ namespace ESM4
         QuestData mData;
 
         std::vector<TargetCondition> mTargetConditions;
+        std::vector<DialogCondition> mDialogConditions; // FO3/FONV quest-level CTDA: every INFO of the quest needs them
 
         ScriptDefinition mScript;
+
+        std::vector<QuestStage> mStages;
+        std::vector<QuestObjective> mObjectives;
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

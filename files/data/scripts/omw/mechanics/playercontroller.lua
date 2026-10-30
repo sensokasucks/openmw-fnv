@@ -6,6 +6,7 @@ local ui = require('openmw.ui')
 
 local cell = nil
 local autodoors = {}
+local openAutodoors = {}
 
 local function onCellChange()
     autodoors = {}
@@ -24,9 +25,17 @@ local function processAutomaticDoors()
         return
     end
     for _, door in ipairs(autodoors) do
-        if door.enabled and (door.position - self.position):length() < autodoorActivationDist then
-            print('Automatic activation of', door)
+        local near = door.enabled and (door.position - self.position):length() < autodoorActivationDist
+        if types.ESM4Door.isTeleport(door) then
+            if near then
+                print('Automatic activation of', door)
+                door:activateBy(self)
+                lastAutoActivation = core.getRealTime()
+            end
+        elseif near ~= (openAutodoors[door.id] == true) then
+            -- Activating a non-teleport door toggles it: open it when the player comes close, close it when they leave.
             door:activateBy(self)
+            openAutodoors[door.id] = near or nil
             lastAutoActivation = core.getRealTime()
         end
     end

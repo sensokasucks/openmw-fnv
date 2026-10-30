@@ -2,6 +2,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadcont.hpp>
+#include <components/esm4/loadcont.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -71,10 +72,11 @@ namespace MWMechanics
 
             for (CharacterController& object : mObjects)
             {
-                if (object.getPtr().getType() != ESM::Container::sRecordId)
+                const bool isESM4 = object.getPtr().getType() == ESM4::Container::sRecordId;
+                if (object.getPtr().getType() != ESM::Container::sRecordId && !isESM4)
                     continue;
 
-                if (object.isAnimPlaying("containeropen"))
+                if (object.isAnimPlaying(isESM4 ? "open" : "containeropen"))
                 {
                     object.update(duration);
                     MWBase::Environment::get().getWorld()->updateAnimatedCollisionShape(object.getPtr());

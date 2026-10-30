@@ -30,11 +30,17 @@
 #include <components/esm4/loaddoor.hpp>
 #include <components/esm4/loadflor.hpp>
 #include <components/esm4/loadfurn.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadimod.hpp>
 #include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
 #include <components/esm4/loadligh.hpp>
 #include <components/esm4/loadmisc.hpp>
 #include <components/esm4/loadmstt.hpp>
+#include <components/esm4/loadnote.hpp>
+#include <components/esm4/loadproj.hpp>
+#include <components/esm4/loadtact.hpp>
+#include <components/esm4/loadterm.hpp>
 #include <components/esm4/loadscol.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadtree.hpp>
@@ -261,11 +267,17 @@ namespace MWLua
                         case ESM::REC_FURN4:
                             cell.mStore->template forEachType<ESM4::Furniture>(visitor);
                             break;
+                        case ESM::REC_IDLM4:
+                            cell.mStore->template forEachType<ESM4::IdleMarker>(visitor);
+                            break;
                         case ESM::REC_IMOD4:
                             cell.mStore->template forEachType<ESM4::ItemMod>(visitor);
                             break;
                         case ESM::REC_INGR4:
                             cell.mStore->template forEachType<ESM4::Ingredient>(visitor);
+                            break;
+                        case ESM::REC_KEYM4:
+                            cell.mStore->template forEachType<ESM4::Key>(visitor);
                             break;
                         case ESM::REC_LIGH4:
                             cell.mStore->template forEachType<ESM4::Light>(visitor);
@@ -276,6 +288,15 @@ namespace MWLua
                         case ESM::REC_MSTT4:
                             cell.mStore->template forEachType<ESM4::MovableStatic>(visitor);
                             break;
+                        case ESM::REC_NOTE4:
+                            cell.mStore->template forEachType<ESM4::Note>(visitor);
+                            break;
+                        case ESM::REC_TACT4:
+                            cell.mStore->template forEachType<ESM4::TalkingActivator>(visitor);
+                            break;
+                        case ESM::REC_PROJ4:
+                            cell.mStore->template forEachType<ESM4::Projectile>(visitor);
+                            break;
                         case ESM::REC_ALCH4:
                             cell.mStore->template forEachType<ESM4::Potion>(visitor);
                             break;
@@ -284,6 +305,9 @@ namespace MWLua
                             break;
                         case ESM::REC_STAT4:
                             cell.mStore->template forEachType<ESM4::Static>(visitor);
+                            break;
+                        case ESM::REC_TERM4:
+                            cell.mStore->template forEachType<ESM4::Terminal>(visitor);
                             break;
                         case ESM::REC_TREE4:
                             cell.mStore->template forEachType<ESM4::Tree>(visitor);

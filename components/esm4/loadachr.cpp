@@ -87,10 +87,48 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
                 reader.get(mCount);
                 break;
             }
-            case ESM::fourCC("XRGD"): // ragdoll
-            case ESM::fourCC("XRGB"): // ragdoll biped
+            case ESM::fourCC("XMRC"): // FO3/FONV merchant container
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mMerchantContainer);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("XLKR"): // linked reference; TES5 prefixes a keyword
+                if (subHdr.dataSize == 4)
+                    reader.getFormId(mLinkedRef);
+                else
+                    reader.skipSubRecordData();
+                break;
+            case ESM::fourCC("XRGD"): // ragdoll pose
+            {
+                constexpr std::size_t entrySize = 28; // u8 body part, 3 pad (garbage), vec3 pos, vec3 rot
+                if (subHdr.dataSize % entrySize != 0)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                const std::size_t count = subHdr.dataSize / entrySize;
+                mRagdollPose.resize(count);
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    std::uint8_t raw[4];
+                    reader.get(raw);
+                    mRagdollPose[i].mBodyPart = raw[0];
+                    reader.get(mRagdollPose[i].mPosition);
+                    reader.get(mRagdollPose[i].mRotation);
+                }
+                break;
+            }
+            case ESM::fourCC("XRGB"): // ragdoll biped rotation
+                if (subHdr.dataSize == sizeof(mRagdollRootRotation))
+                {
+                    reader.get(mRagdollRootRotation);
+                    mHasRagdollRootRotation = true;
+                }
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XHRS"): // horse formId
-            case ESM::fourCC("XMRC"): // merchant container formId
             // TES5
             case ESM::fourCC("XAPD"): // activation parent
             case ESM::fourCC("XAPR"): // active parent
@@ -98,7 +136,6 @@ void ESM4::ActorCharacter::load(ESM4::Reader& reader)
             case ESM::fourCC("XHOR"):
             case ESM::fourCC("XLCM"): // levelled creature
             case ESM::fourCC("XLCN"): // location
-            case ESM::fourCC("XLKR"): // location route?
             case ESM::fourCC("XLRT"): // location type
             //
             case ESM::fourCC("XPRD"):

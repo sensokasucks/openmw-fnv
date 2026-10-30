@@ -29,10 +29,13 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <components/esm/defs.hpp>
 #include <components/esm/formid.hpp>
 #include <components/esm/path.hpp>
+
+#include "loadinfo.hpp" // DialogCondition
 
 namespace ESM4
 {
@@ -47,12 +50,21 @@ namespace ESM4
         std::string mEditorId;
         std::string mCollision;
         std::string mEvent;
-        ESM::Path mModel;
+        ESM::Path mModel; // relative to meshes/; a folder for the branch nodes of the idle tree
 
         ESM::FormId mParent; // IDLE or AACT
-        ESM::FormId mPrevious;
+        ESM::FormId mPrevious; // previous sibling, which gives the order among the parent's children
 
         float mBoundRadius;
+
+        // FO3/FONV DATA
+        std::uint8_t mAnimGroupSection = 0;
+        std::uint8_t mLoopMin = 0;
+        std::uint8_t mLoopMax = 0;
+        std::int16_t mReplayDelay = 0;
+        std::uint8_t mIdleFlags = 0; // 0x01 no attacking
+
+        std::vector<DialogCondition> mConditions; // FO3/FONV CTDA
 
         void load(ESM4::Reader& reader);
         // void save(ESM4::Writer& writer) const;

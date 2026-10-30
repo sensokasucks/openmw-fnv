@@ -24,8 +24,12 @@
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadregn.hpp>
 #include <components/esm3/loadstat.hpp>
+#include <components/esm4/loadachr.hpp>
 #include <components/esm4/loadcell.hpp>
+#include <components/esm4/loadcrea.hpp>
 #include <components/esm4/loaddoor.hpp>
+#include <components/esm4/loadnpc.hpp>
+#include <components/esm4/loadrefr.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadwrld.hpp>
 
@@ -274,6 +278,8 @@ namespace MWWorld
 
         // Rebuild player
         setupPlayer();
+
+        mWorldModel.loadPersistentRefs();
 
         renderPlayer();
         mRendering->getCamera()->reset();
@@ -715,6 +721,83 @@ namespace MWWorld
         }
     }
 
+    namespace
+    {
+        // Enable parents (XESP): parent form id -> its children and whether each is enabled opposite to it
+        const std::unordered_map<ESM::FormId, std::vector<std::pair<ESM::FormId, bool>>>& enableChildren(
+            const ESMStore& store)
+        {
+            static const auto index = [&store] {
+                std::unordered_map<ESM::FormId, std::vector<std::pair<ESM::FormId, bool>>> res;
+                auto addAll = [&](const auto& refs) {
+                    for (const auto& ref : refs)
+                        if (!ref.mEsp.parent.isZeroOrUnset())
+                            res[ref.mEsp.parent].emplace_back(
+                                ref.mId, (ref.mEsp.flags & ESM4::EnableParent::Flag_Inversed) != 0);
+                };
+                addAll(store.get<ESM4::Reference>());
+                addAll(store.get<ESM4::ActorCharacter>());
+                addAll(store.get<ESM4::ActorCreature>());
+                return res;
+            }();
+            return index;
+        }
+    }
+
+    // A content-file reference is only in the Ptr registry once something asked for it; this finds it in its cell
+    // if that cell is loaded (and registers it). Empty if the cell is not loaded.
+    Ptr World::findLoadedESM4Reference(ESM::FormId id)
+    {
+        ESM::RefId cellId;
+        if (const ESM4::Reference* ref = mStore.get<ESM4::Reference>().searchStatic(id))
+            cellId = ref->mParent;
+        else if (const ESM4::ActorCharacter* achr = mStore.get<ESM4::ActorCharacter>().searchStatic(id))
+            cellId = achr->mParent;
+        else if (const ESM4::ActorCreature* acre = mStore.get<ESM4::ActorCreature>().searchStatic(id))
+            cellId = acre->mParent;
+        else
+            return {};
+        CellStore* cell = mWorldModel.findCell(cellId, false);
+        if (cell == nullptr || cell->getState() != CellStore::State_Loaded)
+            return {};
+        Ptr found;
+        cell->forEach([&](const Ptr& ptr) {
+            if (ptr.getCellRef().getRefNum() != id)
+                return true;
+            found = ptr;
+            return false;
+        });
+        if (!found.isEmpty())
+            mWorldModel.registerPtr(found);
+        return found;
+    }
+
+    // FO3/FNV: enabling or disabling a reference does the same to the references that have it as their enable
+    // parent (inversed ones the opposite). Children that are not loaded yet take the parent's state when their
+    // cell loads (CellStore).
+    void World::updateEnableChildren(const Ptr& reference)
+    {
+        if (!ESM::isESM4Rec(static_cast<ESM::RecNameInts>(reference.getType())))
+            return;
+        const auto& index = enableChildren(mStore);
+        auto it = index.find(reference.getCellRef().getRefNum());
+        if (it == index.end())
+            return;
+        const bool enabled = reference.getRefData().isEnabled();
+        for (const auto& [childId, inversed] : it->second)
+        {
+            Ptr child = mWorldModel.getPtr(childId);
+            if (child.isEmpty())
+                child = findLoadedESM4Reference(childId);
+            if (child.isEmpty() || child == getPlayerPtr())
+                continue;
+            if (enabled != inversed)
+                enable(child);
+            else
+                disable(child);
+        }
+    }
+
     void World::enable(const Ptr& reference)
     {
         if (!reference.isInCell())
@@ -734,6 +817,7 @@ namespace MWWorld
                 if (mRendering->pagingEnableObject(type, reference, true))
                     mWorldScene->reloadTerrain();
             }
+            updateEnableChildren(reference);
         }
     }
 
@@ -782,6 +866,7 @@ namespace MWWorld
             mWorldScene->removeObjectFromScene(reference);
             mWorldScene->addPostponedPhysicsObjects();
         }
+        updateEnableChildren(reference);
     }
 
     void World::advanceTime(double hours, bool incremental)
@@ -1405,6 +1490,8 @@ namespace MWWorld
         if (object.getShapeInstance()->mVisualCollisionType != Resource::VisualCollisionType::None)
             return;
         const MWWorld::Ptr ptr = object.getPtr();
+        if (ptr.getType() == ESM::REC_NPC_4 || ptr.getType() == ESM::REC_CREA4)
+            return; // moving actor bodies (PhysicsSystem::addActorBody) stay out of the navmesh
         const DetourNavigator::ObjectShapes shapes(object.getShapeInstance(),
             DetourNavigator::ObjectTransform{ ptr.getRefData().getPosition(), ptr.getCellRef().getScale() });
         mNavigator->updateObject(
@@ -1525,6 +1612,8 @@ namespace MWWorld
             physicActor->enableCollisionMode(internal);
             physicActor->enableCollisionBody(external);
         }
+        else if (physicActor == nullptr)
+            mPhysics->setActorBodyEnabled(ptr, external);
     }
 
     bool World::isActorCollisionEnabled(const MWWorld::Ptr& ptr)
@@ -1731,6 +1820,26 @@ namespace MWWorld
             mDistanceToFocusObject = (rayToObject.mRatio * maxDistance) - camDist;
         else
             mDistanceToFocusObject = -1;
+
+        // FO3/FNV effect statics without collision (light beams, dust sheets) hang in front of doors and
+        // containers and the visible ray stops at them. The game activates what the collision ray reaches,
+        // so when the visible hit can't be activated the physics ray decides.
+        if (!focusObject.isEmpty() && !focusObject.getClass().hasToolTip(focusObject)
+            && !MWBase::Environment::get().getWindowManager()->isGuiMode())
+        {
+            const MWRender::Camera& camera = *mRendering->getCamera();
+            const osg::Vec3f from = camera.getPosition();
+            const osg::Vec3f forward = camera.getOrient() * osg::Vec3d(0, 1, 0);
+            const MWPhysics::RayCastingResult result = mPhysics->castRay(from, from + forward * maxDistance,
+                { ignorePlayer ? getPlayerPtr() : MWWorld::Ptr() }, std::vector<MWWorld::Ptr>(),
+                MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor
+                    | MWPhysics::CollisionType_HeightMap);
+            if (result.mHit && !result.mHitObject.isEmpty() && result.mHitObject.getClass().hasToolTip(result.mHitObject))
+            {
+                focusObject = result.mHitObject;
+                mDistanceToFocusObject = (result.mHitPos - from).length() - camDist;
+            }
+        }
         return focusObject;
     }
 
@@ -2228,6 +2337,7 @@ namespace MWWorld
     {
         mStore.rebuildIdsIndex();
         mStore.validateDynamic();
+        mWorldModel.loadPersistentRefs();
         mTimeManager->setup(mGlobalVariables);
         mProjectileManager->saveLoaded(reader);
     }
@@ -2573,6 +2683,8 @@ namespace MWWorld
         MWPhysics::Actor* physicActor = mPhysics->getActor(actor);
         if (physicActor)
             physicActor->enableCollisionBody(enable);
+        else
+            mPhysics->setActorBodyEnabled(actor, enable);
     }
 
     static std::optional<ESM::Position> searchMarkerPosition(const CellStore& cellStore, std::string_view editorId)
@@ -3107,6 +3219,11 @@ namespace MWWorld
         return mPhysics->mPhysicsDt;
     }
 
+    MWPhysics::RagdollWorld& World::getRagdollWorld()
+    {
+        return mPhysics->getRagdollWorld();
+    }
+
     bool World::findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result)
     {
         if (cell->isExterior())
@@ -3576,7 +3693,18 @@ namespace MWWorld
     osg::Vec3f World::getHalfExtents(const ConstPtr& object, bool rendering) const
     {
         if (!object.getClass().isActor())
+        {
+            // FO3/FNV actors have a box body (PhysicsSystem::addActorBody) rather than a physics actor; their render
+            // bounds can take in far-off nodes
+            if (object.getType() == ESM4::Npc::sRecordId || object.getType() == ESM4::Creature::sRecordId)
+            {
+                const osg::BoundingBox box = mPhysics->getBoundingBox(object);
+                if (box.valid())
+                    return osg::Vec3f(box.xMax() - box.xMin(), box.yMax() - box.yMin(), box.zMax() - box.zMin())
+                        * 0.5f;
+            }
             return mRendering->getHalfExtents(object);
+        }
 
         // Handle actors separately because of bodyparts
         if (rendering)

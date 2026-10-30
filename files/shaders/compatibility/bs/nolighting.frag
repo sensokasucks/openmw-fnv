@@ -21,6 +21,9 @@ uniform bool useFalloff;
 uniform float far;
 uniform float near;
 uniform float alphaRef;
+// The material's own alpha (NiMaterialProperty, animated by NiAlphaController): with vertex colours on,
+// gl_FrontMaterial tracks the vertex colour and loses it
+uniform float materialAlpha;
 
 #include "lib/core/fragment.h.glsl"
 #include "lib/material/alpha.glsl"
@@ -47,6 +50,12 @@ void main()
 #endif
 
     gl_FragData[0] *= getDiffuseColor();
+
+    // Gamebryo multiplies the vertex alpha by the material's alpha; the colour mode above swaps the material
+    // out for the vertex colour, so the material alpha (an animated fade on FO3/FNV dust, mist and beams)
+    // has to be put back
+    if (colorMode == ColorMode_AmbientAndDiffuse || colorMode == ColorMode_Diffuse)
+        gl_FragData[0].a *= materialAlpha;
 
     if (useFalloff)
         gl_FragData[0].a *= passFalloff;

@@ -114,6 +114,11 @@ namespace MWPhysics
         if (!mPtr.getRefData().getBaseNode())
             return false;
 
+        // An object drawn by a paged chunk has an empty base node until something takes it out of the chunk (e.g. a
+        // container lid opening), so look for its nodes again later. Its collision rests as loaded meanwhile.
+        if (mPtr.getRefData().getBaseNode()->getNumChildren() == 0)
+            return false;
+
         assert(mShapeInstance->mCollisionShape->isCompound());
 
         btCompoundShape* compound = static_cast<btCompoundShape*>(mShapeInstance->mCollisionShape.get());

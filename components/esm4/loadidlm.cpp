@@ -63,14 +63,10 @@ void ESM4::IdleMarker::load(ESM4::Reader& reader)
                 break;
             case ESM::fourCC("IDLA"):
             {
-                bool isFONV = esmVer == ESM::VER_132 || esmVer == ESM::VER_133 || esmVer == ESM::VER_134;
-                if (esmVer == ESM::VER_094 || isFONV) // FO3? 4 or 8 bytes
-                {
-                    reader.skipSubRecordData();
-                    break;
-                }
-
-                mIdleAnim.resize(mIdleCount);
+                // FO3/FONV/TES5 alike: one form id per idle, IDLC of them (the count is unreliable in some
+                // FO3 records, so go by the size)
+                (void)esmVer;
+                mIdleAnim.resize(subHdr.dataSize / sizeof(ESM::FormId32));
                 for (ESM::FormId& value : mIdleAnim)
                     reader.getFormId(value);
                 break;

@@ -152,6 +152,7 @@ namespace ESM4
         std::vector<ESM::FormId> mBonusSpells; // race ability/power
         std::array<ESM::FormId, 2> mVNAM; // don't know what these are; 1 or 2 RACE FormIds
         std::array<ESM::FormId, 2> mDefaultHair; // male/female (HAIR FormId for TES4)
+        std::array<ESM::FormId, 2> mDefaultVoice{}; // male/female VTYP (FO3/FONV VTCK)
 
         std::uint32_t mNumKeywords;
 

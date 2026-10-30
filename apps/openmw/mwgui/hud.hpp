@@ -39,6 +39,13 @@ namespace MWGui
         void setEffectVisible(bool visible);
         void setMinimapVisible(bool visible);
 
+        /// Hides the Morrowind parts of the HUD (bars, weapon/spell/sneak boxes, effects, minimap, cell and enemy
+        /// names) while scripts draw a Fallout HUD; the crosshair stays.
+        void setFalloutStyle(bool enabled);
+        bool isFalloutStyle() const { return mFalloutStyle; }
+        /// The player sneaks and nobody has noticed them (what the sneak icon shows).
+        bool isSneakHidden() const { return mSneakHidden; }
+
         void setSelectedSpell(const ESM::RefId& spellId, int successChancePercent);
         void setSelectedEnchantItem(const MWWorld::Ptr& item, int chargePercent);
         const MWWorld::Ptr& getSelectedEnchantItem();
@@ -104,6 +111,11 @@ namespace MWGui
         bool mSpellVisible = true;
         bool mWorldMouseOver = false;
         bool mIsDrowning = false;
+        bool mFalloutStyle = false;
+        bool mCrosshairOwned = false;
+
+        void applyCrosshairSkin();
+        bool mSneakHidden = false;
 
         void onWorldClicked(MyGUI::Widget* sender);
         void onWorldMouseOver(MyGUI::Widget* sender, int x, int y);

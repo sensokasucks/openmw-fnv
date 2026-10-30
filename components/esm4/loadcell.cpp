@@ -169,6 +169,12 @@ void ESM4::Cell::load(ESM4::Reader& reader)
             case ESM::fourCC("XGLB"):
                 reader.getFormId(mGlobal);
                 break; // Oblivion only?
+            case ESM::fourCC("XRNK"):
+                if (subHdr.dataSize == 4)
+                    reader.get(mFactionRank);
+                else
+                    reader.skipSubRecordData();
+                break;
             case ESM::fourCC("XCCM"):
                 reader.getFormId(mClimate);
                 break;
@@ -224,7 +230,6 @@ void ESM4::Cell::load(ESM4::Reader& reader)
             case ESM::fourCC("XEZN"):
             case ESM::fourCC("XWEM"):
             case ESM::fourCC("XILL"):
-            case ESM::fourCC("XRNK"):
             case ESM::fourCC("XCET"): // FO3
             case ESM::fourCC("IMPF"): // FO3 Zeta
             case ESM::fourCC("CNAM"): // FO4

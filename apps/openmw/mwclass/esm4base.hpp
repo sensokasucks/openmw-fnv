@@ -2,6 +2,7 @@
 #define GAME_MWCLASS_ESM4BASE_H
 
 #include <components/esm4/inventory.hpp>
+#include <components/esm4/loadidlm.hpp>
 #include <components/esm4/loadstat.hpp>
 #include <components/esm4/loadtree.hpp>
 #include <components/misc/strings/algorithm.hpp>
@@ -27,6 +28,24 @@ namespace MWClass
         void insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
             MWPhysics::PhysicsSystem& physics);
         MWGui::ToolTipInfo getToolTipInfo(std::string_view name, int count);
+
+        // Gives an FO3/FNV NPC or creature the body other actors collide with (see PhysicsSystem::addActorBody).
+        // halfExtents is used when the actor's rendered model has no usable bounds, or always when fromBounds is
+        // false. The body is off for dead actors.
+        void insertActorBody(const MWWorld::Ptr& ptr, const osg::Quat& rotation, MWPhysics::PhysicsSystem& physics,
+            osg::Vec3f halfExtents, bool fromBounds);
+
+        // Starts the object's ambient loop (ACTI/MSTT looping sound, LIGH sound) at its position. Sounds the game
+        // plays at random times (SOUN flag Play At Random) are left out.
+        void playLoopingSound(const MWWorld::Ptr& ptr, ESM::FormId sound);
+
+        // Makes the sequence embedded in the object's model (e.g. "open" of a footlocker) playable through the
+        // mechanics manager. Returns false if the model has no such sequence.
+        bool prepareEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group);
+
+        // Plays a sequence embedded in the object's model once and holds its last frame, like the original engine
+        // does for PlayGroup and SetOpenState. Returns false if the model has no such sequence.
+        bool playEmbeddedAnimation(const MWWorld::Ptr& ptr, std::string_view group);
 
         // We don't handle ESM4 player stats yet, so for resolving levelled object we use an arbitrary number.
         constexpr int sDefaultLevel = 5;
@@ -94,6 +113,8 @@ namespace MWClass
             MWPhysics::PhysicsSystem& physics) const override
         {
             insertObjectPhysics(ptr, model, rotation, physics);
+            if constexpr (requires { ptr.get<Record>()->mBase->mLoopingSound; })
+                ESM4Impl::playLoopingSound(ptr, ptr.get<Record>()->mBase->mLoopingSound);
         }
 
         void insertObjectPhysics(const MWWorld::Ptr& ptr, const std::string& model, const osg::Quat& rotation,
@@ -125,6 +146,19 @@ namespace MWClass
             : MWWorld::RegisteredClass<ESM4Static, ESM4Base<ESM4::Static>>(ESM4::Static::sRecordId)
         {
         }
+    };
+
+    // FO3/FONV idle markers: invisible spots where AI packages play the marker's idle animations.
+    class ESM4IdleMarker final : public MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>
+    {
+        friend MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>;
+        ESM4IdleMarker()
+            : MWWorld::RegisteredClass<ESM4IdleMarker, ESM4Base<ESM4::IdleMarker>>(ESM4::IdleMarker::sRecordId)
+        {
+        }
+
+    public:
+        VFS::Path::NormalizedView getModel(const MWWorld::ConstPtr& ptr) const override { return {}; }
     };
 
     class ESM4Tree final : public MWWorld::RegisteredClass<ESM4Tree, ESM4Base<ESM4::Tree>>

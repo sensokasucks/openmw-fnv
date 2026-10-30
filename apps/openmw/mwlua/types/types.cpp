@@ -42,17 +42,23 @@ namespace MWLua
         constexpr std::string_view ESM4Book = "ESM4Book";
         constexpr std::string_view ESM4Clothing = "ESM4Clothing";
         constexpr std::string_view ESM4Container = "ESM4Container";
+        constexpr std::string_view ESM4Creature = "ESM4Creature";
         constexpr std::string_view ESM4Door = "ESM4Door";
         constexpr std::string_view ESM4Flora = "ESM4Flora";
         constexpr std::string_view ESM4Furniture = "ESM4Furniture";
+        constexpr std::string_view ESM4IdleMarker = "ESM4IdleMarker";
         constexpr std::string_view ESM4Ingredient = "ESM4Ingredient";
         constexpr std::string_view ESM4ItemMod = "ESM4ItemMod";
+        constexpr std::string_view ESM4Key = "ESM4Key";
         constexpr std::string_view ESM4Light = "ESM4Light";
         constexpr std::string_view ESM4MiscItem = "ESM4Miscellaneous";
         constexpr std::string_view ESM4MovableStatic = "ESM4MovableStatic";
+        constexpr std::string_view ESM4NPC = "ESM4NPC";
         constexpr std::string_view ESM4Potion = "ESM4Potion";
         constexpr std::string_view ESM4Static = "ESM4Static";
         constexpr std::string_view ESM4StaticCollection = "ESM4StaticCollection";
+        constexpr std::string_view ESM4Note = "ESM4Note";
+        constexpr std::string_view ESM4TalkingActivator = "ESM4TalkingActivator";
         constexpr std::string_view ESM4Terminal = "ESM4Terminal";
         constexpr std::string_view ESM4Tree = "ESM4Tree";
         constexpr std::string_view ESM4Weapon = "ESM4Weapon";
@@ -90,17 +96,23 @@ namespace MWLua
             { ESM::REC_BOOK4, ObjectTypeName::ESM4Book },
             { ESM::REC_CLOT4, ObjectTypeName::ESM4Clothing },
             { ESM::REC_CONT4, ObjectTypeName::ESM4Container },
+            { ESM::REC_CREA4, ObjectTypeName::ESM4Creature },
             { ESM::REC_DOOR4, ObjectTypeName::ESM4Door },
             { ESM::REC_FLOR4, ObjectTypeName::ESM4Flora },
             { ESM::REC_FURN4, ObjectTypeName::ESM4Furniture },
+            { ESM::REC_IDLM4, ObjectTypeName::ESM4IdleMarker },
             { ESM::REC_INGR4, ObjectTypeName::ESM4Ingredient },
             { ESM::REC_IMOD4, ObjectTypeName::ESM4ItemMod },
+            { ESM::REC_KEYM4, ObjectTypeName::ESM4Key },
             { ESM::REC_LIGH4, ObjectTypeName::ESM4Light },
             { ESM::REC_MISC4, ObjectTypeName::ESM4MiscItem },
             { ESM::REC_MSTT4, ObjectTypeName::ESM4MovableStatic },
+            { ESM::REC_NPC_4, ObjectTypeName::ESM4NPC },
             { ESM::REC_ALCH4, ObjectTypeName::ESM4Potion },
             { ESM::REC_STAT4, ObjectTypeName::ESM4Static },
             { ESM::REC_SCOL4, ObjectTypeName::ESM4StaticCollection },
+            { ESM::REC_NOTE4, ObjectTypeName::ESM4Note },
+            { ESM::REC_TACT4, ObjectTypeName::ESM4TalkingActivator },
             { ESM::REC_TERM4, ObjectTypeName::ESM4Terminal },
             { ESM::REC_TREE4, ObjectTypeName::ESM4Tree },
             { ESM::REC_WEAP4, ObjectTypeName::ESM4Weapon },
@@ -239,18 +251,24 @@ namespace MWLua
         addType(ObjectTypeName::ESM4Book, { ESM::REC_BOOK4 });
         addType(ObjectTypeName::ESM4Clothing, { ESM::REC_CLOT4 });
         addType(ObjectTypeName::ESM4Container, { ESM::REC_CONT4 });
+        addType(ObjectTypeName::ESM4Creature, { ESM::REC_CREA4 });
         addESM4DoorBindings(addType(ObjectTypeName::ESM4Door, { ESM::REC_DOOR4 }, ObjectTypeName::Lockable), context);
         addType(ObjectTypeName::ESM4Flora, { ESM::REC_FLOR4 });
-        addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 });
+        addESM4FurnitureBindings(addType(ObjectTypeName::ESM4Furniture, { ESM::REC_FURN4 }), context);
+        addESM4IdleMarkerBindings(addType(ObjectTypeName::ESM4IdleMarker, { ESM::REC_IDLM4 }), context);
         addType(ObjectTypeName::ESM4Ingredient, { ESM::REC_INGR4 });
         addType(ObjectTypeName::ESM4ItemMod, { ESM::REC_IMOD4 });
+        addType(ObjectTypeName::ESM4Key, { ESM::REC_KEYM4 });
         addType(ObjectTypeName::ESM4Light, { ESM::REC_LIGH4 });
         addType(ObjectTypeName::ESM4MiscItem, { ESM::REC_MISC4 });
         addType(ObjectTypeName::ESM4MovableStatic, { ESM::REC_MSTT4 });
+        addType(ObjectTypeName::ESM4NPC, { ESM::REC_NPC_4 });
         addType(ObjectTypeName::ESM4Potion, { ESM::REC_ALCH4 });
         addType(ObjectTypeName::ESM4Static, { ESM::REC_STAT4 });
         addType(ObjectTypeName::ESM4StaticCollection, { ESM::REC_SCOL4 });
+        addESM4NoteBindings(addType(ObjectTypeName::ESM4Note, { ESM::REC_NOTE4 }), context);
         addESM4TerminalBindings(addType(ObjectTypeName::ESM4Terminal, { ESM::REC_TERM4 }), context);
+        addType(ObjectTypeName::ESM4TalkingActivator, { ESM::REC_TACT4 });
         addType(ObjectTypeName::ESM4Tree, { ESM::REC_TREE4 });
         addType(ObjectTypeName::ESM4Weapon, { ESM::REC_WEAP4 });
 

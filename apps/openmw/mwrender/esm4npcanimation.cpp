@@ -1,35 +1,152 @@
 #include "esm4npcanimation.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+
 #include <components/esm4/loadarma.hpp>
 #include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadeyes.hpp>
 #include <components/esm4/loadclot.hpp>
 #include <components/esm4/loadhair.hpp>
 #include <components/esm4/loadhdpt.hpp>
 #include <components/esm4/loadnpc.hpp>
 #include <components/esm4/loadrace.hpp>
 
+#include <cstdlib>
+#include <span>
+
+#include <osg/Material>
+#include <osg/Math>
+#include <osg/MatrixTransform>
+#include <osg/io_utils>
+#include <osg/Texture2D>
+#include <osg/Transform>
+
+#include <components/debug/debuglog.hpp>
+#include <components/misc/mathutil.hpp>
+#include <components/misc/constants.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/nifosg/controller.hpp>
+#include <components/nifosg/matrixtransform.hpp>
+#include <components/misc/strings/algorithm.hpp>
+#include <components/resource/imagemanager.hpp>
+#include <components/resource/keyframemanager.hpp>
+#include <components/settings/values.hpp>
+#include <components/resource/niffilemanager.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
+#include <components/sceneutil/attach.hpp>
+#include <components/sceneutil/controller.hpp>
+#include <components/sceneutil/keyframe.hpp>
+#include <components/sceneutil/nodecallback.hpp>
+#include <components/sceneutil/positionattitudetransform.hpp>
+#include <components/sceneutil/riggeometry.hpp>
+#include <components/sceneutil/skeleton.hpp>
+#include <components/sceneutil/visitor.hpp>
+#include <components/vfs/manager.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/world.hpp"
+#include "../mwphysics/ragdoll.hpp"
+#include "../mwbase/soundmanager.hpp"
+#include "esm4facegen.hpp"
+#include "../mwclass/esm4creature.hpp"
+#include "../mwmechanics/esm4combat.hpp"
 #include "../mwclass/esm4npc.hpp"
 #include "../mwworld/esmstore.hpp"
 
 namespace MWRender
 {
-    ESM4NpcAnimation::ESM4NpcAnimation(
-        const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode, Resource::ResourceSystem* resourceSystem)
-        : Animation(ptr, std::move(parentNode), resourceSystem)
+    namespace
     {
-        setObjectRoot(mPtr.getClass().getCorrectedModel(mPtr), true, true, false);
+        // NiMatrix3::FromEulerAnglesXYZ (FalloutNV.exe 0x00a59540): Rx * Ry * Rz in Gamebryo's row-major layout,
+        // each the transpose of the usual right-handed rotation
+        Nif::Matrix3 fromEulerAnglesXYZ(const float* angles)
+        {
+            const float cx = std::cos(angles[0]), sx = std::sin(angles[0]);
+            const float cy = std::cos(angles[1]), sy = std::sin(angles[1]);
+            const float cz = std::cos(angles[2]), sz = std::sin(angles[2]);
+            const float rx[3][3] = { { 1, 0, 0 }, { 0, cx, sx }, { 0, -sx, cx } };
+            const float ry[3][3] = { { cy, 0, -sy }, { 0, 1, 0 }, { sy, 0, cy } };
+            const float rz[3][3] = { { cz, sz, 0 }, { -sz, cz, 0 }, { 0, 0, 1 } };
+            float ryz[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    ryz[i][j] = ry[i][0] * rz[0][j] + ry[i][1] * rz[1][j] + ry[i][2] * rz[2][j];
+            Nif::Matrix3 result;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    result.mValues[i][j] = rx[i][0] * ryz[0][j] + rx[i][1] * ryz[1][j] + rx[i][2] * ryz[2][j];
+            return result;
+        }
+
+        class FaceCallback : public SceneUtil::NodeCallback<FaceCallback>
+        {
+        public:
+            explicit FaceCallback(ESM4NpcAnimation* animation)
+                : mAnimation(animation)
+            {
+            }
+
+            void operator()(osg::Node* node, osg::NodeVisitor* nv)
+            {
+                const double time = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                const float duration = mLastTime < 0.0 ? 0.f : static_cast<float>(time - mLastTime);
+                mLastTime = time;
+                mAnimation->updateFace(std::clamp(duration, 0.f, 0.1f));
+                traverse(node, nv);
+            }
+
+        private:
+            ESM4NpcAnimation* mAnimation;
+            double mLastTime = -1.0;
+        };
+    }
+
+    ESM4NpcAnimation::ESM4NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
+        Resource::ResourceSystem* resourceSystem, VFS::Path::NormalizedView skeleton, bool firstPerson)
+        : Animation(ptr, std::move(parentNode), resourceSystem)
+        , mFirstPerson(firstPerson)
+    {
+        const std::string model = skeleton.value().empty() ? std::string(mPtr.getClass().getCorrectedModel(mPtr).value())
+                                                           : std::string(skeleton.value());
+        mSkeletonPath = VFS::Path::Normalized(model);
+        setObjectRoot(model, true, true, false);
         updateParts();
+        if (MWMechanics::ESM4Combat::ensureStartsDead(mPtr))
+        {
+            // A corpse the designers placed lies the way they posed it; others take the death pose
+            if (!applyPlacedPose())
+                playDeath(true);
+            else
+                mDead = true;
+        }
+        showLostLimbs();
+        if (mFace != nullptr && !mFace->empty() && mObjectRoot != nullptr)
+        {
+            mFaceRandom.seed(static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(this)));
+            mFaceCallback = new FaceCallback(this);
+            mObjectRoot->addUpdateCallback(mFaceCallback);
+        }
+    }
+
+    ESM4NpcAnimation::~ESM4NpcAnimation()
+    {
+        if (mFaceCallback != nullptr && mObjectRoot != nullptr)
+            mObjectRoot->removeUpdateCallback(mFaceCallback);
     }
 
     void ESM4NpcAnimation::updateParts()
     {
         if (mObjectRoot == nullptr)
             return;
+        if (mPtr.getType() == ESM::REC_CREA4)
+        {
+            updatePartsCreature();
+            playStandingIdleFONV();
+            return;
+        }
         const ESM4::Npc* traits = MWClass::ESM4Npc::getTraitsRecord(mPtr);
         if (traits == nullptr)
             return;
@@ -37,7 +154,8 @@ namespace MWRender
             updatePartsTES4(*traits);
         else if (traits->mIsFONV)
         {
-            // Not implemented yet
+            updatePartsFONV(*traits);
+            playStandingIdleFONV();
         }
         else
         {
@@ -46,6 +164,20 @@ namespace MWRender
             // only lead to the NPC not being rendered.
             updatePartsTES5(*traits);
         }
+    }
+
+    void ESM4NpcAnimation::updatePartsCreature()
+    {
+        const ESM4::Creature* rec = MWClass::ESM4Creature::getModelRecord(mPtr);
+        if (rec == nullptr)
+            return;
+        // The body parts sit next to the skeleton
+        const std::string_view skeleton = rec->mModel.getNormalized().value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        const std::string dir = slash == std::string_view::npos ? std::string() : std::string(skeleton.substr(0, slash + 1));
+        for (const std::string& part : rec->mNif)
+            if (!part.empty())
+                attachPart(dir + part);
     }
 
     void ESM4NpcAnimation::insertPart(std::string_view model)
@@ -91,6 +223,1635 @@ namespace MWRender
             insertPart(chooseTes4EquipmentModel(armor, isFemale));
         for (const ESM4::Clothing* clothing : MWClass::ESM4Npc::getEquippedClothing(mPtr))
             insertPart(chooseTes4EquipmentModel(clothing, isFemale));
+    }
+
+    namespace
+    {
+        // Collects the shapes of a skinned part without the bone nodes the part file carries along, so that the
+        // copies bind to the NPC skeleton instead of to the part's own static bones.
+        class CollectRigsVisitor : public osg::NodeVisitor
+        {
+        public:
+            CollectRigsVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Drawable& drawable) override
+            {
+                if (!dynamic_cast<SceneUtil::RigGeometry*>(&drawable))
+                    return;
+                // The shape's own node carries its material and textures; anything above it is skeleton.
+                const osg::NodePath& path = getNodePath();
+                const osg::Node* node = &drawable;
+                if (path.size() >= 3)
+                    node = path[path.size() - 2];
+                if (std::find(mShapes.begin(), mShapes.end(), node) == mShapes.end())
+                    mShapes.push_back(node);
+            }
+
+            std::vector<const osg::Node*> mShapes;
+        };
+    }
+
+    namespace
+    {
+        // The bone a rigid part's file names as its parent ("Prn", kept by the NIF loader on the root)
+        class FindAttachmentBoneVisitor : public osg::NodeVisitor
+        {
+        public:
+            FindAttachmentBoneVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                if (mBone.empty() && node.getUserValue(Constants::AttachmentBone, mBone))
+                    return;
+                if (mBone.empty())
+                    traverse(node);
+            }
+
+            std::string mBone;
+        };
+
+        // Resets the rotation of every transform below a rigid head part (its translation and scale stay)
+        class DropRotationVisitor : public osg::NodeVisitor
+        {
+        public:
+            DropRotationVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::MatrixTransform& transform) override
+            {
+                osg::Matrix matrix = transform.getMatrix();
+                matrix.setRotate(osg::Quat());
+                transform.setMatrix(matrix);
+                traverse(transform);
+            }
+        };
+    }
+
+    osg::ref_ptr<osg::Node> ESM4NpcAnimation::attachPart(std::string_view model)
+    {
+        if (model.empty() || !Misc::StringUtils::ciEndsWith(model, ".nif"))
+            return nullptr;
+        Resource::SceneManager* sceneManager = mResourceSystem->getSceneManager();
+        osg::ref_ptr<const osg::Node> templateNode
+            = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
+
+        if (dynamic_cast<const SceneUtil::Skeleton*>(templateNode.get()))
+        {
+            CollectRigsVisitor collect;
+            const_cast<osg::Node*>(templateNode.get())->accept(collect);
+            osg::ref_ptr<osg::Group> handle = new osg::Group;
+            // The shape's own transform stays: the loader pairs it with the skin transform (head meshes sit at
+            // +112 on their node and -112 in their skin data), so dropping either one moves the part.
+            for (const osg::Node* shape : collect.mShapes)
+                handle->addChild(sceneManager->getInstance(shape));
+            handle->getOrCreateUserDataContainer()->addUserObject(new Resource::TemplateRef(templateNode));
+            mObjectRoot->addChild(handle);
+            return handle;
+        }
+
+        // Skinned parts are bound to the NPC skeleton. The rest hang off the bone their "Prn" extra data names.
+        // Rigid apparel (the Pip-Boy on "Bip01 L ForeTwist") sits on that bone as modelled, file transforms and
+        // all. Head parts (hair, eyes, mouth, hats...) name the head bone, or nothing, and are modelled in the
+        // same space as the skinned head mesh: they are placed with the head mesh's own binding to that bone so
+        // they follow it exactly like the skinned head does.
+        constexpr std::string_view headBone = "Bip01 Head";
+        const NodeMap& nodeMap = getNodeMap();
+        std::string attachmentBone;
+        {
+            FindAttachmentBoneVisitor findBone;
+            const_cast<osg::Node*>(templateNode.get())->accept(findBone);
+            attachmentBone = findBone.mBone;
+        }
+        if (!attachmentBone.empty() && !Misc::StringUtils::ciEqual(attachmentBone, headBone))
+        {
+            auto bone = nodeMap.find(attachmentBone);
+            if (bone != nodeMap.end())
+            {
+                // SceneUtil::attach mirrors anything put on a node named "Left ...", which these aren't; a plain
+                // group under the bone keeps the model as it is.
+                osg::ref_ptr<osg::Group> holder = new osg::Group;
+                bone->second->addChild(holder);
+                Log(Debug::Verbose) << "Rigid part " << model << " on " << attachmentBone << " for "
+                                    << mPtr.getCellRef().getRefId();
+                return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, holder, sceneManager);
+            }
+            Log(Debug::Verbose) << "No bone " << attachmentBone << " for " << model << " on "
+                                << mPtr.getCellRef().getRefId();
+        }
+        auto found = nodeMap.find(headBone);
+        if (found == nodeMap.end())
+            return SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, mObjectRoot, sceneManager);
+        // The game (BSFaceGenManager, FUN_00654720 and FUN_00655320 for hair) takes the shapes out of the file and
+        // sets each one's rotation to a fixed quarter turn under the head bone, which is the head binding here. So
+        // the file's own rotations are dropped: the NIF reader already drops the root's, and the shapes' go here.
+        // Hair meshes turn their root one way and their shapes back (HairBun.NIF), and with only the shapes'
+        // rotation the bun hung in front of the face.
+        osg::ref_ptr<osg::MatrixTransform> binding = new osg::MatrixTransform(mHeadBinding);
+        found->second->addChild(binding);
+        osg::ref_ptr<osg::Node> part = SceneUtil::attach(std::move(templateNode), mObjectRoot, {}, binding, sceneManager);
+        DropRotationVisitor dropRotation;
+        part->accept(dropRotation);
+        return part;
+    }
+
+    void ESM4NpcAnimation::initHeadBinding(std::string_view headModel)
+    {
+        mHeadBinding = osg::Matrixf();
+        if (headModel.empty())
+            return;
+        osg::ref_ptr<const osg::Node> head = mResourceSystem->getSceneManager()->getTemplate(
+            Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(headModel)));
+        CollectRigsVisitor collect;
+        const_cast<osg::Node*>(head.get())->accept(collect);
+        for (const osg::Node* shape : collect.mShapes)
+        {
+            const osg::Group* group = shape->asGroup();
+            for (unsigned int i = 0; group && i < group->getNumChildren(); ++i)
+            {
+                const auto* rig = dynamic_cast<const SceneUtil::RigGeometry*>(group->getChild(i));
+                if (const osg::Matrixf* bind = rig ? rig->getInvBindMatrix("Bip01 Head") : nullptr)
+                {
+                    mHeadBinding = *bind;
+                    return;
+                }
+            }
+        }
+    }
+
+    // Parts are instances of cached meshes whose state sets are shared between NPCs, so copy before changing one.
+    static osg::StateSet* getUniqueStateSet(osg::Node& node)
+    {
+        if (const osg::StateSet* shared = node.getStateSet())
+            node.setStateSet(osg::clone(shared, osg::CopyOp::SHALLOW_COPY));
+        return node.getOrCreateStateSet();
+    }
+
+    static void tintHair(osg::Node& node, const ESM4::Npc::HairColour& colour)
+    {
+        // FO3/FONV hair textures are grey; the game colours them with the NPC's hair colour.
+        const osg::Vec4f tint(colour.red / 255.f, colour.green / 255.f, colour.blue / 255.f, 1.f);
+        osg::ref_ptr<osg::Material> material = new osg::Material;
+        material->setColorMode(osg::Material::OFF);
+        material->setDiffuse(osg::Material::FRONT_AND_BACK, tint);
+        material->setAmbient(osg::Material::FRONT_AND_BACK, tint);
+        osg::StateSet* stateset = getUniqueStateSet(node);
+        stateset->setAttributeAndModes(material, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+        stateset->addUniform(new osg::Uniform("colorMode", 0), osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+    }
+
+    osg::ref_ptr<osg::Image> ESM4NpcAnimation::getTexture(std::string_view texture)
+    {
+        if (texture.empty())
+            return nullptr;
+        return mResourceSystem->getImageManager()->getImage(
+            Misc::ResourceHelpers::correctTexturePath(VFS::Path::toNormalized(texture), *mResourceSystem->getVFS()));
+    }
+
+    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, std::string_view texture)
+    {
+        overrideDiffuse(node, getTexture(texture));
+    }
+
+    void ESM4NpcAnimation::overrideDiffuse(osg::Node& node, osg::ref_ptr<osg::Image> image)
+    {
+        if (!image)
+            return;
+        osg::ref_ptr<osg::Texture2D> texture2d = new osg::Texture2D(image);
+        texture2d->setTextureSize(image->s(), image->t());
+        texture2d->setWrap(osg::Texture::WRAP_S, osg::Texture::REPEAT);
+        texture2d->setWrap(osg::Texture::WRAP_T, osg::Texture::REPEAT);
+        // The base texture of a BSShaderTextureSet is always bound to the first unit.
+        getUniqueStateSet(node)->setTextureAttributeAndModes(
+            0, texture2d, osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE);
+    }
+
+    void ESM4NpcAnimation::applyFaceGen(osg::Node& node, std::string_view model, const ESM4::Npc& traits)
+    {
+        applyFaceGenShape(node, model, traits.mSymShapeModeCoefficients, traits.mAsymShapeModeCoefficients,
+            *mResourceSystem->getVFS());
+    }
+
+    void ESM4NpcAnimation::addFaceMorphs(osg::Node& node, std::string_view model)
+    {
+        if (mFace == nullptr)
+            mFace = std::make_unique<FaceMorphs>();
+        if (mFace->add(node, model, *mResourceSystem->getVFS()))
+            Log(Debug::Verbose) << "Face morphs from " << model << " on " << mPtr.toString();
+    }
+
+    namespace
+    {
+        // Speech morphs of the head .tri files, picked in turn while the actor talks, and how far each opens
+        struct Viseme
+        {
+            std::string_view mMorph;
+            float mWeight;
+        };
+        constexpr Viseme sVisemes[] = { { "Aah", 1.f }, { "BigAah", 0.7f }, { "Eh", 1.f }, { "Oh", 1.f },
+            { "OohQ", 0.9f }, { "Ee", 0.9f }, { "I", 1.f }, { "K", 0.8f }, { "N", 0.8f }, { "DST", 0.8f },
+            { "Th", 0.7f }, { "R", 0.8f }, { "W", 0.8f }, { "ChJSh", 0.8f }, { "FV", 0.7f }, { "BMP", 0.6f } };
+
+        // Morph of each INFO emotion type, 1 to 7 (0 is neutral)
+        constexpr std::string_view sEmotionMorphs[]
+            = { "", "Anger", "Disgust", "Fear", "Sad", "Happy", "Surprise", "Pained" };
+    }
+
+    void ESM4NpcAnimation::setEmotion(int type, float value)
+    {
+        if (type <= 0 || type >= static_cast<int>(std::size(sEmotionMorphs)))
+        {
+            mEmotionValue = 0.f;
+            return;
+        }
+        if (type != mEmotion && mFace != nullptr)
+        {
+            mFace->setWeight(sEmotionMorphs[mEmotion], 0.f);
+            mEmotionLevel = 0.f;
+        }
+        mEmotion = type;
+        mEmotionValue = std::clamp(value / 100.f, 0.f, 1.f);
+        mSilentTime = 0.f;
+    }
+
+    void ESM4NpcAnimation::startLipSync(std::string_view voiceFile)
+    {
+        mLipSync = getLipSync(voiceFile, *mResourceSystem->getVFS());
+        mLipSyncTime = mLipSync ? mLipSync->mLeadIn : 0.f;
+        Log(Debug::Verbose) << "Lip sync for " << voiceFile << ": "
+                            << (mLipSync ? std::to_string(mLipSync->mFrames.size()) + " frames" : "none");
+        mSilentTime = 0.f;
+    }
+
+    void ESM4NpcAnimation::updateFace(float duration)
+    {
+        if (mFace == nullptr || mFace->empty())
+            return;
+        if (mDead)
+        {
+            for (const Viseme& viseme : sVisemes)
+                mFace->setWeight(viseme.mMorph, 0.f);
+            mFace->setWeight("BlinkLeft", 1.f);
+            mFace->setWeight("BlinkRight", 1.f);
+            mFace->apply();
+            return;
+        }
+        std::uniform_real_distribution<float> random(0.f, 1.f);
+
+        const MWBase::SoundManager* sounds = MWBase::Environment::get().getSoundManager();
+        const bool talking = sounds->sayActive(mPtr);
+
+        // The line's lip sync, if it has one, drives the mouth, brows and eyes frame by frame.
+        const LipSync::Frame* lipFrame = nullptr;
+        LipSync::Frame interpolated{};
+        if (mLipSync != nullptr && (!talking || mLipSyncTime >= mLipSync->getDuration()))
+            mLipSync = nullptr;
+        if (mLipSync != nullptr)
+        {
+            mLipSyncTime += duration;
+            const float position = std::max(0.f, mLipSyncTime * LipSync::sFrameRate);
+            const std::size_t first = std::min(static_cast<std::size_t>(position), mLipSync->mFrames.size() - 1);
+            const std::size_t second = std::min(first + 1, mLipSync->mFrames.size() - 1);
+            const float blend = std::min(1.f, position - first);
+            for (std::size_t i = 0; i < interpolated.size(); ++i)
+                interpolated[i] = mLipSync->mFrames[first][i] * (1.f - blend) + mLipSync->mFrames[second][i] * blend;
+            lipFrame = &interpolated;
+        }
+        // The frame's head turn (pitch, roll, yaw); eases back to straight once the line is over
+        const osg::Vec3f lipTurn = lipFrame ? osg::Vec3f((*lipFrame)[30], (*lipFrame)[31], (*lipFrame)[32]) : osg::Vec3f();
+        mLipTurn += (lipTurn - mLipTurn) * std::min(1.f, duration * (lipFrame ? 20.f : 4.f));
+
+        // Without lip sync the mouth opens with the loudness of the voice line, quickly, and closes a little slower.
+        const float loudness = talking ? std::clamp(sounds->getSaySoundLoudness(mPtr) * 2.f, 0.f, 1.f) : 0.f;
+        const float rate = loudness > mMouthOpen ? 30.f : 12.f;
+        mMouthOpen += (loudness - mMouthOpen) * std::min(1.f, duration * rate);
+
+        // A new mouth shape every tenth of a second or so, blended in over 70 ms
+        mVisemeTime -= duration;
+        if (talking && mVisemeTime <= 0.f)
+        {
+            mPreviousViseme = mViseme;
+            mViseme = (mViseme + 1 + static_cast<std::size_t>(random(mFaceRandom) * (std::size(sVisemes) - 1)))
+                % std::size(sVisemes);
+            mVisemeBlend = 0.f;
+            mVisemeTime = 0.08f + 0.1f * random(mFaceRandom);
+        }
+        mVisemeBlend = std::min(1.f, mVisemeBlend + duration / 0.07f);
+        if (lipFrame != nullptr)
+        {
+            for (std::size_t i = 0; i < sLipSyncPhonemes.size(); ++i)
+                mFace->setWeight(sLipSyncPhonemes[i], (*lipFrame)[i]);
+        }
+        else
+        {
+            for (std::size_t i = 0; i < std::size(sVisemes); ++i)
+            {
+                float weight = 0.f;
+                if (i == mViseme)
+                    weight += mVisemeBlend;
+                if (i == mPreviousViseme && i != mViseme)
+                    weight += 1.f - mVisemeBlend;
+                mFace->setWeight(sVisemes[i].mMorph, weight * mMouthOpen * sVisemes[i].mWeight);
+            }
+        }
+
+        // Blinks every two to six seconds, a sixth of a second each
+        mBlinkWait -= duration;
+        if (mBlinkWait <= 0.f)
+        {
+            mBlinkWait = 2.f + 4.f * random(mFaceRandom);
+            mBlinkTime = 0.f;
+        }
+        float blink = 0.f;
+        if (mBlinkTime >= 0.f)
+        {
+            mBlinkTime += duration;
+            constexpr float blinkLength = 0.16f;
+            blink = 1.f - std::abs(mBlinkTime / blinkLength * 2.f - 1.f);
+            if (mBlinkTime >= blinkLength)
+            {
+                mBlinkTime = -1.f;
+                blink = 0.f;
+            }
+        }
+        for (std::size_t i = 2; i < sLipSyncModifiers.size(); ++i)
+            mFace->setWeight(sLipSyncModifiers[i], lipFrame ? (*lipFrame)[16 + i] : 0.f);
+        mFace->setWeight("BlinkLeft", std::max(blink, lipFrame ? (*lipFrame)[16] : 0.f));
+        mFace->setWeight("BlinkRight", std::max(blink, lipFrame ? (*lipFrame)[17] : 0.f));
+
+        // Mood: shows while the line is spoken and fades a couple of seconds after
+        mSilentTime = talking ? 0.f : mSilentTime + duration;
+        const float mood = mSilentTime > 2.f ? 0.f : mEmotionValue;
+        mEmotionLevel += (mood - mEmotionLevel) * std::min(1.f, duration * 3.f);
+        if (mEmotion > 0)
+            mFace->setWeight(sEmotionMorphs[mEmotion], mEmotionLevel);
+
+        mFace->apply();
+    }
+
+    namespace
+    {
+        // Finds the skin-shaded shapes of an outfit, tagged by the NIF loader.
+        class CollectSkinVisitor : public osg::NodeVisitor
+        {
+        public:
+            CollectSkinVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                bool skin = false;
+                if (node.getUserValue("bsSkin", skin) && skin)
+                    mNodes.push_back(&node);
+                traverse(node);
+            }
+
+            std::vector<osg::Node*> mNodes;
+        };
+
+        // FO3/FONV hand FaceGen files follow the body's: UpperBodyHumanOldFemale.egt -> LeftHandOldFemale.egt
+        std::string handEgt(std::string_view bodyEgt, std::string_view side)
+        {
+            std::string path = Misc::StringUtils::lowerCase(bodyEgt);
+            std::replace(path.begin(), path.end(), '/', '\\');
+            const size_t slash = path.find_last_of('\\');
+            std::string name = path.substr(slash == std::string::npos ? 0 : slash + 1);
+            for (std::string_view prefix : { "upperbodyhuman", "upperbody" })
+            {
+                if (name.starts_with(prefix))
+                {
+                    name.erase(0, prefix.size());
+                    return path.substr(0, slash + 1) + std::string(side) + name;
+                }
+            }
+            return {};
+        }
+    }
+
+    void ESM4NpcAnimation::updatePartsFONV(const ESM4::Npc& traits)
+    {
+        const MWWorld::ESMStore* store = MWBase::Environment::get().getESMStore();
+        const ESM4::Race* race = MWClass::ESM4Npc::getRace(mPtr);
+        const bool isFemale = MWClass::ESM4Npc::isFemale(mPtr);
+
+        // The skeleton carries a facial animation helper shape that the game never draws.
+        SceneUtil::FindByNameVisitor findHeadAnims("HeadAnims");
+        mObjectRoot->accept(findHeadAnims);
+        if (findHeadAnims.mFoundNode)
+            findHeadAnims.mFoundNode->setNodeMask(0);
+
+        initHeadBinding(race->mHeadParts.empty() ? std::string_view()
+                                                 : std::string_view((isFemale ? race->mHeadPartsFemale
+                                                                              : race->mHeadParts)[0].mesh));
+
+        // Every human race shares the same skin textures; the NPC's FaceGen texture modes give it its colour, on the
+        // body and hands as on the face. Race body parts: 0 upper body, 1 left hand, 2 right hand, 3 body .egt
+        const std::vector<ESM4::Race::BodyPart>& bodyParts = isFemale ? race->mBodyPartsFemale : race->mBodyPartsMale;
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        auto skinTexture = [&](std::string_view texture, std::string_view egt) {
+            osg::ref_ptr<osg::Image> base = getTexture(texture);
+            if (!base || egt.empty())
+                return base;
+            osg::ref_ptr<osg::Image> skin = makeFaceGenTexture(*base, egt, traits.mSymTextureModeCoefficients, vfs);
+            return skin ? skin : base;
+        };
+        const std::string_view bodyEgt = bodyParts.size() > 3 ? std::string_view(bodyParts[3].mesh) : std::string_view();
+        osg::ref_ptr<osg::Image> bodySkin = bodyParts.size() > 0 ? skinTexture(bodyParts[0].texture, bodyEgt) : nullptr;
+        osg::ref_ptr<osg::Image> leftHandSkin
+            = bodyParts.size() > 1 ? skinTexture(bodyParts[1].texture, handEgt(bodyEgt, "lefthand")) : nullptr;
+        osg::ref_ptr<osg::Image> rightHandSkin
+            = bodyParts.size() > 2 ? skinTexture(bodyParts[2].texture, handEgt(bodyEgt, "righthand")) : nullptr;
+
+        // Equip at most one armor per biped slot, in inventory order.
+        uint32_t usedSlots = 0;
+        for (const ESM4::Armor* armor : MWClass::ESM4Npc::getEquippedArmor(mPtr))
+        {
+            const uint32_t slots = armor->mArmorFlags & 0x000fffff;
+            if (slots == 0 || (slots & usedSlots))
+                continue;
+            const ESM::Path& model
+                = isFemale && !armor->mModelFemale.empty() ? armor->mModelFemale : armor->mModelMale;
+            if (model.empty())
+                continue;
+            usedSlots |= slots;
+            osg::ref_ptr<osg::Node> node = attachPart(model.getOriginal());
+            if (!node)
+                continue;
+            // Bare skin in outfits is painted with the generic body or hand texture; use the NPC's instead.
+            CollectSkinVisitor collectSkin;
+            node->accept(collectSkin);
+            for (osg::Node* skinNode : collectSkin.mNodes)
+            {
+                const osg::StateSet* stateset = skinNode->getStateSet();
+                const osg::Texture* texture = stateset ? dynamic_cast<const osg::Texture*>(
+                                                  stateset->getTextureAttribute(0, osg::StateAttribute::TEXTURE))
+                                                       : nullptr;
+                const osg::Image* image = texture ? texture->getImage(0) : nullptr;
+                const std::string name = image ? Misc::StringUtils::lowerCase(image->getFileName()) : std::string();
+                if (name.find("hand") != std::string::npos)
+                    overrideDiffuse(*skinNode, leftHandSkin);
+                else if (name.find("upperbody") != std::string::npos)
+                    overrideDiffuse(*skinNode, bodySkin);
+            }
+        }
+
+        const osg::ref_ptr<osg::Image> bodySkins[] = { bodySkin, leftHandSkin, rightHandSkin };
+        constexpr uint32_t bodySlots[] = { ESM4::Armor::FO3_UpperBody, ESM4::Armor::FO3_LeftHand,
+            ESM4::Armor::FO3_RightHand };
+        for (size_t i = 0; i < bodyParts.size() && i < std::size(bodySlots); ++i)
+        {
+            if (usedSlots & bodySlots[i])
+                continue;
+            if (osg::ref_ptr<osg::Node> node = attachPart(bodyParts[i].mesh))
+                overrideDiffuse(*node, bodySkins[i]);
+        }
+
+        // First-person arms have no head to draw (it would sit on the camera)
+        if ((usedSlots & ESM4::Armor::FO3_Head) || mFirstPerson)
+            return;
+
+        // Race head: head, ears, mouth, lower teeth, upper teeth, tongue, left eye, right eye
+        const ESM4::Eyes* eyes = traits.mEyes.isZeroOrUnset() ? nullptr : store->get<ESM4::Eyes>().search(traits.mEyes);
+        const std::vector<ESM4::Race::BodyPart>& headParts = isFemale ? race->mHeadPartsFemale : race->mHeadParts;
+        for (size_t i = 0; i < headParts.size(); ++i)
+        {
+            osg::ref_ptr<osg::Node> node = attachPart(headParts[i].mesh);
+            if (!node)
+                continue;
+            applyFaceGen(*node, headParts[i].mesh, traits);
+            addFaceMorphs(*node, headParts[i].mesh);
+            // The race picks the skin (old races have their own head texture); the NPC's EYES record picks the
+            // eye colour, and without one the game uses EyeDefault.dds (BSFaceGenManager, FUN_006558b0).
+            if (i == 6 || i == 7)
+                overrideDiffuse(*node, eyes ? std::string_view(eyes->mIcon) : "textures/characters/eyes/eyedefault.dds");
+            else if (osg::ref_ptr<osg::Image> skin = getTexture(headParts[i].texture))
+            {
+                // The NPC's complexion is morphed onto the race's face texture.
+                osg::ref_ptr<osg::Image> face = makeFaceGenTexture(
+                    *skin, headParts[i].mesh, traits.mSymTextureModeCoefficients, *mResourceSystem->getVFS());
+                overrideDiffuse(*node, face ? face : skin);
+            }
+        }
+
+        for (ESM::FormId partId : traits.mHeadParts)
+        {
+            if (partId.isZeroOrUnset())
+                continue;
+            const ESM4::HeadPart* part = store->get<ESM4::HeadPart>().search(partId);
+            if (part == nullptr)
+            {
+                Log(Debug::Error) << "Head part not found: " << ESM::RefId(partId);
+                continue;
+            }
+            osg::ref_ptr<osg::Node> node = attachPart(part->mModel.getOriginal());
+            if (!node)
+                continue;
+            applyFaceGen(*node, part->mModel.getOriginal(), traits);
+            addFaceMorphs(*node, part->mModel.getOriginal());
+            // Eyebrows and beards live next to the hair meshes and take the hair colour too.
+            if (part->mModel.getNormalized().value().starts_with("characters/hair/"))
+                tintHair(*node, traits.mHairColour);
+        }
+
+        if (!traits.mHair.isZeroOrUnset() && !(usedSlots & ESM4::Armor::FO3_Hair))
+        {
+            const ESM4::Hair* hair = store->get<ESM4::Hair>().search(traits.mHair);
+            if (hair == nullptr)
+                Log(Debug::Error) << "Hair not found: " << ESM::RefId(traits.mHair);
+            else if (osg::ref_ptr<osg::Node> node = attachPart(hair->mModel.getOriginal()))
+            {
+                applyFaceGen(*node, hair->mModel.getOriginal(), traits);
+                // Hair meshes carry a full and a trimmed variant; show the one that fits under a hat.
+                const bool hat = usedSlots & ESM4::Armor::FO3_Hat;
+                SceneUtil::FindByNameVisitor findHidden(hat ? "NoHat" : "Hat");
+                node->accept(findHidden);
+                if (findHidden.mFoundNode)
+                    findHidden.mFoundNode->setNodeMask(0);
+                tintHair(*node, traits.mHairColour);
+                // Several hair styles share one mesh and differ only by texture (e.g. balding).
+                overrideDiffuse(*node, hair->mIcon);
+            }
+        }
+    }
+
+    namespace
+    {
+        // Holds a bone at its rest position in the horizontal plane. Locomotion sequences move the accumulation root
+        // ("Bip01") forward over a cycle; the actor itself is moved by the AI instead.
+        class StripHorizontalMotion : public SceneUtil::NodeCallback<StripHorizontalMotion, NifOsg::MatrixTransform*>
+        {
+        public:
+            explicit StripHorizontalMotion(const osg::Vec3f& rest)
+                : mRest(rest)
+            {
+            }
+
+            void operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                osg::Vec3f translation = node->getMatrix().getTrans();
+                translation.x() = mRest.x();
+                translation.y() = mRest.y();
+                node->setTranslation(translation);
+                traverse(node, nv);
+            }
+
+        private:
+            osg::Vec3f mRest;
+        };
+
+        // Rotation a NIF transform was given, without whatever the head tracking put on its matrix since
+        osg::Quat getNifRotation(const NifOsg::MatrixTransform& node)
+        {
+            osg::Matrixf rotation;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    rotation(i, j) = node.mRotationScale.mValues[j][i];
+            return rotation.getRotate();
+        }
+
+        // Eases a bone from the pose it had when a sequence was replaced into the pose the new sequence gives it
+        // (or the rest pose, for a bone the new sequence leaves alone), as the original engine blends sequences
+        // over fAnimationDefaultBlend instead of cutting from one to the next.
+        class BlendFromPose : public SceneUtil::NodeCallback<BlendFromPose, NifOsg::MatrixTransform*>
+        {
+        public:
+            // from: the bone's pose when the sequence was replaced. rest: its pose in the skeleton, which a bone
+            // the new sequence has no track (or no translation or rotation keys) for goes back to.
+            // started: set once any bone of the blend has been posed, i.e. the switch has been drawn
+            BlendFromPose(const osg::Vec3f& fromTranslation, const osg::Quat& fromRotation,
+                const osg::Vec3f& restTranslation, const osg::Quat& restRotation, float duration,
+                std::shared_ptr<bool> started)
+                : mFromTranslation(fromTranslation)
+                , mFromRotation(fromRotation)
+                , mRestTranslation(restTranslation)
+                , mRestRotation(restRotation)
+                , mDuration(duration)
+                , mStarted(std::move(started))
+            {
+            }
+
+            void operator()(NifOsg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                const double now = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                if (!mStart)
+                    mStart = now;
+                *mStarted = true;
+                // What the sequence posed the bone in this frame; where it didn't write over the blend of the
+                // frame before, the bone is headed for its rest pose
+                osg::Vec3f translation = node->getMatrix().getTrans();
+                osg::Quat rotation = getNifRotation(*node);
+                if (mWritten && translation == mWrittenTranslation)
+                    translation = mRestTranslation;
+                if (mWritten && rotation == mWrittenRotation)
+                    rotation = mRestRotation;
+                if (!mDone)
+                {
+                    const float t = std::min(1.f, static_cast<float>(now - *mStart) / mDuration);
+                    const float weight = t * t * (3.f - 2.f * t);
+                    osg::Quat blended;
+                    blended.slerp(weight, mFromRotation, rotation);
+                    node->setRotation(blended);
+                    node->setTranslation(mFromTranslation * (1.f - weight) + translation * weight);
+                    mWrittenTranslation = node->getMatrix().getTrans();
+                    mWrittenRotation = getNifRotation(*node);
+                    mWritten = true;
+                    mDone = t >= 1.f;
+                }
+                traverse(node, nv);
+            }
+
+        private:
+            osg::Vec3f mFromTranslation;
+            osg::Quat mFromRotation;
+            osg::Vec3f mRestTranslation;
+            osg::Quat mRestRotation;
+            float mDuration;
+            std::shared_ptr<bool> mStarted;
+            std::optional<double> mStart;
+            bool mWritten = false;
+            bool mDone = false;
+            osg::Vec3f mWrittenTranslation;
+            osg::Quat mWrittenRotation;
+        };
+
+        class LookCallback : public SceneUtil::NodeCallback<LookCallback, osg::MatrixTransform*>
+        {
+        public:
+            explicit LookCallback(ESM4NpcAnimation* animation)
+                : mAnimation(animation)
+            {
+            }
+
+            void operator()(osg::MatrixTransform* node, osg::NodeVisitor* nv)
+            {
+                const double time = nv->getFrameStamp() ? nv->getFrameStamp()->getSimulationTime() : 0.0;
+                const float duration = mLastTime < 0.0 ? 0.f : static_cast<float>(time - mLastTime);
+                mLastTime = time;
+                mAnimation->updateLook(*node, std::clamp(duration, 0.f, 0.1f));
+                traverse(node, nv);
+            }
+
+        private:
+            ESM4NpcAnimation* mAnimation;
+            double mLastTime = -1.0;
+        };
+    }
+
+    namespace
+    {
+        // Loop time that runs at a rate the AI can change while the loop plays, so the walk keeps pace with the
+        // actor's speed.
+        class RateTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            explicit RateTimeSource(std::shared_ptr<const float> rate)
+                : mRate(std::move(rate))
+            {
+            }
+
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (mLast)
+                    mTime += (now - *mLast) * *mRate;
+                mLast = now;
+                return static_cast<float>(mTime);
+            }
+
+        private:
+            std::shared_ptr<const float> mRate;
+            double mTime = 0;
+            std::optional<double> mLast;
+        };
+
+        // Plays a sequence once, backwards when asked, and holds the frame it ends on.
+        class OnceTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            OnceTimeSource(bool reverse, bool skipToEnd)
+                : mReverse(reverse)
+                , mSkipToEnd(skipToEnd)
+            {
+            }
+
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (!mStart)
+                    mStart = now;
+                const float elapsed
+                    = mSkipToEnd ? mDuration : std::min(mDuration, static_cast<float>(now - *mStart));
+                // just short of the end, which a loop-type sequence's own wrap maps back onto its first key
+                if (elapsed >= mDuration && mDuration > 0.01f)
+                    return mReverse ? 0.001f : mDuration - 0.001f;
+                return mReverse ? mDuration - elapsed : elapsed;
+            }
+
+            float mDuration = 0.f;
+
+        private:
+            bool mReverse;
+            bool mSkipToEnd;
+            std::optional<double> mStart;
+        };
+    }
+
+    namespace
+    {
+        // Sequence time counted from the frame the sequence started on, so one-shot sequences (furniture entries,
+        // special idles) begin at their first key; looping ones cycle on from there.
+        // A one-shot sequence (mEnd > 0) holds its last frame from there: the AI that played it moves on by its own
+        // clock, a frame or so later, and a sequence whose cycle type is loop would otherwise show its first pose
+        // again for that frame before the next sequence takes over.
+        class RelativeTimeSource : public SceneUtil::ControllerSource
+        {
+        public:
+            float getValue(osg::NodeVisitor* nv) override
+            {
+                const double now = nv->getFrameStamp()->getSimulationTime();
+                if (!mStart)
+                    mStart = now;
+                const float time = static_cast<float>(now - *mStart);
+                return mEnd > 0.f ? std::min(time, mEnd) : time;
+            }
+
+            float mEnd = 0.f;
+
+        private:
+            std::optional<double> mStart;
+        };
+    }
+
+    void ESM4NpcAnimation::playStandingIdleFONV()
+    {
+        playLoopFONV("mtidle.kf", false);
+    }
+
+    void ESM4NpcAnimation::setLocomotion(Locomotion locomotion, bool force)
+    {
+        if (mDead)
+            return;
+        if (mDown)
+        {
+            // taken up again by standUp
+            mLocomotion = locomotion;
+            return;
+        }
+        if (locomotion == mLocomotion && !force)
+            return;
+        mLocomotion = locomotion;
+        // Forcing cuts a one-off sequence short (a furniture or idle sequence is over)
+        if (force)
+            mInAction = false;
+        // An attack or other one-off sequence finishes first, resumeLocomotion picks the loop up again.
+        if (!mInAction)
+            playLocomotion();
+    }
+
+    float ESM4NpcAnimation::playIdleFONV(std::string_view model, bool keepRootMotion, bool once)
+    {
+        if (mDead || mDown)
+            return 0.f;
+        const VFS::Path::Normalized path = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model));
+        if (!mResourceSystem->getVFS()->exists(path))
+        {
+            Log(Debug::Verbose) << "No " << path << " for " << mPtr.getCellRef().getRefId();
+            return 0.f;
+        }
+        // Replaces any attack in progress; the caller resumes the locomotion when it is done
+        mInAction = false;
+        const auto source = std::make_shared<RelativeTimeSource>();
+        const float length
+            = playKeyframesFONV(path, source, !keepRootMotion, sDefaultBlendTime, keepRootMotion);
+        // (just short of the end: a loop's own wrap maps the end itself back onto the first key)
+        if (once && length > 0.01f)
+            source->mEnd = length - 0.001f;
+        return length;
+    }
+
+    void ESM4NpcAnimation::resumeLocomotion()
+    {
+        if (!mInAction || mDead || mDown)
+            return;
+        mInAction = false;
+        playLocomotion();
+    }
+
+    float ESM4NpcAnimation::playActionFONV(std::string_view file)
+    {
+        if (mDead || mDown)
+            return 0.f;
+        // Attacks sit next to the skeleton, idles in idleanims/
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
+        const std::string_view skeleton = skeletonPath.value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return 0.f;
+        const std::string dir = std::string(skeleton.substr(0, slash + 1));
+        VFS::Path::Normalized path(dir + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+            path = VFS::Path::Normalized(dir + "idleanims/" + std::string(file));
+        if (!mResourceSystem->getVFS()->exists(path))
+        {
+            Log(Debug::Verbose) << "No " << file << " for " << mPtr.getCellRef().getRefId();
+            return 0.f;
+        }
+        const auto source = std::make_shared<OnceTimeSource>(false, false);
+        source->mDuration = playKeyframesFONV(path, source, true);
+        mInAction = source->mDuration > 0.f;
+        if (!mInAction)
+            playLocomotion();
+        return source->mDuration;
+    }
+
+    void ESM4NpcAnimation::setLocomotionDirection(Direction direction)
+    {
+        if (direction == mDirection)
+            return;
+        mDirection = direction;
+        if (mLocomotion != Locomotion::Idle && !mInAction && !mDead && !mDown)
+            playLocomotion();
+    }
+
+    void ESM4NpcAnimation::playLocomotion()
+    {
+        if (mLocomotion == Locomotion::Idle)
+        {
+            playLoopFONV(mIdleSequence.empty() ? std::string_view("mtidle.kf") : mIdleSequence, false);
+            return;
+        }
+        static constexpr std::string_view directions[] = { "forward", "backward", "left", "right" };
+        const std::string suffix = std::string(mLocomotion == Locomotion::Run ? "fast" : "")
+            + std::string(directions[static_cast<int>(mDirection)]) + ".kf";
+        // A crouched idle (sneak/mtidle.kf, sneak/2hraim.kf, ...) walks with the sneak loops of the same folder
+        std::string sneak;
+        std::string idle = mIdleSequence;
+        if (Misc::StringUtils::ciStartsWith(idle, "sneak/"))
+        {
+            sneak = "sneak/";
+            idle = idle.substr(6);
+        }
+        else if (Misc::StringUtils::ciStartsWith(idle, "sneak"))
+        {
+            sneak = "sneak";
+            idle = idle.substr(5);
+        }
+        // With a weapon drawn the game plays the weapon's own loop where there is one (2hrforward.kf...); the
+        // rest fall back to the plain mt loops.
+        if (idle.size() > 6 && Misc::StringUtils::ciEndsWith(idle, "aim.kf"))
+        {
+            const std::string weaponLoop = idle.substr(0, idle.size() - 6) + suffix;
+            if (!sneak.empty() && !findLoopFONV(sneak + weaponLoop).empty())
+            {
+                playLoopFONV(sneak + weaponLoop, true);
+                return;
+            }
+            if (!findLoopFONV(weaponLoop).empty())
+            {
+                playLoopFONV(weaponLoop, true);
+                return;
+            }
+        }
+        if (!sneak.empty() && !findLoopFONV(sneak + "mt" + suffix).empty())
+        {
+            playLoopFONV(sneak + "mt" + suffix, true);
+            return;
+        }
+        playLoopFONV("mt" + suffix, true);
+    }
+
+    void ESM4NpcAnimation::setIdleSequence(std::string_view file)
+    {
+        if (file == mIdleSequence)
+            return;
+        mIdleSequence = file;
+        if (mLocomotion == Locomotion::Idle && !mInAction && !mDead && !mDown)
+            playLocomotion();
+    }
+
+    void ESM4NpcAnimation::showWeapon(std::string_view model)
+    {
+        if (mWeapon != nullptr)
+        {
+            for (osg::Group* parent : mWeapon->getParents())
+                parent->removeChild(mWeapon);
+            mWeapon = nullptr;
+        }
+        if (model.empty() || mObjectRoot == nullptr)
+            return;
+        // FO3/FONV skeletons carry a "Weapon" bone in the right hand that weapon models are made to sit on. It has
+        // no controller, so it may not be a transform the node map knows.
+        osg::Group* bone = nullptr;
+        SceneUtil::FindByNameVisitor findWeaponBone("Weapon");
+        mObjectRoot->accept(findWeaponBone);
+        bone = findWeaponBone.mFoundNode;
+        if (bone == nullptr)
+        {
+            const NodeMap& nodeMap = getNodeMap();
+            if (auto found = nodeMap.find("Bip01 R Hand"); found != nodeMap.end())
+                bone = found->second;
+        }
+        if (bone == nullptr)
+        {
+            Log(Debug::Verbose) << "No weapon bone for " << mPtr.getCellRef().getRefId();
+            return;
+        }
+        Resource::SceneManager* sceneManager = mResourceSystem->getSceneManager();
+        osg::ref_ptr<const osg::Node> templateNode
+            = sceneManager->getTemplate(Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(model)));
+        // Weapon files can carry bones of their own (SceneUtil::attach would then look for skinned shapes only), so
+        // the whole model hangs off the bone as it is.
+        mWeapon = sceneManager->getInstance(templateNode);
+        bone->addChild(mWeapon);
+        Log(Debug::Verbose) << "Weapon " << model << " on bone '" << bone->getName() << "' (" << bone->className()
+                            << ") mask " << std::hex << mWeapon->getNodeMask() << std::dec << " parents "
+                            << bone->getNumParents() << " for " << mPtr.toString();
+    }
+
+    std::optional<std::pair<VFS::Path::Normalized, bool>> ESM4NpcAnimation::findGetUpSequence(
+        std::optional<bool> faceUp) const
+    {
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
+        const std::string_view skeleton = skeletonPath.value();
+        const std::size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return std::nullopt;
+        const std::string idles = std::string(skeleton.substr(0, slash)) + "/idleanims/";
+        // Get-up sequences start lying down; death poses are the lying pose itself.
+        static constexpr std::string_view getUpFiles[] = { "getup.kf", "specialidle_getupfaceup.kf",
+            "specialidle_getup.kf", "getupleft.kf", "mtspecialidle_getupleft.kf", "specialidle_getupleft.kf" };
+        static constexpr std::string_view poseFiles[] = { "deathpose1.kf", "deathpose2.kf" };
+        // The IDLE tree's GetUpFaceUp and GetUpFaceDown (FalloutNV.esm: humans MT_KnockDownFaceUp.kf and
+        // MT_KnockDownFaceDown.kf, the only human get-ups; creatures SpecialIdle_GetUpFaceUp.kf and the like)
+        static constexpr std::string_view faceUpFiles[] = { "mt_knockdownfaceup.kf", "specialidle_getupfaceup.kf",
+            "mtspecialidle_knockdownfaceup.kf" };
+        static constexpr std::string_view faceDownFiles[] = { "mt_knockdownfacedown.kf",
+            "specialidle_getupfacedown.kf", "mtspecialidle_knockdownfacedown.kf" };
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        auto findFile = [&](std::span<const std::string_view> names) -> std::optional<VFS::Path::Normalized> {
+            for (std::string_view name : names)
+            {
+                VFS::Path::Normalized path(idles + std::string(name));
+                if (vfs.exists(path))
+                    return path;
+            }
+            return std::nullopt;
+        };
+        if (faceUp)
+        {
+            if (const std::optional<VFS::Path::Normalized> getUp = findFile(*faceUp ? faceUpFiles : faceDownFiles))
+                return std::make_pair(*getUp, true);
+            if (const std::optional<VFS::Path::Normalized> getUp = findFile(*faceUp ? faceDownFiles : faceUpFiles))
+                return std::make_pair(*getUp, true);
+        }
+        if (const std::optional<VFS::Path::Normalized> getUp = findFile(getUpFiles))
+            return std::make_pair(*getUp, true);
+        if (const std::optional<VFS::Path::Normalized> pose = findFile(poseFiles))
+            return std::make_pair(*pose, false);
+        return std::nullopt;
+    }
+
+    void ESM4NpcAnimation::playDeath(bool instant)
+    {
+        if (mDead)
+            return;
+        mDead = true;
+        mDown = false;
+        showWeapon({});
+        if (mRagdollPosing)
+            return; // the ragdoll lays it down
+        // The original engine drops the body as a ragdoll. Without one, a creature's get-up sequence played backwards
+        // lays it down; humans have death poses.
+        const auto sequence = findGetUpSequence();
+        if (!sequence)
+        {
+            Log(Debug::Verbose) << "No death sequence for " << mPtr.getCellRef().getRefId();
+            return;
+        }
+        const auto source = std::make_shared<OnceTimeSource>(sequence->second, instant);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false, instant ? 0.f : sDefaultBlendTime);
+    }
+
+    float ESM4NpcAnimation::playKnockdown()
+    {
+        if (mDead || mDown || mRagdollPosing)
+            return 0.f;
+        mDown = true;
+        mInAction = false;
+        const auto sequence = findGetUpSequence(true);
+        if (!sequence)
+            return 0.f;
+        // The fall: the get-up sequence backwards, holding its lying first frame (a death pose is lying already)
+        const auto source = std::make_shared<OnceTimeSource>(sequence->second, false);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false);
+        return source->mDuration;
+    }
+
+    float ESM4NpcAnimation::playGetUp()
+    {
+        if (mDead || !mDown)
+            return 0.f;
+        // Which way up the body lies picks the sequence (asked before the ragdoll lets go)
+        const bool faceUp = isRagdollFaceUp();
+        if (mRagdollPosing)
+        {
+            // The sequence blends in from the pose the body lies in, so the limbs don't jump to its first frame;
+            // not the roots, which the get-up lines up with the body on its own
+            mPoseBlendFrom.clear();
+            if (mRagdoll != nullptr)
+                for (const MWPhysics::Ragdoll::Bone& bone : mRagdoll->getBones())
+                    if (bone.mNode != nullptr && bone.mName != "Bip01" && bone.mName != "Bip01 NonAccum")
+                        mPoseBlendFrom[bone.mNode.get()]
+                            = { bone.mNode->getMatrix().getTrans(), getNifRotation(*bone.mNode) };
+            endRagdoll();
+        }
+        const auto sequence = findGetUpSequence(faceUp);
+        if (!sequence || !sequence->second)
+            return 0.f;
+        // The get-up sequence forwards, from lying to standing, holding its last frame until standUp
+        const auto source = std::make_shared<OnceTimeSource>(false, false);
+        source->mDuration = playKeyframesFONV(sequence->first, source, false);
+        return source->mDuration;
+    }
+
+    void ESM4NpcAnimation::standUp()
+    {
+        if (mDead || !mDown)
+            return;
+        mDown = false;
+        mInAction = false;
+        playLocomotion();
+    }
+
+    void ESM4NpcAnimation::stopSequence()
+    {
+        for (auto& [node, callback] : mLoopCallbacks)
+        {
+            node->removeUpdateCallback(callback);
+            if (auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
+            {
+                // Rotation too: a furniture entry leaves "Bip01 NonAccum" turned around
+                if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
+                {
+                    transform->setRotation(rest->second.mRotation);
+                    transform->setTranslation(rest->second.mTranslation);
+                }
+                else
+                    transform->setRotation(transform->mRotationScale);
+            }
+        }
+        mLoopCallbacks.clear();
+    }
+
+    bool ESM4NpcAnimation::ensureRagdoll()
+    {
+        if (!Settings::game().mFnvRagdolls || mObjectRoot == nullptr || mSkeletonPath.empty())
+            return false;
+        if (mRagdoll != nullptr)
+            return true;
+        Nif::NIFFilePtr skeleton;
+        try
+        {
+            skeleton = mResourceSystem->getNifFileManager()->get(mSkeletonPath);
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "No ragdoll for " << mPtr.getCellRef().getRefId() << ": " << e.what();
+            return false;
+        }
+        if (skeleton == nullptr)
+            return false;
+        // The race height scales the whole skeleton on the actor's base node
+        float scale = 1.f;
+        if (const osg::Group* base = mPtr.getRefData().getBaseNode())
+            if (const osg::MatrixTransform* transform
+                = base->asTransform() ? base->asTransform()->asMatrixTransform() : nullptr)
+                scale = transform->getMatrix().getScale().x();
+        mRagdoll = MWPhysics::Ragdoll::create(
+            Nif::FileView(*skeleton), *mObjectRoot, scale, MWBase::Environment::get().getWorld()->getRagdollWorld());
+        if (mRagdoll == nullptr)
+            Log(Debug::Verbose) << "No ragdoll in " << mSkeletonPath << " for " << mPtr.getCellRef().getRefId();
+        return mRagdoll != nullptr;
+    }
+
+    bool ESM4NpcAnimation::applyPlacedPose()
+    {
+        const auto* pose = mPtr.getCellRef().getRagdollPose();
+        if (pose == nullptr || !ensureRagdoll())
+            return false;
+        // Each entry is a bone's local transform in NIF tree order (FalloutNV.exe 0x004d9dc0)
+        std::vector<MWPhysics::Ragdoll::PlacedBone> placed;
+        placed.reserve(pose->size());
+        for (const ESM4::ActorCharacter::RagdollBone& entry : *pose)
+        {
+            MWPhysics::Ragdoll::PlacedBone& bone = placed.emplace_back();
+            bone.mBodyPart = entry.mBodyPart;
+            bone.mRotation = fromEulerAnglesXYZ(entry.mRotation);
+            bone.mTranslation = osg::Vec3f(entry.mPosition[0], entry.mPosition[1], entry.mPosition[2]);
+        }
+        const float* rootAngles = mPtr.getCellRef().getRagdollRootRotation();
+        const Nif::Matrix3 rootRotation = rootAngles != nullptr ? fromEulerAnglesXYZ(rootAngles) : Nif::Matrix3();
+        if (!mRagdoll->startPlaced(placed, rootAngles != nullptr ? &rootRotation : nullptr))
+        {
+            Log(Debug::Verbose) << "XRGD pose of " << mPtr.getCellRef().getRefId() << " (" << pose->size()
+                                << " entries) doesn't fit " << mSkeletonPath << " (" << mRagdoll->getBones().size()
+                                << " bodies)";
+            mRagdoll.reset();
+            return false;
+        }
+        for (const auto& bone : mRagdoll->getBones())
+        {
+            const ESM4::ActorCharacter::RagdollBone& entry = (*pose)[bone.mNifIndex];
+            Log(Debug::Verbose) << "XRGD " << mPtr.getCellRef().getRefId() << " " << bone.mName << " part "
+                                << int(entry.mBodyPart) << " local " << entry.mPosition[0] << " " << entry.mPosition[1]
+                                << " " << entry.mPosition[2] << " euler " << entry.mRotation[0] << " "
+                                << entry.mRotation[1] << " " << entry.mRotation[2];
+        }
+        for (auto& [node, callback] : mLoopCallbacks)
+            node->removeUpdateCallback(callback);
+        mLoopCallbacks.clear();
+        mRagdollPosing = true;
+        return true;
+    }
+
+    bool ESM4NpcAnimation::startRagdoll(const osg::Vec3f& impulse, const std::optional<osg::Vec3f>& hitPosition)
+    {
+        if (mRagdoll != nullptr && mRagdoll->isStarted())
+            return false;
+        if (!ensureRagdoll())
+            return false;
+        // The pose the sequence left the bones in seeds the bodies; nothing poses them afterwards but the physics
+        for (auto& [node, callback] : mLoopCallbacks)
+            node->removeUpdateCallback(callback);
+        mLoopCallbacks.clear();
+        mLookTarget.reset();
+        mInAction = false;
+        mDown = !mDead;
+        mRagdollPosing = true;
+        showWeapon({});
+        mRagdoll->start(impulse, hitPosition);
+        return true;
+    }
+
+    bool ESM4NpcAnimation::isRagdollActive() const
+    {
+        return mRagdoll != nullptr && mRagdoll->isActive();
+    }
+
+    bool ESM4NpcAnimation::isRagdollAtRest() const
+    {
+        return mRagdoll != nullptr && mRagdoll->isStarted() && mRagdoll->isAtRest();
+    }
+
+    bool ESM4NpcAnimation::isRagdollFaceUp() const
+    {
+        return mRagdoll == nullptr || mRagdoll->isFaceUp();
+    }
+
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getRagdollPosition() const
+    {
+        if (mRagdoll == nullptr || !mRagdoll->isStarted())
+            return std::nullopt;
+        return mRagdoll->getRootPosition();
+    }
+
+    void ESM4NpcAnimation::applyRagdollPose()
+    {
+        if (mRagdoll != nullptr && mRagdollPosing)
+            mRagdoll->applyToBones();
+    }
+
+    std::optional<std::pair<float, osg::Vec3f>> ESM4NpcAnimation::getGetUpAlignment() const
+    {
+        if (mRagdoll == nullptr || !mRagdoll->isStarted() || !mRagdollPosing)
+            return std::nullopt;
+        const auto sequence = findGetUpSequence(isRagdollFaceUp());
+        if (!sequence || !sequence->second)
+            return std::nullopt;
+        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes
+            = mResourceSystem->getKeyframeManager()->get(sequence->first);
+        const NodeMap& nodeMap = getNodeMap();
+        const auto pelvisFound = nodeMap.find(std::string_view("Bip01 Pelvis"));
+        const auto headFound = nodeMap.find(std::string_view("Bip01 Head"));
+        if (pelvisFound == nodeMap.end() || headFound == nodeMap.end())
+            return std::nullopt;
+        const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
+        const auto& bones = mRagdoll->getBones();
+        osg::Node* rootParent = nullptr;
+        // A bone in the skeleton root's space at the sequence's first frame: its own track and its parents' up to
+        // Bip01, bound as playKeyframesFONV binds them; a bone the sequence doesn't drive is in the skeleton's pose
+        // (bodies are put back by endRagdoll)
+        auto atStart = [&](osg::Node* node) -> std::optional<osg::Matrixf> {
+            osg::Matrixf matrix;
+            while (node != nullptr)
+            {
+                auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node);
+                if (transform == nullptr)
+                    return std::nullopt;
+                const std::string& name = transform->getName();
+                osg::Vec3f translation = transform->getMatrix().getTrans();
+                osg::Quat rotation = transform->getMatrix().getRotate();
+                if (auto bone = std::find_if(
+                        bones.begin(), bones.end(), [&](const auto& b) { return b.mNode == transform; });
+                    bone != bones.end())
+                {
+                    translation = bone->mBind.mTranslation;
+                    rotation = bone->mBind.toMatrix().getRotate();
+                }
+                else if (auto rest = mRestPoses.find(transform); rest != mRestPoses.end())
+                {
+                    translation = rest->second.mTranslation;
+                    rotation = rest->second.mRotation;
+                }
+                std::string track = name;
+                if (name == "Bip01" && !hasAccumRootTrack)
+                    track = "Bip01 NonAccum";
+                else if (name == "Bip01 NonAccum" && !hasAccumRootTrack)
+                    track.clear();
+                if (!track.empty())
+                    if (auto found = keyframes->mKeyframeControllers.find(track);
+                        found != keyframes->mKeyframeControllers.end())
+                        if (const auto* controller
+                            = dynamic_cast<const NifOsg::KeyframeController*>(found->second.get()))
+                        {
+                            const auto start = controller->getTransformation(0.f);
+                            if (start.mTranslation)
+                                translation = *start.mTranslation;
+                            if (start.mRotation)
+                                rotation = *start.mRotation;
+                        }
+                matrix = matrix * osg::Matrixf::rotate(rotation) * osg::Matrixf::translate(translation);
+                if (name == "Bip01")
+                {
+                    rootParent = node->getNumParents() > 0 ? node->getParent(0) : nullptr;
+                    return matrix;
+                }
+                node = node->getNumParents() > 0 ? node->getParent(0) : nullptr;
+            }
+            return std::nullopt;
+        };
+        const std::optional<osg::Matrixf> pelvisAtStart = atStart(pelvisFound->second.get());
+        const std::optional<osg::Matrixf> headAtStart = atStart(headFound->second.get());
+        if (!pelvisAtStart || !headAtStart || rootParent == nullptr)
+            return std::nullopt;
+        auto worldOf = [](osg::Node& node) -> std::optional<osg::Matrixf> {
+            const osg::NodePathList paths = node.getParentalNodePaths(); // (the paths end at the node itself)
+            if (paths.empty())
+                return std::nullopt;
+            return osg::computeLocalToWorld(paths[0]);
+        };
+        const auto pelvisWorld = worldOf(*pelvisFound->second);
+        const auto headWorld = worldOf(*headFound->second);
+        const auto rootWorld = worldOf(*rootParent);
+        if (!pelvisWorld || !headWorld || !rootWorld)
+            return std::nullopt;
+        // Headings as the actor's z rotation measures them: 0 along +Y, growing towards +X
+        auto heading = [](const osg::Vec3f& v) { return std::atan2(v.x(), v.y()); };
+        // The sequence's spine (pelvis to head) as it would lie with the actor turned as it is, and the body's
+        const osg::Vec3f spineAtStart
+            = osg::Matrixf::transform3x3(headAtStart->getTrans() - pelvisAtStart->getTrans(), *rootWorld);
+        const osg::Vec3f spine = headWorld->getTrans() - pelvisWorld->getTrans();
+        const float turn = std::remainder(heading(spine) - heading(spineAtStart), 2.f * osg::PIf);
+        // Then where the sequence's pelvis would be once turned, against where the body's lies
+        osg::Vec3f pelvisOffset = osg::Matrixf::transform3x3(pelvisAtStart->getTrans(), *rootWorld);
+        const float c = std::cos(turn);
+        const float sn = std::sin(turn);
+        pelvisOffset = osg::Vec3f(pelvisOffset.x() * c + pelvisOffset.y() * sn,
+            -pelvisOffset.x() * sn + pelvisOffset.y() * c, pelvisOffset.z());
+        osg::Vec3f move = pelvisWorld->getTrans() - (rootWorld->getTrans() + pelvisOffset);
+        move.z() = 0.f;
+        return std::make_pair(turn, move);
+    }
+
+    void ESM4NpcAnimation::endRagdoll()
+    {
+        if (mRagdoll == nullptr || !mRagdollPosing)
+            return;
+        mRagdoll->freeze();
+        mRagdoll->restoreBindPose();
+        mRagdollPosing = false;
+        // Bodies seeded again from whatever pose the bones hold when it next starts
+        mRagdoll.reset();
+    }
+
+    bool ESM4NpcAnimation::isFemale() const
+    {
+        return mPtr.getType() == ESM::REC_NPC_4 && MWClass::ESM4Npc::isFemale(mPtr);
+    }
+
+    void ESM4NpcAnimation::setLocomotionRate(float rate)
+    {
+        *mLocomotionRate = rate;
+    }
+
+    float ESM4NpcAnimation::getLocomotionSpeed() const
+    {
+        return mLocomotionSpeed;
+    }
+
+    VFS::Path::Normalized ESM4NpcAnimation::findLoopFONV(std::string_view file) const
+    {
+        const VFS::Path::Normalized& skeletonPath = mSkeletonPath;
+        const std::string_view skeleton = skeletonPath.value();
+        const size_t slash = skeleton.find_last_of('/');
+        if (slash == std::string_view::npos)
+            return {};
+        const VFS::Manager& vfs = *mResourceSystem->getVFS();
+        // Walks and runs are per sex (locomotion/male, locomotion/female), children have their own
+        // (locomotion/child), the idle is shared
+        const std::string dir = std::string(skeleton.substr(0, slash)) + "/locomotion/";
+        const ESM4::Race* race = mPtr.getType() == ESM::REC_NPC_4 ? MWClass::ESM4Npc::getRace(mPtr) : nullptr;
+        const bool child = race != nullptr && race->mHeightMale < 0.95f; // the child races are the 0.8 ones
+        VFS::Path::Normalized path;
+        if (child)
+            path = VFS::Path::Normalized(dir + "child/" + std::string(file));
+        if (path.empty() || !vfs.exists(path))
+            path = VFS::Path::Normalized(dir + (isFemale() ? "female/" : "male/") + std::string(file));
+        if (!vfs.exists(path))
+            path = VFS::Path::Normalized(dir + std::string(file));
+        // Creatures keep their idle next to the skeleton (creatures/nvgecko/mtidle.kf)
+        if (!vfs.exists(path))
+            path = VFS::Path::Normalized(std::string(skeleton.substr(0, slash + 1)) + std::string(file));
+        if (!vfs.exists(path))
+            return {};
+        return path;
+    }
+
+    void ESM4NpcAnimation::playLoopFONV(std::string_view file, bool stripRootMotion)
+    {
+        // TODO: drive this through the character controller once FONV animation groups are mapped. For now loop the
+        // sequences that sit next to the skeleton so NPCs don't stand in the bind pose.
+        const VFS::Path::Normalized path = findLoopFONV(file);
+        if (path.empty())
+        {
+            Log(Debug::Verbose) << "No " << file << " for " << mPtr.getCellRef().getRefId();
+            return;
+        }
+
+        std::shared_ptr<SceneUtil::ControllerSource> source;
+        if (stripRootMotion)
+            source = std::make_shared<RateTimeSource>(mLocomotionRate);
+        else
+            source = std::make_shared<SceneUtil::FrameTimeSource>();
+        playKeyframesFONV(path, source, stripRootMotion);
+    }
+
+    float ESM4NpcAnimation::playKeyframesFONV(const VFS::Path::Normalized& path,
+        std::shared_ptr<SceneUtil::ControllerSource> source, bool stripRootMotion, float blendTime,
+        bool keepsRootMotion)
+    {
+        osg::ref_ptr<const SceneUtil::KeyframeHolder> keyframes = mResourceSystem->getKeyframeManager()->get(path);
+        const NodeMap& nodeMap = getNodeMap();
+        float duration = 0.f;
+
+        // The pose the previous sequence left each bone in, to blend from. Not for the roots when either sequence
+        // carries the actor with them (a furniture entry or exit): the actor is moved onto the seat as the next
+        // sequence starts, and the roots must jump with it.
+        std::map<NifOsg::MatrixTransform*, RestPose> blendFrom;
+        std::size_t reusedPoses = 0;
+        if (blendTime > 0.f)
+        {
+            for (auto& [node, callback] : mLoopCallbacks)
+            {
+                auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(node.get());
+                if (transform == nullptr || blendFrom.contains(transform))
+                    continue;
+                const std::string& name = transform->getName();
+                if ((keepsRootMotion || mKeepsRootMotion) && (name == "Bip01" || name == "Bip01 NonAccum"))
+                    continue;
+                // A sequence replaced before it was ever shown (two switches in one frame: an idle, then a walk)
+                // left its bones at rest, not in the pose on screen; blend from what the screen still shows.
+                if (mBlendStarted != nullptr && !*mBlendStarted)
+                {
+                    if (auto shown = mBlendFrom.find(transform); shown != mBlendFrom.end())
+                    {
+                        blendFrom[transform] = shown->second;
+                        ++reusedPoses;
+                        continue;
+                    }
+                }
+                blendFrom[transform] = { transform->getMatrix().getTrans(), getNifRotation(*transform) };
+            }
+            // Bones a ragdoll posed (it has let go, and put them back at rest) blend from where it left them
+            for (const auto& [transform, from] : mPoseBlendFrom)
+            {
+                if (blendFrom.contains(transform))
+                    continue;
+                if (!mRestPoses.contains(transform))
+                    mRestPoses[transform] = { transform->getMatrix().getTrans(), transform->getMatrix().getRotate() };
+                blendFrom[transform] = from;
+            }
+        }
+        mPoseBlendFrom.clear();
+
+        // Drop the sequence played before, and put its bones back at rest: bones the new sequence doesn't drive
+        // would otherwise keep the last pose, e.g. the walk's root lift on "Bip01 NonAccum" once the idle (which
+        // lifts "Bip01" instead) takes over, leaving the NPC floating.
+        stopSequence();
+
+        const bool hasAccumRootTrack = keyframes->mKeyframeControllers.contains("Bip01");
+        mLocomotionSpeed = 0.f;
+        mRootMotion = osg::Vec3f();
+        std::size_t bound = 0;
+        for (const auto& [name, controller] : keyframes->mKeyframeControllers)
+        {
+            // Without movement accumulation, "Bip01 NonAccum" carries the whole root offset, so it belongs on the
+            // accumulation root that holds the pelvis height in the skeleton.
+            const std::string_view target
+                = !hasAccumRootTrack && name == "Bip01 NonAccum" ? std::string_view("Bip01") : std::string_view(name);
+            auto found = nodeMap.find(target);
+            if (found == nodeMap.end())
+            {
+                Log(Debug::Verbose) << "  no node " << target;
+                continue;
+            }
+            auto* transform = dynamic_cast<NifOsg::MatrixTransform*>(found->second.get());
+            if (transform == nullptr)
+            {
+                Log(Debug::Verbose) << "  not a NIF transform: " << target << " " << found->second->className();
+                continue;
+            }
+            // The skeleton's own transform controllers have no time source and would reset the bone every frame.
+            osg::Callback* callback = transform->getUpdateCallback();
+            while (callback != nullptr)
+            {
+                osg::Callback* next = callback->getNestedCallback();
+                if (dynamic_cast<SceneUtil::KeyframeController*>(callback))
+                    transform->removeUpdateCallback(callback);
+                callback = next;
+            }
+            if (!mRestPoses.contains(transform))
+                mRestPoses[transform] = { transform->getMatrix().getTrans(), transform->getMatrix().getRotate() };
+
+            osg::ref_ptr<SceneUtil::KeyframeController> cloned = osg::clone(controller.get(), osg::CopyOp::SHALLOW_COPY);
+            cloned->setSource(source);
+            transform->addUpdateCallback(cloned->getAsCallback());
+            mLoopCallbacks.emplace_back(transform, cloned->getAsCallback());
+            ++bound;
+            if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                duration = std::max(duration, function->getMaximum());
+
+            if (target == "Bip01")
+            {
+                // Distance the root covers over the sequence: the speed of a locomotion cycle (so feet don't
+                // slide), or where a furniture entry leaves the actor
+                if (const std::shared_ptr<SceneUtil::ControllerFunction> function = cloned->getFunction())
+                {
+                    const float cycle = function->getMaximum();
+                    if (cycle > 0.f)
+                    {
+                        osg::Vec3f delta = controller->getTranslation(cycle) - controller->getTranslation(0.f);
+                        delta.z() = 0.f;
+                        mRootMotion = delta;
+                        if (stripRootMotion)
+                            mLocomotionSpeed = delta.length() / cycle;
+                        Log(Debug::Verbose) << "Root track " << name << " moves " << delta << " over " << cycle;
+                    }
+                }
+                if (stripRootMotion)
+                {
+                    osg::ref_ptr<osg::Callback> strip = new StripHorizontalMotion(mRestPoses[transform].mTranslation);
+                    transform->addUpdateCallback(strip);
+                    mLoopCallbacks.emplace_back(transform, strip);
+                }
+            }
+        }
+        mKeepsRootMotion = keepsRootMotion;
+
+        // Last on each bone, after the new tracks (and the root's motion stripping) have posed it
+        auto started = std::make_shared<bool>(false);
+        for (const auto& [transform, from] : blendFrom)
+        {
+            const auto rest = mRestPoses.find(transform);
+            if (rest == mRestPoses.end())
+                continue;
+            osg::ref_ptr<osg::Callback> blend = new BlendFromPose(from.mTranslation, from.mRotation,
+                rest->second.mTranslation, rest->second.mRotation, blendTime, started);
+            transform->addUpdateCallback(blend);
+            mLoopCallbacks.emplace_back(transform, blend);
+        }
+        mBlendStarted = blendFrom.empty() ? nullptr : started;
+        mBlendFrom.clear();
+        for (const auto& [transform, from] : blendFrom)
+            mBlendFrom[transform] = from;
+        attachLookCallback();
+
+        Log(Debug::Verbose) << "Playing " << path << " on " << mPtr.getCellRef().getRefId() << ": " << bound << "/"
+                            << keyframes->mKeyframeControllers.size() << " tracks bound, root accum track "
+                            << hasAccumRootTrack << ", speed " << mLocomotionSpeed
+                            << (reusedPoses > 0 ? ", replacing one not yet shown" : "");
+        return duration;
+    }
+
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getHeadPosition() const
+    {
+        const osg::Node* head = getNode("Bip01 Head");
+        if (head == nullptr)
+            return std::nullopt;
+        const osg::NodePathList paths = head->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(osg::computeLocalToWorld(paths[0]).getTrans());
+    }
+
+    std::optional<osg::Vec3f> ESM4NpcAnimation::getEyePosition(const Animation& animation)
+    {
+        // Height of the eyes over the head bone of the FO3/FNV skeletons (estimated, not measured on the meshes)
+        constexpr float eyeAboveHead = 8.f;
+        const osg::Node* head = animation.getNode("Bip01 Head");
+        if (head == nullptr)
+            head = animation.getNode("Head");
+        if (head == nullptr)
+            return std::nullopt;
+        const osg::NodePathList paths = head->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(osg::computeLocalToWorld(paths[0]).getTrans()) + osg::Vec3f(0, 0, eyeAboveHead);
+    }
+
+    void ESM4NpcAnimation::attachLookCallback()
+    {
+        if (mLookBone == nullptr)
+        {
+            const NodeMap& nodeMap = getNodeMap();
+            auto found = nodeMap.find("Bip01 Head");
+            if (found == nodeMap.end())
+                return;
+            mLookBone = found->second;
+            mLookCallback = new LookCallback(this);
+        }
+        mLookBone->removeUpdateCallback(mLookCallback);
+        mLookBone->addUpdateCallback(mLookCallback);
+    }
+
+    void ESM4NpcAnimation::updateLook(osg::MatrixTransform& head, float duration)
+    {
+        // Where the target is from the actor, as yaw and pitch; the head turns no further than a neck would
+        // (the limits of OpenMW's own head tracking) and gives up on a target behind the actor.
+        float yaw = 0.f;
+        float pitch = 0.f;
+        if (mLookTarget && !mDead && mPtr.getRefData().getBaseNode() != nullptr)
+        {
+            // from the eyes: aimed from the head bone, the eyes above it would look over the target
+            if (const std::optional<osg::Vec3f> eyePosition = getEyePosition(*this))
+            {
+                osg::Vec3f direction = *mLookTarget - *eyePosition;
+                if (direction.normalize() > 0.f)
+                {
+                    const osg::Vec3f facing = mPtr.getRefData().getBaseNode()->getAttitude() * osg::Vec3f(0, 1, 0);
+                    yaw = static_cast<float>(Misc::normalizeAngle(
+                        std::atan2(facing.x(), facing.y()) - std::atan2(direction.x(), direction.y())));
+                    if (std::abs(yaw) > osg::DegreesToRadians(110.f))
+                        yaw = 0.f;
+                    else
+                    {
+                        yaw *= 1.f - direction.z() * direction.z();
+                        pitch = std::asin(direction.z());
+                    }
+                }
+            }
+        }
+        const float yawLimit = osg::DegreesToRadians(60.f);
+        const float pitchLimit = osg::DegreesToRadians(35.f);
+        yaw = std::clamp(yaw, -yawLimit, yawLimit);
+        pitch = std::clamp(pitch, -pitchLimit, pitchLimit);
+        const float factor = std::min(1.f, duration * 4.f);
+        mLookYaw += (yaw - mLookYaw) * factor;
+        mLookPitch += (pitch - mLookPitch) * factor;
+        // The lip sync's own head movement (nods and tilts while speaking) rides on the look
+        const float totalPitch = mLookPitch + mLipTurn.x();
+        const float totalYaw = mLookYaw + mLipTurn.z();
+        const float roll = mLipTurn.y();
+        if (std::abs(totalYaw) < 1e-4f && std::abs(totalPitch) < 1e-4f && std::abs(roll) < 1e-4f)
+            return;
+
+        // The sequence's own rotation of the head, turned in the actor's space (as MWRender::RotateController
+        // does, but from the NIF rotation so the turn doesn't pile up on bones no track drives)
+        auto* nifHead = dynamic_cast<NifOsg::MatrixTransform*>(&head);
+        if (nifHead == nullptr || head.getNumParents() == 0)
+            return;
+        const osg::NodePathList paths = head.getParent(0)->getParentalNodePaths(mObjectRoot.get());
+        if (paths.empty())
+            return;
+        const osg::Quat parent = osg::computeLocalToWorld(paths[0]).getRotate();
+        const osg::Quat turn = osg::Quat(totalPitch, osg::Vec3f(1, 0, 0)) * osg::Quat(roll, osg::Vec3f(0, 1, 0))
+            * osg::Quat(totalYaw, osg::Vec3f(0, 0, 1));
+        const osg::Quat rotation = getNifRotation(*nifHead) * parent * turn * parent.inverse();
+        osg::Matrix matrix = head.getMatrix();
+        matrix.setRotate(rotation);
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                matrix(i, j) *= nifHead->mScale;
+        head.setMatrix(matrix);
     }
 
     void ESM4NpcAnimation::insertHeadParts(

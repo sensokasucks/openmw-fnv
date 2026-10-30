@@ -66,6 +66,7 @@ void MWState::StateManager::cleanup(bool force)
         mCharacterManager.setCurrentCharacter(nullptr);
         mTimePlayed = 0;
         mLastSavegame.clear();
+        mFalloutDeathShown = false;
 
         mState = State_NoGame;
         MWBase::Environment::get().getLuaManager()->noGame();
@@ -121,6 +122,15 @@ void MWState::StateManager::askLoadRecent()
 {
     if (MWBase::Environment::get().getWindowManager()->getMode() == MWGui::GM_MainMenu)
         return;
+
+    // FNV: the pause menu opens with only Load, Settings and Quit (scripts/omw/fnvmenus)
+    if (MWBase::Environment::get().getWindowManager()->isFalloutHud())
+    {
+        if (!mFalloutDeathShown)
+            MWBase::Environment::get().getLuaManager()->falloutMessage({}, "FNVPlayerDied");
+        mFalloutDeathShown = true;
+        return;
+    }
 
     if (!mAskLoadRecent)
     {

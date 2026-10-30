@@ -224,17 +224,43 @@ void ESM4::NavMesh::load(ESM4::Reader& reader)
                 mData.push_back(std::move(nvnm)); // FIXME try swap
                 break;
             }
+            case ESM::fourCC("DATA"): // FO3
+            {
+                if (subHdr.dataSize < 4)
+                {
+                    reader.skipSubRecordData();
+                    break;
+                }
+                reader.getFormId(mCell);
+                reader.skipSubRecordData(subHdr.dataSize - 4); // counts, implied by the arrays
+                break;
+            }
+            case ESM::fourCC("NVVX"): // FO3
+                mFoVertices.resize(subHdr.dataSize / sizeof(Vertex));
+                reader.get(mFoVertices.data(), mFoVertices.size() * sizeof(Vertex));
+                break;
+            case ESM::fourCC("NVTR"): // FO3
+                mFoTriangles.resize(subHdr.dataSize / sizeof(FoTriangle));
+                reader.get(mFoTriangles.data(), mFoTriangles.size() * sizeof(FoTriangle));
+                break;
+            case ESM::fourCC("NVEX"): // FO3
+                mFoExternal.resize(subHdr.dataSize / sizeof(FoExternal));
+                reader.get(mFoExternal.data(), mFoExternal.size() * sizeof(FoExternal));
+                for (FoExternal& external : mFoExternal)
+                    reader.adjustFormId(external.navMesh);
+                break;
+            case ESM::fourCC("NVDP"): // FO3
+                mFoDoors.resize(subHdr.dataSize / sizeof(FoDoor));
+                reader.get(mFoDoors.data(), mFoDoors.size() * sizeof(FoDoor));
+                for (FoDoor& door : mFoDoors)
+                    reader.adjustFormId(door.door);
+                break;
             case ESM::fourCC("ONAM"):
             case ESM::fourCC("PNAM"):
             case ESM::fourCC("NNAM"):
             case ESM::fourCC("NVER"): // FO3
-            case ESM::fourCC("DATA"): // FO3
-            case ESM::fourCC("NVVX"): // FO3
-            case ESM::fourCC("NVTR"): // FO3
             case ESM::fourCC("NVCA"): // FO3
-            case ESM::fourCC("NVDP"): // FO3
             case ESM::fourCC("NVGD"): // FO3
-            case ESM::fourCC("NVEX"): // FO3
             case ESM::fourCC("EDID"): // FO3
             case ESM::fourCC("MNAM"): // FO4
                 reader.skipSubRecordData();

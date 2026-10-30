@@ -32,11 +32,16 @@ namespace Gui
 
         static std::string_view getFontForFace(std::string_view face);
 
+        /// FO3/FNV content: DefaultFont is FNV's Monofonto at Morrowind's font size. Set before the loader is made.
+        static void setFalloutDefaultFont(bool enabled) { sFalloutDefaultFont = enabled; }
+
     private:
         struct FontId
         {
             std::string_view mValue;
         };
+
+        static inline bool sFalloutDefaultFont = false;
 
         ToUTF8::FromType mEncoding;
         const VFS::Manager* mVFS;
@@ -46,7 +51,13 @@ namespace Gui
         void loadFonts();
         void loadFont(FontId fontId, std::string_view fontName);
 
-        void loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream);
+        void loadFalloutFonts();
+
+        /// @param textureDir where the font's .tex is
+        /// @param fallout a FO3/FNV font: plain Windows-1252, without Morrowind's glyph substitutions
+        /// @param lineHeight scale the glyphs so a line is this tall, 0 for their own size
+        void loadBitmapFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream,
+            VFS::Path::NormalizedView textureDir, bool fallout = false, float lineHeight = 0.f);
         void loadTrueTypeFont(FontId fontId, const VFS::Path::Normalized& path, std::istream& stream);
 
         FontLoader(const FontLoader&);

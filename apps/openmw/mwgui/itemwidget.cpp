@@ -141,6 +141,12 @@ namespace MWGui
         if (icon.empty())
             icon = defaultIcon;
         const VFS::Manager* const vfs = MWBase::Environment::get().getResourceSystem()->getVFS();
+        // ESM4 item classes return full texture paths ("textures/interface/icons/...")
+        if (icon.value().starts_with("textures/") && vfs->exists(icon))
+        {
+            setIcon(icon);
+            return;
+        }
         VFS::Path::Normalized invIcon = Misc::ResourceHelpers::correctIconPath(icon, *vfs);
         if (!vfs->exists(invIcon))
         {

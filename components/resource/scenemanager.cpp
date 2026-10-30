@@ -721,6 +721,10 @@ namespace Resource
         std::vector<std::string> makeSortedReservedNames()
         {
             static constexpr std::string_view names[] = {
+                // FO3/FNV skeletons: the empty node weapons hang off, and the camera nodes
+                "Weapon",
+                "Camera1st",
+                "Camera3rd",
                 "Head",
                 "Neck",
                 "Chest",
@@ -854,6 +858,14 @@ namespace Resource
             if (basename.starts_with("base_anim") || basename.starts_with("skin"))
                 return false;
         }
+
+        // FO3/FONV hair meshes hold "Hat" and "NoHat" variants that are toggled per NPC.
+        if (filename.find("characters/hair/") != std::string_view::npos)
+            return false;
+
+        // FaceGen morphs address head part vertices by their order in the file.
+        if (filename.find("characters/head/") != std::string_view::npos)
+            return false;
 
         // For spell VFX, DummyXX nodes must remain intact. Not adding those to reservedNames to avoid being overly
         // cautious - instead, decide on filename

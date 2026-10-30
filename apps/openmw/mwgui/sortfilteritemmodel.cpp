@@ -15,6 +15,16 @@
 #include <components/esm3/loadprob.hpp>
 #include <components/esm3/loadrepa.hpp>
 #include <components/esm3/loadweap.hpp>
+#include <components/esm4/loadalch.hpp>
+#include <components/esm4/loadammo.hpp>
+#include <components/esm4/loadarmo.hpp>
+#include <components/esm4/loadbook.hpp>
+#include <components/esm4/loadclot.hpp>
+#include <components/esm4/loadimod.hpp>
+#include <components/esm4/loadingr.hpp>
+#include <components/esm4/loadkeym.hpp>
+#include <components/esm4/loadmisc.hpp>
+#include <components/esm4/loadweap.hpp>
 #include <components/misc/utf8stream.hpp>
 
 #include "../mwbase/environment.hpp"
@@ -57,6 +67,26 @@ namespace
                 return 10;
             case ESM::Probe::sRecordId:
                 return 11;
+            case ESM4::Weapon::sRecordId:
+                return 12;
+            case ESM4::Ammunition::sRecordId:
+                return 13;
+            case ESM4::ItemMod::sRecordId:
+                return 14;
+            case ESM4::Armor::sRecordId:
+                return 15;
+            case ESM4::Clothing::sRecordId:
+                return 16;
+            case ESM4::Potion::sRecordId:
+                return 17;
+            case ESM4::Ingredient::sRecordId:
+                return 18;
+            case ESM4::Book::sRecordId:
+                return 19;
+            case ESM4::MiscItem::sRecordId:
+                return 20;
+            case ESM4::Key::sRecordId:
+                return 21;
         }
         assert(false && "Invalid type value");
         return std::numeric_limits<unsigned int>::max();
@@ -209,14 +239,26 @@ namespace MWGui
         {
             case ESM::Armor::sRecordId:
             case ESM::Clothing::sRecordId:
+            case ESM4::Armor::sRecordId:
+            case ESM4::Clothing::sRecordId:
                 category = Category_Apparel;
                 break;
             case ESM::Weapon::sRecordId:
+            case ESM4::Weapon::sRecordId:
+            case ESM4::Ammunition::sRecordId:
+            case ESM4::ItemMod::sRecordId:
                 category = Category_Weapon;
                 break;
             case ESM::Ingredient::sRecordId:
             case ESM::Potion::sRecordId:
+            case ESM4::Ingredient::sRecordId:
+            case ESM4::Potion::sRecordId:
                 category = Category_Magic;
+                break;
+            case ESM4::Book::sRecordId:
+            case ESM4::MiscItem::sRecordId:
+            case ESM4::Key::sRecordId:
+                category = Category_Misc;
                 break;
             case ESM::Miscellaneous::sRecordId:
             case ESM::Repair::sRecordId:

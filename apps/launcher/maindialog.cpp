@@ -1,7 +1,12 @@
 #include "maindialog.hpp"
 
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QLabel>
+#include <QSettings>
 #include <QMessageBox>
 #include <QStringList>
 #include <QTime>
@@ -72,6 +77,7 @@ Launcher::MainDialog::MainDialog(const Files::ConfigurationManager& configuratio
     setWindowFlags(this->windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     createIcons();
+    createGameChooser();
 
     QWidget* spacer = new QWidget();
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -99,6 +105,71 @@ bool Launcher::MainDialog::event(QEvent* event)
     }
 
     return QMainWindow::event(event);
+}
+
+void Launcher::MainDialog::createGameChooser()
+{
+    // Game choice and its folders are kept in their own file so openmw.cfg and launcher.cfg stay untouched.
+    mGameCombo = new QComboBox(this);
+    mGameCombo->addItem(tr("Morrowind / OpenMW content"), QLatin1String("morrowind"));
+    mGameCombo->addItem(tr("Fallout: New Vegas"), QLatin1String("newvegas"));
+    mGameCombo->setToolTip(tr("Fallout: New Vegas starts with Morrowind.esm and FalloutNV.esm and replaces the "
+                              "content and data folders from openmw.cfg."));
+
+    QSettings settings(Files::pathToQString(mCfgMgr.getUserConfigPath() / "launcher-game.ini"), QSettings::IniFormat);
+    const int index = mGameCombo->findData(settings.value(QLatin1String("game"), QLatin1String("morrowind")));
+    mGameCombo->setCurrentIndex(index < 0 ? 0 : index);
+
+    connect(mGameCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        QSettings s(Files::pathToQString(mCfgMgr.getUserConfigPath() / "launcher-game.ini"), QSettings::IniFormat);
+        s.setValue(QLatin1String("game"), mGameCombo->currentData());
+    });
+
+    horizontalLayout->insertWidget(1, new QLabel(tr("Game:"), this));
+    horizontalLayout->insertWidget(2, mGameCombo);
+}
+
+bool Launcher::MainDialog::isNewVegasSelected() const
+{
+    return mGameCombo != nullptr && mGameCombo->currentData().toString() == QLatin1String("newvegas");
+}
+
+bool Launcher::MainDialog::resolveNewVegasPaths(QString& morrowindData, QString& newVegasData)
+{
+    QSettings settings(Files::pathToQString(mCfgMgr.getUserConfigPath() / "launcher-game.ini"), QSettings::IniFormat);
+
+    auto resolve = [&](const QString& key, const QStringList& guesses, const QString& marker, const QString& title) {
+        QString path = settings.value(key).toString();
+        if (!path.isEmpty() && QFileInfo::exists(QDir(path).filePath(marker)))
+            return path;
+        for (const QString& guess : guesses)
+            if (QFileInfo::exists(QDir(guess).filePath(marker)))
+                path = guess;
+        if (path.isEmpty() || !QFileInfo::exists(QDir(path).filePath(marker)))
+            path = QFileDialog::getExistingDirectory(this, title, QString());
+        if (path.isEmpty() || !QFileInfo::exists(QDir(path).filePath(marker)))
+            return QString();
+        settings.setValue(key, path);
+        return path;
+    };
+
+    const QString steam = QLatin1String("/SteamLibrary/steamapps/common/");
+    QStringList mwGuesses, fnvGuesses;
+    for (const QString& drive : { QStringLiteral("F:"), QStringLiteral("C:/Program Files (x86)/Steam/.."), QStringLiteral("D:"), QStringLiteral("E:"), QStringLiteral("G:") })
+    {
+        mwGuesses << drive + steam + QLatin1String("Morrowind/Data Files");
+        fnvGuesses << drive + steam + QLatin1String("Fallout New Vegas/Data");
+    }
+    mwGuesses << QLatin1String("C:/Program Files (x86)/Steam/steamapps/common/Morrowind/Data Files");
+    fnvGuesses << QLatin1String("C:/Program Files (x86)/Steam/steamapps/common/Fallout New Vegas/Data");
+
+    morrowindData = resolve(QLatin1String("morrowindData"), mwGuesses, QLatin1String("Morrowind.esm"),
+        tr("Select the Morrowind \"Data Files\" folder (contains Morrowind.esm)"));
+    if (morrowindData.isEmpty())
+        return false;
+    newVegasData = resolve(QLatin1String("newVegasData"), fnvGuesses, QLatin1String("FalloutNV.esm"),
+        tr("Select the Fallout New Vegas \"Data\" folder (contains FalloutNV.esm)"));
+    return !newVegasData.isEmpty();
 }
 
 void Launcher::MainDialog::createIcons()
@@ -578,6 +649,40 @@ void Launcher::MainDialog::play()
 {
     if (!writeSettings())
         return qApp->quit();
+
+    if (isNewVegasSelected())
+    {
+        QString morrowindData, newVegasData;
+        if (!resolveNewVegasPaths(morrowindData, newVegasData))
+        {
+            cfgError(tr("Fallout: New Vegas not found"),
+                tr("<br>Could not find Morrowind.esm and FalloutNV.esm.<br><br>"
+                   "Fallout: New Vegas needs Morrowind installed as its base. Choose both folders and try again."));
+            return;
+        }
+
+        // Replace (not append to) the Morrowind setup from openmw.cfg. Morrowind.esm must come first: it supplies
+        // the records the engine needs at startup and the Morrowind [Fallback] settings stay in openmw.cfg.
+        QStringList arguments{ QLatin1String("--replace=content"), QLatin1String("--replace=data"),
+            QLatin1String("--replace=fallback-archive") };
+        // Keep the data folders the install itself ships (resources/vfs-mw holds the Morrowind UI scripts).
+        for (const Config::SettingValue& dir : mGameSettings.getDataDirs())
+            if (!mGameSettings.isUserSetting(dir))
+                arguments << QLatin1String("--data=") + QDir::toNativeSeparators(dir.value);
+        arguments << QLatin1String("--data=") + QDir::toNativeSeparators(morrowindData)
+                  << QLatin1String("--data=") + QDir::toNativeSeparators(newVegasData)
+                  << QLatin1String("--content=Morrowind.esm") << QLatin1String("--content=FalloutNV.esm");
+        // A plain Morrowind openmw.cfg lists only Morrowind's archives; New Vegas needs its own base BSAs too.
+        if (QFileInfo::exists(QDir(morrowindData).filePath(QLatin1String("Morrowind.bsa"))))
+            arguments << QLatin1String("--fallback-archive=Morrowind.bsa");
+        for (const char* archive : { "Fallout - Meshes.bsa", "Fallout - Textures.bsa", "Fallout - Textures2.bsa",
+                 "Fallout - Misc.bsa", "Fallout - Sound.bsa", "Fallout - Voices1.bsa", "Update.bsa" })
+            if (QFileInfo::exists(QDir(newVegasData).filePath(QLatin1String(archive))))
+                arguments << QLatin1String("--fallback-archive=") + QLatin1String(archive);
+        if (mGameInvoker->startProcess(QLatin1String("openmw"), arguments, true))
+            return qApp->quit();
+        return;
+    }
 
     if (!mGameSettings.hasMaster())
     {

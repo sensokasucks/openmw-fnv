@@ -8,6 +8,11 @@ local musicSettings = storage.playerSection('SettingsOMWMusic')
 
 local helpers = require('scripts.omw.music.helpers')
 
+-- FO3/FNV content has its own music (scripts/omw/fnvmusic/player.lua)
+if core.contentFiles.has('falloutnv.esm') or core.contentFiles.has('fallout3.esm') then
+    return {}
+end
+
 local registeredPlaylists = {}
 local playlistsTracksOrder = helpers.getStoredTracksOrder()
 local fightingActors = {}

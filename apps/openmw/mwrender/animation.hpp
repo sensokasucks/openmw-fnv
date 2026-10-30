@@ -295,7 +295,10 @@ namespace MWRender
          * @param baseModel The filename of the mObjectRoot, only used for error messages.
          */
         void addAnimSource(std::string_view model, const std::string& baseModel);
-        std::shared_ptr<AnimSource> addSingleAnimSource(VFS::Path::NormalizedView kfname, const std::string& baseModel);
+        /// @param allowWithoutControllers Also add a source whose groups only drive the model's own controllers
+        /// (e.g. embedded sequences that fade a plant's fruit), which then follow the animation time.
+        std::shared_ptr<AnimSource> addSingleAnimSource(
+            VFS::Path::NormalizedView kfname, const std::string& baseModel, bool allowWithoutControllers = false);
 
         /** Adds an additional light to the given node using the specified ESM record. */
         void addExtraLight(osg::ref_ptr<osg::Group> parent, const SceneUtil::LightCommon& light);
@@ -366,6 +369,10 @@ namespace MWRender
         void addSpellCastGlow(const osg::Vec4f& color, float glowDuration = 1.5);
 
         virtual void updatePtr(const MWWorld::Ptr& ptr);
+
+        /// Adds the animation sequences embedded in a Gamebryo model (e.g. "open" and "close" of an ESM4 door) as a
+        /// new animation source. Returns false if the model has none.
+        bool addEmbeddedAnimSource(const std::string& model);
 
         bool hasAnimation(std::string_view anim) const;
 

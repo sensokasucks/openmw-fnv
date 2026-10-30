@@ -67,6 +67,10 @@ do
     end
 end
 
+-- With FO3/FNV content the Morrowind menus give way to the Pip-Boy (scripts/omw/fnvpipboy): the Inventory and
+-- Journal keys open it, and there is no magic to ready or quick keys window.
+local fallout = core.contentFiles.has('falloutnv.esm') or core.contentFiles.has('fallout3.esm')
+
 local function checkNotWerewolf()
     if Player.isWerewolf(self) then
         ui.showMessage(core.getGMST('sWerewolfRefusal'))
@@ -148,7 +152,7 @@ local function combatAllowed()
 end
 
 input.registerTriggerHandler('ToggleSpell', async:callback(function()
-    if not combatAllowed() then return end
+    if fallout or not combatAllowed() then return end
     if Actor.getStance(self) == Actor.STANCE.Spell then
         Actor.setStance(self, Actor.STANCE.Nothing)
     elseif Player.getControlSwitch(self, Player.CONTROL_SWITCH.Magic) then
@@ -192,6 +196,10 @@ end
 
 input.registerTriggerHandler('Inventory', async:callback(function()
     if not uiAllowed() then return end
+    if fallout then
+        if I.FNVPipBoy then I.FNVPipBoy.menuKey() end
+        return
+    end
 
     if I.UI.getMode() == nil then
         I.UI.setMode(I.UI.MODE.Interface)
@@ -202,6 +210,10 @@ end))
 
 input.registerTriggerHandler('Journal', async:callback(function()
     if not uiAllowed() then return end
+    if fallout then
+        if I.FNVPipBoy then I.FNVPipBoy.menuKey('data', 'quests') end
+        return
+    end
 
     if I.UI.getMode() == I.UI.MODE.Journal then
         I.UI.removeMode(I.UI.MODE.Journal)
@@ -211,7 +223,7 @@ input.registerTriggerHandler('Journal', async:callback(function()
 end))
 
 input.registerTriggerHandler('QuickKeysMenu', async:callback(function()
-    if not uiAllowed() then return end
+    if fallout or not uiAllowed() then return end
 
     if I.UI.getMode() == I.UI.MODE.QuickKeysMenu then
         I.UI.removeMode(I.UI.MODE.QuickKeysMenu)

@@ -12,7 +12,10 @@
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 #include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
+#include <BulletCollision/CollisionShapes/btCompoundShape.h>
 #include <BulletCollision/CollisionShapes/btConeShape.h>
+#include <BulletCollision/CollisionShapes/btBoxShape.h>
+#include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletCollision/CollisionShapes/btSphereShape.h>
 #include <BulletCollision/CollisionShapes/btStaticPlaneShape.h>
 
@@ -55,6 +58,7 @@
 #include "mtphysics.hpp"
 #include "object.hpp"
 #include "projectile.hpp"
+#include "ragdoll.hpp"
 
 namespace
 {
@@ -132,6 +136,7 @@ namespace MWPhysics
 
         mDebugDrawer = std::make_unique<MWRender::DebugDrawer>(mParentNode, mCollisionWorld.get(), mDebugDrawEnabled);
         mTaskScheduler = std::make_unique<PhysicsTaskScheduler>(mPhysicsDt, mCollisionWorld.get(), mDebugDrawer.get());
+        mRagdolls = std::make_unique<RagdollWorld>(*this);
     }
 
     PhysicsSystem::~PhysicsSystem()
@@ -142,6 +147,7 @@ namespace MWPhysics
             mTaskScheduler->removeCollisionObject(mWaterCollisionObject.get());
 
         mTaskScheduler->releaseSharedStates();
+        mRagdolls.reset();
         mHeightFields.clear();
         mObjects.clear();
         mActors.clear();
@@ -393,7 +399,10 @@ namespace MWPhysics
     {
         HeightFieldMap::iterator heightfield = mHeightFields.find(std::make_pair(x, y));
         if (heightfield != mHeightFields.end())
+        {
+            mRagdolls->onCollisionObjectRemoved(heightfield->second->getCollisionObject());
             mHeightFields.erase(heightfield);
+        }
     }
 
     const HeightField* PhysicsSystem::getHeightField(int x, int y) const
@@ -443,6 +452,7 @@ namespace MWPhysics
     {
         if (auto foundObject = mObjects.find(ptr.mRef); foundObject != mObjects.end())
         {
+            mRagdolls->onCollisionObjectRemoved(foundObject->second->getCollisionObject());
             mAnimatedObjects.erase(foundObject->second.get());
 
             mObjects.erase(foundObject);
@@ -586,6 +596,44 @@ namespace MWPhysics
         mActors.emplace(ptr.mRef, std::move(actor));
     }
 
+    void PhysicsSystem::addActorBody(
+        const MWWorld::Ptr& ptr, const osg::Vec3f& halfExtents, osg::Quat rotation, bool enabled)
+    {
+        if (ptr.mRef->mData.mPhysicsPostponed || getObject(ptr))
+            return;
+
+        osg::ref_ptr<Resource::BulletShape> shape(new Resource::BulletShape);
+        auto compound = std::make_unique<btCompoundShape>();
+        btTransform transform = btTransform::getIdentity();
+        transform.setOrigin(btVector3(0, 0, halfExtents.z()));
+        // An upright capsule, as the original's bhkCharControllerShape, when the extents allow one (as tall as it
+        // is wide at least); a box otherwise (a long low creature)
+        const float radius = std::min(halfExtents.x(), halfExtents.y());
+        if (halfExtents.z() > radius && std::abs(halfExtents.x() - halfExtents.y()) < 1.f)
+            compound->addChildShape(transform, new btCapsuleShapeZ(radius, 2.f * (halfExtents.z() - radius)));
+        else
+            compound->addChildShape(transform, new btBoxShape(Misc::Convert::toBullet(halfExtents)));
+        shape->mCollisionShape.reset(compound.release());
+        shape->mCollisionBox.mExtents = halfExtents;
+        shape->mCollisionBox.mCenter = osg::Vec3f(0, 0, halfExtents.z());
+
+        auto obj = std::make_shared<Object>(
+            ptr, Resource::makeInstance(shape), rotation, CollisionType_Actor, mTaskScheduler.get());
+        if (!enabled)
+            mTaskScheduler->setCollisionFilterMask(obj->getCollisionObject(), 0);
+        mObjects.emplace(ptr.mRef, std::move(obj));
+    }
+
+    bool PhysicsSystem::setActorBodyEnabled(const MWWorld::ConstPtr& ptr, bool enabled)
+    {
+        const auto found = mObjects.find(ptr.mRef);
+        if (found == mObjects.end() || !found->second->getShapeInstance()->mFileName.empty())
+            return false;
+        mTaskScheduler->setCollisionFilterMask(found->second->getCollisionObject(),
+            enabled ? CollisionType_Actor | CollisionType_HeightMap | CollisionType_Projectile : 0);
+        return true;
+    }
+
     int PhysicsSystem::addProjectile(
         const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool computeRadius)
     {
@@ -692,9 +740,18 @@ namespace MWPhysics
         }
     }
 
+    void PhysicsSystem::aabbTest(
+        const btVector3& aabbMin, const btVector3& aabbMax, btBroadphaseAabbCallback& callback) const
+    {
+        mTaskScheduler->aabbTest(aabbMin, aabbMax, callback);
+    }
+
     void PhysicsSystem::stepSimulation(
         float dt, bool skipSimulation, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats)
     {
+        // The ragdolls fall on the main thread, before the frame's update traversal poses the bodies
+        if (!skipSimulation)
+            mRagdolls->step(dt);
         for (auto& [animatedObject, changed] : mAnimatedObjects)
         {
             if (animatedObject->animateCollisionShapes())

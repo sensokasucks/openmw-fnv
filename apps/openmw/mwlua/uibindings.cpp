@@ -14,6 +14,7 @@
 
 #include "context.hpp"
 #include "luamanagerimp.hpp"
+#include "object.hpp"
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/windowmanager.hpp"
@@ -86,6 +87,28 @@ namespace MWLua
         };
         api["_isHudVisible"] = []() -> bool { return MWBase::Environment::get().getWindowManager()->isHudVisible(); };
         api["_getDefaultFontSize"] = []() -> int { return Settings::gui().mFontSize; };
+        // Fallout HUD (scripts/omw/fnvhud): hides the Morrowind HUD elements and the crosshair tooltip.
+        api["_setFalloutHud"] = [luaManager = context.mLuaManager](bool enabled) {
+            luaManager->addAction([enabled] { MWBase::Environment::get().getWindowManager()->setFalloutHud(enabled); });
+        };
+        // OpenMW's settings window, for the FNV pause menu's Settings (scripts/omw/fnvmenus).
+        api["_toggleSettingsWindow"] = [luaManager = context.mLuaManager]() {
+            luaManager->addAction([] { MWBase::Environment::get().getWindowManager()->toggleSettingsWindow(); });
+        };
+        api["_isSettingsWindowVisible"]
+            = []() { return MWBase::Environment::get().getWindowManager()->isSettingsWindowVisible(); };
+        // The player sneaks and nobody has noticed them (the Morrowind sneak icon).
+        api["_isSneakHidden"] = []() { return MWBase::Environment::get().getWindowManager()->isSneakHidden(); };
+        if (!menu)
+        {
+            // The object under the crosshair that activation would use, or nil.
+            api["_getFocusObject"] = []() -> sol::optional<LObject> {
+                const MWWorld::Ptr ptr = MWBase::Environment::get().getWindowManager()->getFocusObject();
+                if (ptr.isEmpty())
+                    return sol::nullopt;
+                return LObject(ptr);
+            };
+        }
         api["showMessage"]
             = [luaManager = context.mLuaManager](std::string_view message, const sol::optional<sol::table>& options) {
                   MWGui::ShowInDialogueMode mode = MWGui::ShowInDialogueMode_IfPossible;
