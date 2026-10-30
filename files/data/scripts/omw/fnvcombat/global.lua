@@ -1963,6 +1963,11 @@ return {
         end,
         --- Whether the actor is fighting or running away; its AI package waits meanwhile.
         isInCombat = function(actor) return fighting[actor.id] ~= nil end,
+        --- Whether the actor is running from its fight (the pickpocket menu refuses a fleeing NPC).
+        isFleeing = function(actor)
+            local s = fighting[actor.id]
+            return s ~= nil and s.fleeing == true
+        end,
         --- Whether the actor's detection score of the player is above fSneakNoticedMin (checked every
         -- fDetectionTimerSetting seconds).
         noticesPlayer = function(actor) return noticesPlayer(actor) end,

@@ -674,6 +674,15 @@ return {
             end
             open('pause')
         end,
+        -- Pickpocketing (scripts/omw/fnvdialogue activation, scripts/omw/fnvcrime): the NPC's pockets open as a
+        -- container; a catch closes them
+        FNVOpenPickpocket = function(e)
+            if e.target == nil or I.UI.getMode() ~= nil then return end
+            I.UI.addMode('Container', { target = e.target })
+        end,
+        FNVClosePickpocket = function()
+            if current == 'container' then close() end
+        end,
         FNVContainerShow = function(d)
             if current ~= 'container' or d.container ~= container.target then return end
             container.data = d
