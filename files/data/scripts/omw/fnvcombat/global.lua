@@ -1408,10 +1408,13 @@ local function attackMelee(s, distance)
         if away:length() < 1 then away = util.vector3(math.random() - 0.5, math.random() - 0.5, 0) end
         away = away:normalize()
         s.stepBackUntil = simTime + 1
+        print(('[combat] %s (%s) steps back from %s (%.0f apart)'):format(actor.recordId, tostring(actor.id),
+            tostring(target.recordId), distance))
         ai.moveTo(actor, target.position + away * (reach * 0.8), { run = false, direct = true, tolerance = 16 })
         return 'running'
     end
-    if simTime < (s.stepBackUntil or 0) and ai.status(actor) == 'moving' then return 'running' end
+    -- (the order lands a frame later; stopping on the next tick would cancel it: run 45 held at 70)
+    if simTime < (s.stepBackUntil or 0) then return 'running' end
     holdStill(actor)
     ai.face(actor, yawTo(actor.position, target.position))
     if simTime >= s.nextAttack then

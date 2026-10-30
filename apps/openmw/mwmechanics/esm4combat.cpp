@@ -492,6 +492,22 @@ namespace MWMechanics::ESM4Combat
             return std::string(animPrefix(weapon)) + suffix + ".kf";
         }
 
+        // Plays an attack sequence: the game's regular swings come in two takes, <name>_a.kf and <name>_b.kf (no
+        // plain <name>.kf exists for them), so one of the takes is tried first, then the other, then the plain file.
+        float playAttack(const MWWorld::Ptr& actor, const std::string& file)
+        {
+            std::string base = file;
+            if (Misc::StringUtils::ciEndsWith(base, ".kf"))
+                base.resize(base.size() - 3);
+            const bool bFirst = std::uniform_int_distribution<int>(0, 1)(random()) == 1;
+            const std::string takes[] = { base + (bFirst ? "_b.kf" : "_a.kf"), base + (bFirst ? "_a.kf" : "_b.kf"),
+                base + ".kf" };
+            for (const std::string& take : takes)
+                if (const float length = ESM4Actors::get().playAction(actor, take); length > 0.f)
+                    return length;
+            return 0.f;
+        }
+
         // Two-handed weapons by DNAM animation type (FUN_00646cb0)
         bool isTwoHanded(const ESM4::Weapon& weapon)
         {
@@ -888,8 +904,8 @@ namespace MWMechanics::ESM4Combat
         const ESM4::Weapon* weapon = getActorWeapon(attacker);
         if (weapon == nullptr || !isGun(*weapon) || isDead(attacker) || ESM4Actors::get().isActing(attacker))
             return false;
-        if (ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
-            ESM4Actors::get().playAction(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
+        if (playAttack(attacker, attackSequence(*weapon)) <= 0.f)
+            playAttack(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
 
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
@@ -968,13 +984,13 @@ namespace MWMechanics::ESM4Combat
             weapon = nullptr;
         float length = 0.f;
         if (weapon != nullptr)
-            length = ESM4Actors::get().playAction(attacker, attackSequence(*weapon));
-        // Creatures keep their attacks next to the skeleton
+            length = playAttack(attacker, attackSequence(*weapon));
+        // Fists and creatures (which keep their attacks next to the skeleton)
         static constexpr std::string_view attacks[]
             = { "h2hattackleft.kf", "h2hattackright.kf", "h2hattackpower.kf", "h2hattackforwardpower.kf" };
         const std::size_t first = std::uniform_int_distribution<std::size_t>(0, 1)(random());
         for (std::size_t i = 0; i < std::size(attacks) && length <= 0.f; ++i)
-            length = ESM4Actors::get().playAction(attacker, attacks[(first + i) % std::size(attacks)]);
+            length = playAttack(attacker, std::string(attacks[(first + i) % std::size(attacks)]));
         if (length <= 0.f)
             length = 1.f; // no sequence: the blow still lands
         sPendingHits.push_back(
@@ -1314,9 +1330,8 @@ namespace MWMechanics::ESM4Combat
             return false;
         // Thrown weapons have their own throw sequence; launchers fire like guns
         const std::string prefix(animPrefix(*weapon));
-        if (ESM4Actors::get().playAction(attacker, prefix + "attackthrow.kf") <= 0.f
-            && ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
-            ESM4Actors::get().playAction(attacker, prefix + "attackright.kf");
+        if (playAttack(attacker, prefix + "attackthrow.kf") <= 0.f && playAttack(attacker, attackSequence(*weapon)) <= 0.f)
+            playAttack(attacker, prefix + "attackright.kf");
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
                 attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
