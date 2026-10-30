@@ -1088,7 +1088,7 @@ namespace MWPhysics
             else
                 away /= distance;
             // A blast lifts and scatters; it never drives a body down into the floor it stands on
-            away.setZ(std::max(away.z(), 0.f) + upBias);
+            away.setZ(std::max(static_cast<float>(away.z()), 0.f) + upBias);
             away.normalize();
             const float falloff = 1.f - (distance / radius) * (distance / radius);
             if (!body.isActive())
