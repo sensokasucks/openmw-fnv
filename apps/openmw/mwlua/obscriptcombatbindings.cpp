@@ -639,9 +639,11 @@ namespace MWLua
         // Whether the actor (the player too) is sneaking.
         api["isSneaking"] = [](const Object& actor) -> bool {
             const MWWorld::Ptr ptr = actor.ptrOrEmpty();
-            if (ptr.isEmpty() || !ptr.getClass().isActor() || ptr.getType() == ESM::REC_NPC_4
-                || ptr.getType() == ESM::REC_CREA4)
+            if (ptr.isEmpty() || !ptr.getClass().isActor())
                 return false;
+            // FO3/FONV actors sneak by crouching (setCrouched)
+            if (ptr.getType() == ESM::REC_NPC_4 || ptr.getType() == ESM::REC_CREA4)
+                return Combat::isCrouched(ptr);
             return ptr.getClass().getCreatureStats(ptr).getStance(MWMechanics::CreatureStats::Stance_Sneak);
         };
         // detect(observer, target, { sleeping, inCombat, alert }): the detection score (CalcDetectionScore) and

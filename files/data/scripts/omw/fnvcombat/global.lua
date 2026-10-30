@@ -1193,6 +1193,12 @@ local function replan(s, distance, los)
     s.best = bestWeapons(s, distance)
     local actorType = s.equippedType
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
+    -- A teammate told to fight in melee (CombatStyleMelee 1) with a gun in its slot: its weapon of the plan is its
+    -- melee weapon or its fists, else no plan reaches melee (run 50: Veronica stood still with her 10mm equipped)
+    if isTeammate(s.actor) and refVar(s.actor, 'combatstylemelee') == 1
+        and (actorType == PW.RANGED or actorType == PW.EXPLOSIVE or actorType == PW.GRENADE) then
+        actorType = s.best[PW.MELEE] ~= nil and PW.MELEE or PW.HAND_TO_HAND
+    end
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
     local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.INVESTIGATE, P.L.AVOID_THREAT }
@@ -1218,6 +1224,11 @@ local function replan(s, distance, los)
     local current = s.plan and s.plan[s.step]
     if plan == nil then
         s.plan, s.step = nil, nil
+        if simTime >= (s.noPlanLoggedAt or -math.huge) + 5 then
+            s.noPlanLoggedAt = simTime
+            print(('[combat] %s (%s) finds no plan (weapon type %d, drawn %d, %.0f away)'):format(s.actor.recordId,
+                tostring(s.actor.id), actorType, s.drawnType or -1, distance))
+        end
         return
     end
     local labels = {}
