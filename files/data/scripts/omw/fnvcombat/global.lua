@@ -1408,15 +1408,18 @@ local function attackMelee(s, distance)
         if away:length() < 1 then away = util.vector3(math.random() - 0.5, math.random() - 0.5, 0) end
         away = away:normalize()
         s.stepBackUntil = simTime + 1
-        print(('[combat] %s (%s) steps back from %s (%.0f apart)'):format(actor.recordId, tostring(actor.id),
-            tostring(target.recordId), distance))
-        ai.moveTo(actor, target.position + away * (reach * 0.8), { run = false, direct = true, tolerance = 16 })
-        return 'running'
+        -- at least a body's width back, else the order is within its tolerance at once (run 46: stuck at 70)
+        local to = math.max(reach * 0.8, distance + 2 * ACTOR_RADIUS)
+        print(('[combat] %s (%s) steps back from %s (%.0f apart, to %.0f)'):format(actor.recordId,
+            tostring(actor.id), tostring(target.recordId), distance, to))
+        ai.moveTo(actor, target.position + away * to, { run = false, direct = true, tolerance = 8 })
     end
-    -- (the order lands a frame later; stopping on the next tick would cancel it: run 45 held at 70)
-    if simTime < (s.stepBackUntil or 0) then return 'running' end
-    holdStill(actor)
-    ai.face(actor, yawTo(actor.position, target.position))
+    -- (the order lands a frame later; stopping on the next tick would cancel it: run 45 held at 70. The roll below
+    -- goes on meanwhile, so a step back never costs a swing.)
+    if simTime >= (s.stepBackUntil or 0) then
+        holdStill(actor)
+        ai.face(actor, yawTo(actor.position, target.position))
+    end
     if simTime >= s.nextAttack then
         -- In reach the original rolls attack / block / hold each decision (ghidra-findings-7): attack = Attack % +
         -- 20 x skill/100 (plus bonuses), block = Block % x fBlockScoreNoShieldMult 0.5, x0.25 more when not under
