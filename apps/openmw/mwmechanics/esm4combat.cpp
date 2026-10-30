@@ -162,6 +162,7 @@ namespace MWMechanics::ESM4Combat
 
         // Actors crouched behind cover
         std::set<ESM::RefNum> sCrouched;
+        std::set<ESM::RefNum> sBlocking; // actors holding their weapon up (BlockIdle)
 
         // Havok gravity, 9.81 m/s^2 at 69.99 units a metre [inferred: PROJ gravity is a multiple of it]
         constexpr float sGravity = 686.6f;
@@ -491,6 +492,22 @@ namespace MWMechanics::ESM4Combat
             return std::string(animPrefix(weapon)) + suffix + ".kf";
         }
 
+        // Plays an attack sequence: the game's regular swings come in two takes, <name>_a.kf and <name>_b.kf (no
+        // plain <name>.kf exists for them), so one of the takes is tried first, then the other, then the plain file.
+        float playAttack(const MWWorld::Ptr& actor, const std::string& file)
+        {
+            std::string base = file;
+            if (Misc::StringUtils::ciEndsWith(base, ".kf"))
+                base.resize(base.size() - 3);
+            const bool bFirst = std::uniform_int_distribution<int>(0, 1)(random()) == 1;
+            const std::string takes[] = { base + (bFirst ? "_b.kf" : "_a.kf"), base + (bFirst ? "_a.kf" : "_b.kf"),
+                base + ".kf" };
+            for (const std::string& take : takes)
+                if (const float length = ESM4Actors::get().playAction(actor, take); length > 0.f)
+                    return length;
+            return 0.f;
+        }
+
         // Two-handed weapons by DNAM animation type (FUN_00646cb0)
         bool isTwoHanded(const ESM4::Weapon& weapon)
         {
@@ -612,6 +629,7 @@ namespace MWMechanics::ESM4Combat
         if (animation == nullptr || weapon == nullptr || isDead(actor))
             return;
         sCrouched.erase(actor.getCellRef().getRefNum());
+        sBlocking.erase(actor.getCellRef().getRefNum());
         animation->showWeapon(drawn ? weapon->mModel.getOriginal() : std::string_view());
         animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
     }
@@ -661,6 +679,59 @@ namespace MWMechanics::ESM4Combat
             Log(Debug::Verbose) << "ESM4 crouch " << actor.getCellRef().getRefId() << " with " << loop;
         animation->setIdleSequence(loop);
         return true;
+    }
+
+    bool isCrouched(const MWWorld::Ptr& actor)
+    {
+        return sCrouched.count(actor.getCellRef().getRefNum()) != 0;
+    }
+
+    namespace
+    {
+        // The animation prefix of what the actor would block with: its melee weapon's, else "mt" (the game ships
+        // 1hm/2hm/mt blockidle and blockhit, none for h2h: fists and hand to hand weapons use the mt ones)
+        std::string blockPrefix(const MWRender::ESM4NpcAnimation& animation, const MWWorld::Ptr& actor)
+        {
+            const ESM4::Weapon* weapon = getActorWeapon(actor);
+            if (weapon != nullptr && getWeaponType(*weapon) == 2)
+                return std::string(animPrefix(*weapon));
+            if (weapon != nullptr && getWeaponType(*weapon) == 6
+                && animation.hasLoopFONV(std::string(animPrefix(*weapon)) + "blockidle.kf"))
+                return std::string(animPrefix(*weapon));
+            return "mt";
+        }
+    }
+
+    bool setBlocking(const MWWorld::Ptr& actor, bool blocking)
+    {
+        MWRender::ESM4NpcAnimation* animation = getAnimation(actor);
+        if (animation == nullptr || isDead(actor))
+            return false;
+        const ESM::RefNum ref = actor.getCellRef().getRefNum();
+        const ESM4::Weapon* weapon = getActorWeapon(actor);
+        const bool drawn = weapon != nullptr && animation->isWeaponShown();
+        if (!blocking)
+        {
+            if (sBlocking.erase(ref) != 0)
+                animation->setIdleSequence(drawn ? std::string(animPrefix(*weapon)) + "aim.kf" : std::string());
+            return true;
+        }
+        const std::string loop = blockPrefix(*animation, actor) + "blockidle.kf";
+        if (!animation->hasLoopFONV(loop))
+        {
+            // no guard to show: the actor does not block (it would take less damage for no visible reason)
+            Log(Debug::Verbose) << "ESM4 no block loop " << loop << " for " << actor.getCellRef().getRefId();
+            return false;
+        }
+        sCrouched.erase(ref);
+        sBlocking.insert(ref);
+        animation->setIdleSequence(loop);
+        return true;
+    }
+
+    bool isBlocking(const MWWorld::Ptr& actor)
+    {
+        return sBlocking.count(actor.getCellRef().getRefNum()) != 0;
     }
 
     namespace
@@ -743,8 +814,9 @@ namespace MWMechanics::ESM4Combat
 
         bool isSneaking(const MWWorld::Ptr& actor)
         {
+            // FO3/FONV actors sneak by crouching (setCrouched: cover, companions sneaking with the player)
             if (actor.getType() == ESM::REC_NPC_4 || actor.getType() == ESM::REC_CREA4)
-                return false;
+                return sCrouched.count(actor.getCellRef().getRefNum()) != 0;
             return actor.getClass().getCreatureStats(actor).getStance(CreatureStats::Stance_Sneak);
         }
     }
@@ -787,6 +859,16 @@ namespace MWMechanics::ESM4Combat
         const bool moving = isMoving(target);
         const bool running = moving && isRunning(target);
         const bool sneaking = isSneaking(target);
+        const MWWorld::Ptr player = getPlayer();
+        if (context.mTeammate && sneaking && !context.mTargetInCombat && target != player && !player.isEmpty())
+        {
+            // a sneaking teammate is as hidden as the player (the sentinel in FUN_008a0d10)
+            DetectionContext own = context;
+            own.mTeammate = false;
+            const Detection viaPlayer = detect(observer, player, own);
+            result.mScore = viaPlayer.mScore;
+            return result;
+        }
 
         // Sound: footsteps, louder running, carried further with a line of sight
         const float soundFactor
@@ -819,7 +901,10 @@ namespace MWMechanics::ESM4Combat
             const int level = Stats::getLevel(target);
             const float startBonus = static_cast<float>(std::max(
                 getInt("iSneakStartBonus", 50) - level * getInt("iSneakStartBonusLevelPenatly", 10), 0));
-            skill -= Stats::getCurrent(target, Stats::Sneak) + startBonus;
+            float sneakSkill = Stats::getCurrent(target, Stats::Sneak);
+            if (context.mTeammate && !player.isEmpty() && target != player)
+                sneakSkill = std::max(sneakSkill, Stats::getCurrent(player, Stats::Sneak));
+            skill -= sneakSkill + startBonus;
         }
         skill *= getFloat("fSneakSkillMult", 0.5f);
 
@@ -838,8 +923,8 @@ namespace MWMechanics::ESM4Combat
         const ESM4::Weapon* weapon = getActorWeapon(attacker);
         if (weapon == nullptr || !isGun(*weapon) || isDead(attacker) || ESM4Actors::get().isActing(attacker))
             return false;
-        if (ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
-            ESM4Actors::get().playAction(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
+        if (playAttack(attacker, attackSequence(*weapon)) <= 0.f)
+            playAttack(attacker, std::string(animPrefix(*weapon)) + "attackright.kf");
 
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
@@ -911,19 +996,20 @@ namespace MWMechanics::ESM4Combat
     {
         if (isDead(attacker) || ESM4Actors::get().isActing(attacker))
             return false;
+        setBlocking(attacker, false);
         // NPCs with a melee weapon (or a hand to hand one, like a power fist) in hand swing it
         const ESM4::Weapon* weapon = getActorWeapon(attacker);
         if (weapon != nullptr && getWeaponType(*weapon) != 2 && getWeaponType(*weapon) != 6)
             weapon = nullptr;
         float length = 0.f;
         if (weapon != nullptr)
-            length = ESM4Actors::get().playAction(attacker, attackSequence(*weapon));
-        // Creatures keep their attacks next to the skeleton
+            length = playAttack(attacker, attackSequence(*weapon));
+        // Fists and creatures (which keep their attacks next to the skeleton)
         static constexpr std::string_view attacks[]
             = { "h2hattackleft.kf", "h2hattackright.kf", "h2hattackpower.kf", "h2hattackforwardpower.kf" };
         const std::size_t first = std::uniform_int_distribution<std::size_t>(0, 1)(random());
         for (std::size_t i = 0; i < std::size(attacks) && length <= 0.f; ++i)
-            length = ESM4Actors::get().playAction(attacker, attacks[(first + i) % std::size(attacks)]);
+            length = playAttack(attacker, std::string(attacks[(first + i) % std::size(attacks)]));
         if (length <= 0.f)
             length = 1.f; // no sequence: the blow still lands
         sPendingHits.push_back(
@@ -1263,9 +1349,8 @@ namespace MWMechanics::ESM4Combat
             return false;
         // Thrown weapons have their own throw sequence; launchers fire like guns
         const std::string prefix(animPrefix(*weapon));
-        if (ESM4Actors::get().playAction(attacker, prefix + "attackthrow.kf") <= 0.f
-            && ESM4Actors::get().playAction(attacker, attackSequence(*weapon)) <= 0.f)
-            ESM4Actors::get().playAction(attacker, prefix + "attackright.kf");
+        if (playAttack(attacker, prefix + "attackthrow.kf") <= 0.f && playAttack(attacker, attackSequence(*weapon)) <= 0.f)
+            playAttack(attacker, prefix + "attackright.kf");
         if (!weapon->mFireSound.isZeroOrUnset())
             MWBase::Environment::get().getSoundManager()->playSound3D(
                 attacker, ESM::RefId(weapon->mFireSound), 1.f, 1.f);
@@ -1482,9 +1567,25 @@ namespace MWMechanics::ESM4Combat
                 = target.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
             if (delta.length() > blow.mReach * 1.5f)
                 continue;
-            const float damage = applyArmor(target,
+            float damage = applyArmor(target,
                 blow.mWeapon != nullptr ? getWeaponDamage(attacker, *blow.mWeapon) : getUnarmedDamage(attacker));
             HitResult result;
+            // A target holding its weapon up blocks: [inferred, after Oblivion/FO3] the blow loses
+            // fBlockAmountWeaponMult (hands: fBlockAmountHandToHandMult) x (fBlockSkillBase + fBlockSkillMult x
+            // skill 50 / 100), at most fBlockMax, and the BlockHit sequence plays. Blocking while swinging fails.
+            if (target != getPlayer() && isBlocking(target) && !ESM4Actors::get().isActing(target))
+            {
+                const ESM4::Weapon* held = getActorWeapon(target);
+                const bool withWeapon = held != nullptr && getWeaponType(*held) == 2;
+                const float skillTerm = gmst("fBlockSkillBase") + gmst("fBlockSkillMult") * 0.5f;
+                const float amount = std::clamp(
+                    gmst(withWeapon ? "fBlockAmountWeaponMult" : "fBlockAmountHandToHandMult") * skillTerm, 0.f,
+                    gmst("fBlockMax"));
+                damage *= 1.f - amount;
+                result.mBlocked = true;
+                if (MWRender::ESM4NpcAnimation* animation = getAnimation(target))
+                    ESM4Actors::get().playAction(target, blockPrefix(*animation, target) + "blockhit.kf");
+            }
             result.mTarget = target;
             result.mPosition = target.getRefData().getPosition().asVec3();
             result.mDirection = delta;

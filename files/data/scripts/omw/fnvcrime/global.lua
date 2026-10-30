@@ -22,7 +22,7 @@
 --     owner, or a faction the player ranks below the cell's XRNK in). The owner or an owning faction member that
 --     detects the player says GuardTrespass; fAITrespassWarningTimer (10 s) later, if the player is still there,
 --     SendTrespassAlarm: those of them that detect the player attack, and the owners get a minor crime.
--- Not done: pickpocketing (there is no pickpocket menu yet), warners walking up to the player.
+-- Not done: warners walking up to the player (the Steal/Pickpocket Warning packages say their line in place).
 --
 -- Conditions and script functions: GetCrime, GetCrimeKnown, IsTrespassing, GetTrespassWarningLevel,
 -- IsInMyOwnedCell, IsGuard, IsPCAMurderer, GetMinorCrimeCount, GetMajorCrimeCount, GetPCEnemyofFaction,
@@ -42,13 +42,14 @@ end
 local stats = core.obscript.stats
 local rules = require('scripts.omw.fnvcharacter.rules')
 
-local STEAL, TRESPASS, ASSAULT, MURDER = 0, 2, 3, 4 -- crime types (1 is pickpocket)
+local STEAL, PICKPOCKET, TRESPASS, ASSAULT, MURDER = 0, 1, 2, 3, 4 -- crime types
 local RESPONSE_DISTANCE = 10000 -- iCrimeAlarmRecDistance
 local TRESPASS_CHECK_EVERY = 1.0
 
 -- the default topics the original speaks (group 2), by their editor ids
 local TOPICS = {
     steal = { 'Steal' },
+    pickpocket = { 'Pickpocket' },
     assault = { 'Assault' },
     murder = { 'Murder' },
     assaultNoCrime = { 'AssaultNoCrime', 'AssaultNC' },
@@ -69,6 +70,7 @@ local function newState()
         murderer = false,
         counts = { [0] = 0, 0, 0, 0, 0 }, -- crimes of each type (player stats)
         ignore = {}, -- actor id -> true (IgnoreCrime)
+        caught = {}, -- victim id -> true: caught the player pickpocketing (high process +0x188), no second try
     }
 end
 state = newState()
@@ -333,6 +335,88 @@ local function took(player, item, count, holder)
     log(('%s caught the player stealing (%s)'):format(tostring(victim.recordId),
         warn and ('warning ' .. state.warnings) or 'no warnings left'))
     say(victim, TOPICS.steal, player)
+end
+
+-- ---------------------------------------------------------------- pickpocket
+
+-- Pickpocketing (ghidra-findings-12). Sneaking up to a living NPC and activating it opens its pockets (the container
+-- menu). Nothing is rolled on opening; every transfer is rolled once (FUN_00643400):
+--   chance = trunc(ActorBase + ActorMult x player Sneak (0..100) + TargetBase + TargetMult x victim Sneak
+--            + AmountBase + AmountMult x amount), then at least fPickPocketMinChance, at most fPickPocketMaxChance,
+-- amount = the stack's value x count when taking (0 means no roll), 1 when placing. Every rolled transfer costs
+-- fKarmaModStealing unless the victim is evil. Caught: sPickpocketFail, a type 1 crime, the victim remembers it
+-- (sNoPickPocketAgain) and says the Pickpocket topic (its Pickpocket Warning package). The original's second catch
+-- on the same day starts combat of the player against itself, so nothing happens; kept as is.
+local AV_SNEAK = 'Sneak'
+
+local function nameOf(actor)
+    local ok, name = pcall(combat.getName, actor)
+    return ok and name or tostring(actor.recordId)
+end
+
+local function notify(player, text)
+    player:sendEvent('FNVHudNotify', { text = text })
+end
+
+local function gmstText(name, default)
+    local value = core.getFNVGMST and core.getFNVGMST(name)
+    return type(value) == 'string' and value or default
+end
+
+-- Whether the player may open the NPC's pockets: true, or false and the message to show (nil for no message)
+local function canPickpocket(player, victim)
+    if not isPlayer(player) or victim == nil or not victim:isValid() or not isAlive(victim) then return false end
+    if isTeammate(victim) then return false end
+    if I.FNVCombat and I.FNVCombat.isInCombat and I.FNVCombat.isInCombat(victim) then
+        if I.FNVCombat.isFleeing and I.FNVCombat.isFleeing(victim) then
+            return false, nameOf(victim) .. ' ' .. gmstText('sNoTalkFleeing', 'is fleeing.')
+        end
+        return false
+    end
+    local physical = core.obscript.physical
+    if physical ~= nil and physical.canAct and not physical.canAct(victim) then
+        return false, nameOf(victim) .. ' ' .. gmstText('sNoTalkUnConscious', 'is unconscious.')
+    end
+    if state.caught[key(victim)] then
+        return false, nameOf(victim) .. ' ' .. gmstText('sNoPickPocketAgain', 'has already caught you.')
+    end
+    return true
+end
+
+local function clampSkill(v) return math.max(0, math.min(100, v or 0)) end
+
+-- One transfer of count of item between the player and the victim; placing is the player putting it in.
+-- @return true when it goes unnoticed, false when the player is caught (the menu closes)
+local function pickpocket(player, victim, item, count, placing)
+    if not isPlayer(player) or victim == nil or not victim:isValid() then return true end
+    local amount = 1
+    if not placing then
+        local ok, info = pcall(core.obscript.itemInfo, item)
+        local value = ok and info and tonumber(info.value) or 0
+        amount = math.floor(value * (count or 1) + 0.5)
+        if amount <= 0 then return true end -- worthless: no roll, no karma
+    end
+    local playerSneak = clampSkill(stats.get(player, AV_SNEAK))
+    local victimSneak = stats.get(victim, AV_SNEAK) or 0
+    local chance = gmst('fPickPocketActorSkillBase', 40) + gmst('fPickPocketActorSkillMult', 0.6) * playerSneak
+        + gmst('fPickPocketTargetSkillBase', 0) + gmst('fPickPocketTargetSkillMult', -0.6) * victimSneak
+        + gmst('fPickPocketAmountBase', 0) + gmst('fPickPocketAmountMult', -0.5) * amount
+    chance = chance >= 0 and math.floor(chance) or -math.floor(-chance)
+    if chance < gmst('fPickPocketMinChance', 5) then chance = gmst('fPickPocketMinChance', 5)
+    elseif chance > gmst('fPickPocketMaxChance', 85) then chance = gmst('fPickPocketMaxChance', 85) end
+    if not isEvil(alignmentOf(victim)) then karma(gmst('fKarmaModStealing', -5)) end
+    local roll = math.random(0, 99)
+    local caught = roll >= chance
+    log(('the player %s %d %s (%d) %s %s: chance %d, rolled %d, %s'):format(placing and 'plants' or 'picks',
+        count or 1, tostring(item.recordId), amount, placing and 'on' or 'from', tostring(victim.recordId), chance,
+        roll, caught and 'caught' or 'unnoticed'))
+    if not caught then return true end
+    state.caught[key(victim)] = true
+    addCrime(victim, PICKPOCKET, true)
+    countCrime(trackedFactions(victim, false), false, true)
+    notify(player, gmstText('sPickpocketFail', "You've been caught pickpocketing."))
+    say(victim, TOPICS.pickpocket, player)
+    return false
 end
 
 -- ---------------------------------------------------------------- assault and murder
@@ -642,6 +726,10 @@ return {
         --- Whether one of the actor's factions is an enemy of the player through crime.
         isFactionEnemy = isFactionEnemy,
         isTrespassing = function() return trespass ~= nil end,
+        --- Pickpocketing: whether the player may open the NPC's pockets (false, message), and one rolled transfer
+        -- (true unnoticed, false caught); see the pickpocket section.
+        canPickpocket = canPickpocket,
+        pickpocket = pickpocket,
         --- Whether the player may use the object as its own (IsOwnedBy with the player's factions): unowned, or
         -- owned by the player, PlayerFaction, a faction the player is in, or under a set ownership global. Owned
         -- beds refuse sleep otherwise (sNoSleepInOwnedBed, FUN_005095b0).
@@ -669,6 +757,7 @@ return {
             return state
         end,
         onLoad = function(data)
+            if type(data) == 'table' and data.caught == nil then data.caught = {} end
             state = newState()
             if type(data) == 'table' and data.version == 1 then
                 for k, v in pairs(data) do state[k] = v end

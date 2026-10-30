@@ -57,6 +57,14 @@ local function show(player, container)
     })
 end
 
+-- The container menu on a living NPC is its pockets (scripts/omw/fnvcrime pickpocketing)
+local function pickpocketing(container)
+    -- types.Actor.objectIsInstance is false for ESM4 NPCs, so test both.
+    return container ~= nil and container:isValid()
+        and (types.ESM4NPC.objectIsInstance(container) or types.Actor.objectIsInstance(container))
+        and not (obscript.combat and obscript.combat.isDead and obscript.combat.isDead(container))
+end
+
 local function move(item, count, inventory)
     if count >= item.count then
         item:moveInto(inventory)
@@ -81,16 +89,44 @@ return {
             local toContainer = item.parentContainer == e.player
             local target = toContainer and inventoryOf(e.container) or types.Actor.inventory(e.player)
             local count = math.max(1, math.min(e.count or 1, item.count))
-            if not toContainer and I.FNVCrime then I.FNVCrime.took(e.player, item, count, e.container) end
+            if pickpocketing(e.container) then
+                -- a living NPC's pockets: each transfer is rolled, a catch closes the menu and leaves the item
+                -- (nothing moves once the victim has caught the player or can no longer be picked)
+                if I.FNVCrime and not I.FNVCrime.canPickpocket(e.player, e.container) then
+                    e.player:sendEvent('FNVClosePickpocket', {})
+                    return
+                end
+                if I.FNVCrime and not I.FNVCrime.pickpocket(e.player, e.container, item, count, toContainer) then
+                    e.player:sendEvent('FNVClosePickpocket', {})
+                    return
+                end
+            elseif not toContainer and I.FNVCrime then
+                I.FNVCrime.took(e.player, item, count, e.container)
+            end
             move(item, count, target)
         end,
         FNVContainerTakeAll = function(e)
             local playerInventory = types.Actor.inventory(e.player)
+            local pockets = pickpocketing(e.container)
+            if pockets and I.FNVCrime and not I.FNVCrime.canPickpocket(e.player, e.container) then
+                e.player:sendEvent('FNVClosePickpocket', {})
+                return
+            end
             for _, item in ipairs(inventoryOf(e.container):getAll()) do
                 local ok, info = pcall(obscript.itemInfo, item)
                 if ok and info.name ~= '' then
-                    if I.FNVCrime then I.FNVCrime.took(e.player, item, item.count, e.container) end
-                    move(item, item.count, playerInventory)
+                    if pockets then
+                        -- (the original takes the item the player is caught on, then closes)
+                        local unnoticed = I.FNVCrime == nil or I.FNVCrime.pickpocket(e.player, e.container, item, item.count, false)
+                        move(item, item.count, playerInventory)
+                        if not unnoticed then
+                            e.player:sendEvent('FNVClosePickpocket', {})
+                            return
+                        end
+                    else
+                        if I.FNVCrime then I.FNVCrime.took(e.player, item, item.count, e.container) end
+                        move(item, item.count, playerInventory)
+                    end
                 end
             end
         end,

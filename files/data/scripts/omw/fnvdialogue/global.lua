@@ -2183,6 +2183,8 @@ local function topicOption(topicId)
     local info = pickInfo(topic)
     if info == nil then return nil end
     local text = info.prompt ~= '' and info.prompt or topic.name
+    -- designer notes in braces ({Evil 2+}...) are never shown
+    text = text:gsub('%b{}', ''):gsub('^%s+', ''):gsub('%s+$', '')
     if text == '' then text = topic.editorId end
     return { topic = topic, info = info, text = text }
 end
@@ -2395,6 +2397,19 @@ I.Activation.addHandlerForType(types.ESM4NPC, function(npc, actor)
     -- a dead NPC is looted: the engine opens it as a container (MWClass::ESM4Npc::activate)
     if isDead(npc) then return end
     if types.Player.objectIsInstance(actor) then
+        -- sneaking up to an NPC opens its pockets instead (ghidra-findings-12; teammates got the wheel before this)
+        local sneaking = core.obscript.combat and core.obscript.combat.isSneaking
+            and core.obscript.combat.isSneaking(actor)
+        if sneaking and I.FNVCrime and I.FNVCrime.canPickpocket then
+            local ok, message = I.FNVCrime.canPickpocket(actor, npc)
+            if ok then
+                actor:sendEvent('FNVOpenPickpocket', { target = npc })
+                return false
+            elseif message ~= nil then
+                actor:sendEvent('FNVHudNotify', { text = message })
+                return false
+            end
+        end
         startDialogue(npc, actor)
         return false
     end

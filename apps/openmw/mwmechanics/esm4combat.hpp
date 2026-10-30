@@ -46,6 +46,7 @@ namespace MWMechanics::ESM4Combat
         bool mCorpse = false; // the target was already dead: no health is taken, its limbs can still come off
         bool mExplosion = false; // the hit is an explosion's blast
         bool mKnockedDown = false; // the hit knocked the target off its feet (MWMechanics::ESM4Physical)
+        bool mBlocked = false; // the target blocked a melee blow (less damage, BlockHit played)
     };
 
     // Damages the target's health; kills it when health runs out. Returns the health taken. With a result, the
@@ -100,6 +101,12 @@ namespace MWMechanics::ESM4Combat
     // Crouches behind cover (the sneak idle with the drawn weapon) or stands up again. False when the actor has no
     // crouch loop. A crouched actor's shots start lower.
     bool setCrouched(const MWWorld::Ptr& actor, bool crouched);
+    bool isCrouched(const MWWorld::Ptr& actor);
+
+    // Raises the actor's melee weapon or fists (BlockIdle) or lowers them again: a blocking actor takes less from a
+    // melee blow (see update). False when the actor has no block loop (then it does not block).
+    bool setBlocking(const MWWorld::Ptr& actor, bool blocking);
+    bool isBlocking(const MWWorld::Ptr& actor);
 
     // Fires one shot of a gun along a ray: the first FO3/FONV actor in front of any wall takes the weapon's damage.
     HitResult fire(const MWWorld::Ptr& attacker, const ESM4::Weapon& weapon, const osg::Vec3f& origin,
@@ -157,6 +164,10 @@ namespace MWMechanics::ESM4Combat
         bool mSleeping = false; // the observer is asleep
         bool mInCombat = false; // the observer is fighting
         bool mAlert = false; // the observer has its weapon out
+        bool mTeammate = false; // the target is a teammate of the player (FUN_008a0d10): it sneaks with the higher
+                                // of its own and the player's Sneak, and while sneaking out of combat the observer's
+                                // detection of the player stands for it
+        bool mTargetInCombat = false; // (with mTeammate) the teammate is fighting
     };
     struct Detection
     {

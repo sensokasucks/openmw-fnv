@@ -130,6 +130,8 @@ local function startCombat(actor, target)
     -- what it carries and holds, for the combat planner (weapon types: 1 ranged, 2 melee, 6 hand to hand, 7 none drawn)
     s.equippedType, s.drawnType = 6, 6
     s.flushed = true
+    -- a follower crouching along with the player stands up to fight
+    if combat.setCrouched then pcall(combat.setCrouched, actor, false) end
     s.failedCovers = {}
     s.style = combat.getCombatStyle and combat.getCombatStyle(actor) or nil
     -- grenades thrown in earlier fights are gone too
@@ -155,6 +157,7 @@ local function stopCombat(actor, why)
         print(('[combat] %s (%s) stops fighting (%s)'):format(actor.recordId, tostring(actor.id), why or 'told to'))
         fighting[actor.id] = nil
         if releaseCover then releaseCover(s) end
+        if s.blocking and combat.setBlocking and actor:isValid() then combat.setBlocking(actor, false) end
         scriptEvent(actor, 'OnCombatEnd', s.target)
         if actor:isValid() then
             ai.stop(actor)
@@ -291,7 +294,13 @@ local function approach(s, actor, target, reach, aroundObstacles)
         s.straight = true
     end
     local moved = s.goal == nil or (s.goal - target.position):length() > 64
-    if status ~= 'moving' or (moved and simTime >= s.nextMove) then
+    -- an order the actor says it carries while standing still for a second is stale (run 47: frozen at 185)
+    if s.stillFrom == nil or (actor.position - s.stillFrom):length() > 4 then
+        s.stillFrom, s.stillSince = actor.position, simTime
+    end
+    local stale = status == 'moving' and simTime - (s.stillSince or simTime) > 1 and simTime >= s.nextMove
+    if status ~= 'moving' or stale or (moved and simTime >= s.nextMove) then
+        if stale then ai.stop(actor) end
         s.nextMove = simTime + 0.5
         s.goal = target.position
         ai.moveTo(actor, target.position, { run = true, direct = true, straight = s.straight, tolerance = reach * 0.7 })
@@ -383,9 +392,14 @@ end
 local RESELECT_EVERY = 1.0
 local CLOSE_RANGE = 2048
 
+-- Detection of a target by a fighting, alert actor; a teammate of the player sneaks with the player (findings 2)
+local function detectOptions(target)
+    return { inCombat = true, alert = true, teammate = isTeammate(target), targetInCombat = fighting[target.id] ~= nil }
+end
+
 local function targetScore(s, actor, target)
     local score = 0
-    local d = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+    local d = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
     local seen = d ~= nil and d > gmst('fSneakNoticedMin', -20)
     local sight = combat.hasLineOfFire(actor, target)
     s.seen = s.seen or {}
@@ -699,9 +713,39 @@ local function holderItems(holder)
     return types.Container.content(holder)
 end
 
-local function containerOpen(obj)
+local function sameId(a, b)
+    return a ~= nil and b ~= nil and tostring(a):lower() == tostring(b):lower()
+end
+
+-- Whether the actor owns the object (its own XOWN or its cell's): the owner is the actor's base record, or a
+-- faction it belongs to
+local function ownedBy(actor, obj)
+    local ok, own = pcall(combat.ownership, obj)
+    if not ok or own == nil then return false end
+    if sameId(own.owner, actor.recordId) then return true end
+    if own.isFaction then
+        for _, f in ipairs(combat.getFactions(actor)) do
+            if sameId(f.id, own.owner) then return true end
+        end
+    end
+    return false
+end
+
+local function carriesKey(actor, obj)
+    local ok, key = pcall(combat.lockKey, obj)
+    if not ok or key == nil then return false end
+    for _, item in ipairs(types.Actor.inventory(actor):getAll()) do
+        if sameId(item.recordId, key) then return true end
+    end
+    return false
+end
+
+-- A container the actor may raid for weapons (ghidra-findings-6): unlocked, or locked but the actor's own or one it
+-- carries the key for
+local function containerOpen(obj, actor)
     local ok, locked = pcall(types.Lockable.isLocked, obj)
-    return not (ok and locked)
+    if not (ok and locked) then return true end
+    return actor ~= nil and (ownedBy(actor, obj) or carriesKey(actor, obj))
 end
 
 local function scanPickups(s)
@@ -827,11 +871,11 @@ local function scanPickups(s)
                 end
             end
         end
-        -- weapons in the unlocked containers within reach
+        -- weapons in the containers within reach it can open
         if types.ESM4Container ~= nil then
             local okConts, conts = pcall(cell.getAll, cell, types.ESM4Container)
             for _, cont in ipairs(okConts and conts or {}) do
-                if cont.enabled and (cont.position - actor.position):length() <= maxDist and containerOpen(cont) then
+                if cont.enabled and (cont.position - actor.position):length() <= maxDist and containerOpen(cont, actor) then
                     local okItems, items = pcall(function() return types.Container.content(cont):getAll() end)
                     for _, item in ipairs(okItems and items or {}) do
                         if types.ESM4Weapon.objectIsInstance(item) then consider(item, cont) end
@@ -1149,6 +1193,12 @@ local function replan(s, distance, los)
     s.best = bestWeapons(s, distance)
     local actorType = s.equippedType
     if actorType == PW.NONE then actorType = PW.HAND_TO_HAND end
+    -- A teammate told to fight in melee (CombatStyleMelee 1) with a gun in its slot: its weapon of the plan is its
+    -- melee weapon or its fists, else no plan reaches melee (run 50: Veronica stood still with her 10mm equipped)
+    if isTeammate(s.actor) and refVar(s.actor, 'combatstylemelee') == 1
+        and (actorType == PW.RANGED or actorType == PW.EXPLOSIVE or actorType == PW.GRENADE) then
+        actorType = s.best[PW.MELEE] ~= nil and PW.MELEE or PW.HAND_TO_HAND
+    end
     local weaponTypes = {}
     for t in pairs(s.best) do weaponTypes[#weaponTypes + 1] = t end
     local locations = { P.L.TARGET, P.L.MELEE, P.L.FLEE, P.L.INVESTIGATE, P.L.AVOID_THREAT }
@@ -1174,6 +1224,11 @@ local function replan(s, distance, los)
     local current = s.plan and s.plan[s.step]
     if plan == nil then
         s.plan, s.step = nil, nil
+        if simTime >= (s.noPlanLoggedAt or -math.huge) + 5 then
+            s.noPlanLoggedAt = simTime
+            print(('[combat] %s (%s) finds no plan (weapon type %d, drawn %d, %.0f away)'):format(s.actor.recordId,
+                tostring(s.actor.id), actorType, s.drawnType or -1, distance))
+        end
         return
     end
     local labels = {}
@@ -1201,6 +1256,12 @@ end
 
 local function holdStill(actor)
     if ai.status(actor) == 'moving' then ai.stop(actor) end
+end
+
+-- A move order sent at least half a second ago that the actor no longer carries (ai.status 'none': stopped by
+-- another step, or never taken). ai.status never says 'idle' (run 44: the pickup walk stalled on "moving none").
+local function orderDropped(actor, state)
+    return state.sent == true and simTime >= (state.sentAt or 0) + 0.5 and ai.status(actor) == 'none'
 end
 
 local function equipType(s, weaponType)
@@ -1240,8 +1301,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' then
-            state.sent = true
+        if not state.sent or orderDropped(actor, state) then
+            state.sent, state.sentAt = true, simTime
             ai.moveTo(actor, s.cover.cover, { run = true, direct = true, tolerance = 24 })
         elseif ai.status(actor) == 'nopath' then
             s.failedCovers[s.cover.key] = simTime
@@ -1256,14 +1317,20 @@ local function moveTowards(s, kind, distance, los)
             s.pickup, s.nextPickupScan = nil, 0
             return 'failed'
         end
-        if (actor.position - s.pickup.position):length() <= PICKUP_REACH then
+        local left = (actor.position - s.pickup.position):length()
+        if left <= PICKUP_REACH then
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' then
-            state.sent = true
+        -- a walk that takes far longer than the distance warrants [inferred] gives the item up for 30 s
+        state.startedAt = state.startedAt or simTime
+        state.budget = state.budget or math.max(8, left / 150)
+        if not state.sent or orderDropped(actor, state) then
+            state.sent, state.sentAt = true, simTime
             ai.moveTo(actor, s.pickup.position, { run = true, direct = true, tolerance = 24 })
-        elseif ai.status(actor) == 'nopath' then
+        elseif ai.status(actor) == 'nopath' or simTime > state.startedAt + state.budget then
+            print(('[combat] %s (%s) gives up fetching %s (%s, %.0f away)'):format(actor.recordId,
+                tostring(actor.id), tostring(s.pickup.editorId), tostring(ai.status(actor)), left))
             pickupBlocked[obj.id] = simTime + 30
             s.pickup, s.nextPickupScan = nil, 0
             return 'failed'
@@ -1305,8 +1372,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if state.sentTo ~= s.searchPos or ai.status(actor) == 'idle' then
-            state.sentTo = s.searchPos
+        if state.sentTo ~= s.searchPos or orderDropped(actor, state) then
+            state.sentTo, state.sent, state.sentAt = s.searchPos, true, simTime
             ai.moveTo(actor, s.searchPos, { run = true, direct = true, tolerance = 96 })
         elseif ai.status(actor) == 'nopath' then
             return 'failed'
@@ -1321,8 +1388,8 @@ local function moveTowards(s, kind, distance, los)
             holdStill(actor)
             return 'done'
         end
-        if not state.sent or ai.status(actor) == 'idle' or simTime >= (state.resend or 0) then
-            state.sent, state.resend = true, simTime + 1
+        if not state.sent or orderDropped(actor, state) or simTime >= (state.resend or 0) then
+            state.sent, state.sentAt, state.resend = true, simTime, simTime + 1
             ai.moveTo(actor, ally.position, { run = true, direct = true,
                 tolerance = 2 * ACTOR_RADIUS + MOVE_TO_ACTOR_BUFFER })
         elseif ai.status(actor) == 'nopath' then
@@ -1371,17 +1438,51 @@ local function attackRanged(s, distance, los)
     return 'running'
 end
 
+-- Lowers a raised weapon (see attackMelee)
+local function lowerBlock(s)
+    if s.blocking then
+        s.blocking = false
+        if combat.setBlocking and s.actor:isValid() then combat.setBlocking(s.actor, false) end
+    end
+end
+
 local function attackMelee(s, distance)
     local actor, target = s.actor, s.target
     local reach = meleeReach(s)
-    if distance > reach * 1.3 then return 'failed' end
+    if distance > reach * 1.3 then
+        lowerBlock(s)
+        return 'failed'
+    end
     s.straight = false
-    holdStill(actor)
-    ai.face(actor, yawTo(actor.position, target.position))
+    -- Two fighters closing at a run overshoot into each other (run 44: 38 apart, bodies through each other; the
+    -- original's bodies push each other apart). Nearer than the two bodies plus a hand, step back to the reach.
+    local other = fighting[target.id]
+    local otherStepping = other ~= nil and simTime < (other.stepBackUntil or 0)
+    if distance < 2 * ACTOR_RADIUS + 16 and simTime >= (s.stepBackUntil or 0) and not otherStepping then
+        local away = actor.position - target.position
+        away = util.vector3(away.x, away.y, 0)
+        if away:length() < 1 then away = util.vector3(math.random() - 0.5, math.random() - 0.5, 0) end
+        away = away:normalize()
+        s.stepBackUntil = simTime + 1
+        -- at least a body's width back, else the order is within its tolerance at once (run 46: stuck at 70)
+        local to = math.max(reach * 0.8, distance + 2 * ACTOR_RADIUS)
+        print(('[combat] %s (%s) steps back from %s (%.0f apart, to %.0f)'):format(actor.recordId,
+            tostring(actor.id), tostring(target.recordId), distance, to))
+        -- (at the actor's own height: a point at the target's z on a slope is never reached, run 47 froze at 185)
+        local point = target.position + away * to
+        ai.moveTo(actor, util.vector3(point.x, point.y, actor.position.z), { run = false, direct = true, tolerance = 16 })
+    end
+    -- (the order lands a frame later; stopping on the next tick would cancel it: run 45 held at 70. The roll below
+    -- goes on meanwhile, so a step back never costs a swing.)
+    if simTime >= (s.stepBackUntil or 0) then
+        holdStill(actor)
+        ai.face(actor, yawTo(actor.position, target.position))
+    end
     if simTime >= s.nextAttack then
         -- In reach the original rolls attack / block / hold each decision (ghidra-findings-7): attack = Attack % +
         -- 20 x skill/100 (plus bonuses), block = Block % x fBlockScoreNoShieldMult 0.5, x0.25 more when not under
-        -- attack, hold = max(100 - attack - block, 30). Blocks are not animated yet, so a block is a hold here.
+        -- attack, hold = max(100 - attack - block, 30). A block raises the weapon (BlockIdle) for the hold timer; a
+        -- blow landing meanwhile is cut and plays BlockHit (the engine, see the shot event's blocked).
         local style = s.style
         local skill = s.inHand and s.inHand.skill and s.inHand.skill >= 0 and stats.get(actor, s.inHand.skill) or 50
         local attack = (style and style.attackChance or 40) + 20 * skill / 100
@@ -1391,10 +1492,18 @@ local function attackMelee(s, distance)
         local hold = math.max(100 - attack - block, 30)
         local roll = math.random() * (attack + block + hold)
         if roll < attack then
+            lowerBlock(s)
             s.nextAttack = simTime + 1.2 + math.random() * 0.8
             combat.attack(actor, target, reach)
+        elseif roll < attack + block then
+            -- block for the style's Hold Timer [0.5-1.5 s in the default style]
+            s.nextAttack = simTime + 0.5 + math.random()
+            if combat.setBlocking and not s.blocking then
+                s.blocking = combat.setBlocking(actor, true) -- false without a block loop: a plain hold
+            end
         else
-            -- hold (or block) for the style's Hold Timer [0.5-1.5 s in the default style]
+            -- hold for the style's Hold Timer
+            lowerBlock(s)
             s.nextAttack = simTime + 0.5 + math.random()
         end
     end
@@ -1505,8 +1614,8 @@ local function beInCover(s, distance, los, grenade)
     end
     local function near(point) return (actor.position - point):length() <= 40 end
     local function go(point)
-        if not st.sent or ai.status(actor) == 'idle' then
-            st.sent = true
+        if not st.sent or orderDropped(actor, st) then
+            st.sent, st.sentAt = true, simTime
             ai.moveTo(actor, point, { run = true, direct = true, tolerance = 24 })
         end
     end
@@ -1841,11 +1950,11 @@ local function fight(s)
         noticed = noticesPlayer(actor)
     else
         -- the same detection score as for the player, in combat and alert
-        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        local score = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
         noticed = los or distance <= REACH * 2 or (score ~= nil and score > gmst('fSneakNoticedMin', -20))
     end
     if not noticed and not targetLost(s) and simTime - (s.lastSeenAt or s.since) + TICK_EVERY > lostAfter() then
-        local score = combat.detect and select(1, combat.detect(actor, target, { inCombat = true, alert = true }))
+        local score = combat.detect and select(1, combat.detect(actor, target, detectOptions(target)))
         print(('[combat] %s (%s) loses %s at %.0f (detection %s, line of fire %s, moving %s; %s)')
             :format(actor.recordId, tostring(actor.id), tostring(target.recordId), distance, tostring(score),
                 tostring(los), tostring(ai.status(actor)), describeLine(actor, target)))
@@ -1907,6 +2016,7 @@ local function fight(s)
             combat.setCrouched(actor, false)
         end
     end
+    if step.name ~= 'ATTACK_MELEE' and step.name ~= 'ATTACK_HAND_TO_HAND' then lowerBlock(s) end
     local procedure = procedures[step.name]
     local result = procedure and procedure(s, step, distance, los) or 'failed'
     if step.action.move and step.param ~= P.L.FLEE then
@@ -1963,6 +2073,11 @@ return {
         end,
         --- Whether the actor is fighting or running away; its AI package waits meanwhile.
         isInCombat = function(actor) return fighting[actor.id] ~= nil end,
+        --- Whether the actor is running from its fight (the pickpocket menu refuses a fleeing NPC).
+        isFleeing = function(actor)
+            local s = fighting[actor.id]
+            return s ~= nil and s.fleeing == true
+        end,
         --- Whether the actor's detection score of the player is above fSneakNoticedMin (checked every
         -- fDetectionTimerSetting seconds).
         noticesPlayer = function(actor) return noticesPlayer(actor) end,
@@ -2049,6 +2164,10 @@ return {
             end
             if target ~= nil and target:isValid() and isActor(target) then
                 if fighting[target.id] then fighting[target.id].lastHitAt = simTime end
+                if e.blocked then
+                    print(('[combat] %s (%s) blocks %s (%.0f damage gets through)'):format(target.recordId,
+                        tostring(target.id), tostring(e.attacker.recordId), e.damage or 0))
+                end
                 if e.knockedDown then
                     print(('[combat] %s (%s) is knocked down by %s (%.0f damage)'):format(target.recordId,
                         tostring(target.id), tostring(e.attacker.recordId), e.damage or 0))

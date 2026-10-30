@@ -84,7 +84,8 @@ namespace MWLua
 
         // Global event "FNVCombat_Shot" { attacker, weapon (record id), target (nil on a miss), object (what stopped
         // a miss, if anything), damage, killed, position, direction, limb (body part hit, see LIMB), corpse (the target
-        // was already dead), explosion (a blast), knockedDown (the hit knocked the target down, see physical) }
+        // was already dead), explosion (a blast), knockedDown (the hit knocked the target down, see physical),
+        // blocked (the target blocked a melee blow) }
         // Melee, unarmed and creature blows send it too, with melee = true (weapon nil when unarmed).
         void sendShot(const Context& context, const MWWorld::Ptr& attacker, const ESM4::Weapon* weapon,
             const Combat::HitResult& hit, bool melee = false)
@@ -112,6 +113,8 @@ namespace MWLua
                     data["explosion"] = true;
                 if (hit.mKnockedDown)
                     data["knockedDown"] = true;
+                if (hit.mBlocked)
+                    data["blocked"] = true;
                 context.mLuaEvents->addGlobalEvent(
                     { "FNVCombat_Shot", LuaUtil::serialize(data, context.mSerializer) });
             });
@@ -304,6 +307,15 @@ namespace MWLua
 
         // Ownership of the cell an object is in: { owner, isFaction, global, rank (XRNK), public (CELL 0x20) };
         // owner is nil when nobody owns it.
+        // The key (form id text) that opens a locked door or container, nil when it has none.
+        api["lockKey"] = [](const Object& object) -> sol::optional<std::string> {
+            const ESM::RefId key = object.ptr().getCellRef().getKey();
+            const ESM::FormId* formId = key.getIf<ESM::FormId>();
+            // (a keyless lock carries the null form in the plugin's load slot: index 0)
+            if (formId == nullptr || formId->isZeroOrUnset() || formId->mIndex == 0)
+                return sol::nullopt;
+            return formIdText(*formId);
+        };
         api["cellOwnership"] = [](const Object& object, sol::this_state s) -> sol::table {
             sol::state_view lua(s);
             sol::table t(lua, sol::create);
@@ -514,6 +526,12 @@ namespace MWLua
         api["setCrouched"] = [](const Object& actor, bool crouched) {
             return Combat::setCrouched(actor.ptr(), crouched);
         };
+        // Raises the melee weapon or fists (BlockIdle) or lowers them; a blocking actor takes less from melee blows
+        // (the shot event has blocked = true). False when it has no block loop.
+        api["setBlocking"] = [](const Object& actor, bool blocking) {
+            return Combat::setBlocking(actor.ptr(), blocking);
+        };
+        api["isBlocking"] = [](const Object& actor) { return Combat::isBlocking(actor.ptr()); };
         api["canTargetSee"] = [](const Object& actor, const Object& target, const osg::Vec3f& point) {
             return Combat::canTargetSee(actor.ptr(), target.ptr(), point);
         };
@@ -621,8 +639,12 @@ namespace MWLua
         // Whether the actor (the player too) is sneaking.
         api["isSneaking"] = [](const Object& actor) -> bool {
             const MWWorld::Ptr ptr = actor.ptrOrEmpty();
-            if (ptr.isEmpty() || !ptr.getClass().isActor() || ptr.getType() == ESM::REC_NPC_4
-                || ptr.getType() == ESM::REC_CREA4)
+            if (ptr.isEmpty())
+                return false;
+            // FO3/FONV actors sneak by crouching (setCrouched); their classes do not answer isActor()
+            if (ptr.getType() == ESM::REC_NPC_4 || ptr.getType() == ESM::REC_CREA4)
+                return Combat::isCrouched(ptr);
+            if (!ptr.getClass().isActor())
                 return false;
             return ptr.getClass().getCreatureStats(ptr).getStance(MWMechanics::CreatureStats::Stance_Sneak);
         };
@@ -636,6 +658,8 @@ namespace MWLua
                 context.mSleeping = options->get_or("sleeping", false);
                 context.mInCombat = options->get_or("inCombat", false);
                 context.mAlert = options->get_or("alert", false);
+                context.mTeammate = options->get_or("teammate", false);
+                context.mTargetInCombat = options->get_or("targetInCombat", false);
             }
             const Combat::Detection detection = Combat::detect(observer.ptr(), target.ptr(), context);
             return { detection.mScore, detection.mLineOfSight };
