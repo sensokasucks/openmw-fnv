@@ -681,6 +681,11 @@ namespace MWMechanics::ESM4Combat
         return true;
     }
 
+    bool isCrouched(const MWWorld::Ptr& actor)
+    {
+        return sCrouched.count(actor.getCellRef().getRefNum()) != 0;
+    }
+
     namespace
     {
         // The animation prefix of what the actor would block with: its melee weapon's, else "mt" (the game ships

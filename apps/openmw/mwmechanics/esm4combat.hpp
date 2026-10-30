@@ -101,6 +101,7 @@ namespace MWMechanics::ESM4Combat
     // Crouches behind cover (the sneak idle with the drawn weapon) or stands up again. False when the actor has no
     // crouch loop. A crouched actor's shots start lower.
     bool setCrouched(const MWWorld::Ptr& actor, bool crouched);
+    bool isCrouched(const MWWorld::Ptr& actor);
 
     // Raises the actor's melee weapon or fists (BlockIdle) or lowers them again: a blocking actor takes less from a
     // melee blow (see update). False when the actor has no block loop (then it does not block).
