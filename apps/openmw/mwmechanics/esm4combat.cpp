@@ -65,6 +65,18 @@ namespace MWMechanics::ESM4Combat
             return MWWorld::ESM4GameSettings::getFloat(name);
         }
 
+        // Impulse (kg x units/s) a shot of the given damage gives a loose object: fProjectileKnockMultClutter
+        // 0.15 x fWeaponClutterKnockMult 750 [inferred: the original scales by these two; a 16-damage pistol
+        // round sends a 2.5 kg tumbleweed off at 720 units/s]
+        float clutterKnock(float damage)
+        {
+            return std::max(damage, 1.f) * gmst("fProjectileKnockMultClutter") * gmst("fWeaponClutterKnockMult");
+        }
+
+        // Impulse per unit of EXPL force [inferred: the intro's vSmallImpulseExplosion, force 25, rolls the
+        // tumbleweed past the camera at a brisk 400 units/s]
+        constexpr float sExplosionClutterImpulse = 40.f;
+
         // How far a bullet flies. The original engine moves projectiles; at gun ranges they are effectively instant.
         constexpr float sShotRange = 16384.f;
 
@@ -437,9 +449,16 @@ namespace MWMechanics::ESM4Combat
         }
 
         result.mDirection = dir;
-        if (result.mTarget.isEmpty())
-            return result;
         const int projectiles = weapon.mHasFO3Data ? std::max<int>(1, weapon.mFO3Data.projectileCount) : 1;
+        if (result.mTarget.isEmpty())
+        {
+            // A loose object the shot ended on is knocked along the shot
+            if (!result.mObject.isEmpty())
+                world->applyClutterImpulse(result.mObject,
+                    dir * clutterKnock(getWeaponDamage(attacker, weapon) * static_cast<float>(projectiles)),
+                    result.mPosition);
+            return result;
+        }
         float damage = 0.f;
         for (int i = 0; i < projectiles; ++i)
             damage += applyArmor(result.mTarget, getWeaponDamage(attacker, weapon));
@@ -1063,6 +1082,9 @@ namespace MWMechanics::ESM4Combat
             const float radius = explosion->mData.radius;
             if (radius <= 0.f)
                 return;
+            // Loose objects are blown away from the centre (EXPL force; fExplosionForceClutterUpBias lifts them)
+            world->applyClutterBlast(
+                at, radius, explosion->mData.force * sExplosionClutterImpulse, gmst("fExplosionForceClutterUpBias"));
             // The EXPL damage, times the thrower's skill while it still holds the weapon (FalloutNV.exe 0x9b0f80);
             // the weapon's own damage is not used
             const MWWorld::Ptr attacker = MWBase::Environment::get().getWorldModel()->getPtr(projectile.mAttacker);
@@ -1163,6 +1185,14 @@ namespace MWMechanics::ESM4Combat
             if (hit.mHit)
             {
                 projectile.mPosition = hit.mHitPos + hit.mHitNormal * 2.f;
+                // A loose object the projectile struck is knocked along its flight
+                if (!hit.mHitObject.isEmpty() && projectile.mWeapon != nullptr && !timed)
+                {
+                    osg::Vec3f along = projectile.mVelocity;
+                    if (along.normalize() > 0.f)
+                        world->applyClutterImpulse(hit.mHitObject,
+                            along * clutterKnock(static_cast<float>(projectile.mWeapon->mData.damage)), hit.mHitPos);
+                }
                 if (!timed)
                     return true;
                 // Grenades bounce and roll until their fuse runs out

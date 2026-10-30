@@ -589,6 +589,9 @@ namespace MWWorld
 
         float getPhysicsFrameRateDt() const override;
         MWPhysics::RagdollWorld& getRagdollWorld() override;
+        bool applyClutterImpulse(
+            const MWWorld::ConstPtr& ptr, const osg::Vec3f& impulse, const osg::Vec3f& at) override;
+        void applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias) override;
 
         bool findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result) override;
 

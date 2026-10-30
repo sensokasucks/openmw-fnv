@@ -3224,6 +3224,16 @@ namespace MWWorld
         return mPhysics->getRagdollWorld();
     }
 
+    bool World::applyClutterImpulse(const MWWorld::ConstPtr& ptr, const osg::Vec3f& impulse, const osg::Vec3f& at)
+    {
+        return mPhysics->applyClutterImpulse(ptr, impulse, at);
+    }
+
+    void World::applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias)
+    {
+        mPhysics->applyClutterBlast(centre, radius, impulse, upBias);
+    }
+
     bool World::findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result)
     {
         if (cell->isExterior())

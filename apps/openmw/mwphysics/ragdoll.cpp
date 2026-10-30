@@ -928,6 +928,21 @@ namespace MWPhysics
         mClutter.erase(found);
     }
 
+    namespace
+    {
+        // A single shove adds at most this much speed (units/s), so a shot does not send a bottle into orbit
+        constexpr float sClutterMaxKick = 900.f;
+
+        btVector3 capKick(const btRigidBody& body, const btVector3& impulse)
+        {
+            const float invMass = static_cast<float>(body.getInvMass());
+            const float speed = static_cast<float>(impulse.length()) * invMass;
+            if (invMass <= 0.f || speed <= sClutterMaxKick)
+                return impulse;
+            return impulse * (sClutterMaxKick / speed);
+        }
+    }
+
     bool RagdollWorld::applyClutterImpulse(
         const btCollisionObject* source, const btVector3& impulse, const btVector3& at)
     {
@@ -936,7 +951,7 @@ namespace MWPhysics
             return false;
         btRigidBody& body = *found->second.mBody;
         body.activate(true);
-        body.applyImpulse(impulse, at - body.getWorldTransform().getOrigin());
+        body.applyImpulse(capKick(body, impulse), at - body.getWorldTransform().getOrigin());
         return true;
     }
 
@@ -959,7 +974,7 @@ namespace MWPhysics
             away.normalize();
             const float falloff = 1.f - (distance / radius) * (distance / radius);
             body.activate(true);
-            body.applyCentralImpulse(away * impulse * falloff);
+            body.applyCentralImpulse(capKick(body, away * impulse * falloff));
         }
     }
 

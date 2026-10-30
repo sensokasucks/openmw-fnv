@@ -501,6 +501,12 @@ namespace MWBase
         virtual float getPhysicsFrameRateDt() const = 0;
         // The dynamics world FO3/FNV ragdolls fall in (MWPhysics::RagdollWorld)
         virtual MWPhysics::RagdollWorld& getRagdollWorld() = 0;
+        // Shoves a loose FO3/FNV clutter body (impulse in kg x units/s at a world point); false if the object
+        // has none. The blast shoves every body within the radius away from the centre, falling off with distance.
+        virtual bool applyClutterImpulse(
+            const MWWorld::ConstPtr& ptr, const osg::Vec3f& impulse, const osg::Vec3f& at)
+            = 0;
+        virtual void applyClutterBlast(const osg::Vec3f& centre, float radius, float impulse, float upBias) = 0;
 
         virtual bool findInteriorPositionInWorldSpace(const MWWorld::CellStore* cell, osg::Vec3f& result) = 0;
 
