@@ -236,6 +236,9 @@ namespace MWPhysics
             float mAwakeTime = 0.f;
             btTransform mWritten; // the last transform written to the reference
             btTransform mHome; // where it last rested: a body that falls out of the world comes back here
+            // body = reference x mOffset: a lone convex child is used as the body's shape (Bullet only sweeps
+            // convex bodies for continuous collision), so the body sits at the child's offset from the reference
+            btTransform mOffset = btTransform::getIdentity();
         };
         std::map<const btCollisionObject*, Clutter> mClutter;
         // Actors mirrored as kinematic bodies: source collision object -> proxy

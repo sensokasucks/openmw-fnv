@@ -9,6 +9,8 @@
 #include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 #include <BulletCollision/CollisionShapes/btCollisionShape.h>
+#include <BulletCollision/CollisionShapes/btCompoundShape.h>
+#include <BulletCollision/CollisionShapes/btConvexInternalShape.h>
 #include <BulletDynamics/ConstraintSolver/btConeTwistConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btHingeConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btPoint2PointConstraint.h>
@@ -93,6 +95,7 @@ namespace MWPhysics
         // A body still moving faster than this is not put to sleep by the distance or count rules, so nothing
         // freezes in mid-air
         constexpr float sClutterRestingSpeed = 20.f;
+        void thickenMargin(btCollisionShape* shape);
         // A body this far below where it last rested has left the world (through a floor that had no mirror yet)
         // and is put back
         constexpr float sClutterFallLimit = 1024.f;
@@ -1000,10 +1003,24 @@ namespace MWPhysics
         clutter.mShapeInstance = instance;
         clutter.mSource = source;
         clutter.mWind = info.mWind;
+        thickenMargin(shape);
+        // Bullet sweeps only convex bodies for continuous collision, and a compound is not convex to it: a
+        // compound of one convex child (the usual Havok rigid body) is stepped as that child, at its offset
+        btCollisionShape* bodyShape = shape;
+        if (shape->isCompound())
+        {
+            auto* compound = static_cast<btCompoundShape*>(shape);
+            if (compound->getNumChildShapes() == 1 && compound->getChildShape(0)->isConvex())
+            {
+                bodyShape = compound->getChildShape(0);
+                clutter.mOffset = compound->getChildTransform(0);
+            }
+        }
+        const btTransform start = source->getWorldTransform() * clutter.mOffset;
         btVector3 inertia(0, 0, 0);
-        shape->calculateLocalInertia(info.mMass, inertia);
-        clutter.mMotion = std::make_unique<btDefaultMotionState>(source->getWorldTransform());
-        btRigidBody::btRigidBodyConstructionInfo construction(info.mMass, clutter.mMotion.get(), shape, inertia);
+        bodyShape->calculateLocalInertia(info.mMass, inertia);
+        clutter.mMotion = std::make_unique<btDefaultMotionState>(start);
+        btRigidBody::btRigidBodyConstructionInfo construction(info.mMass, clutter.mMotion.get(), bodyShape, inertia);
         construction.m_friction = std::clamp(info.mFriction, 0.1f, 1.f);
         construction.m_restitution = std::clamp(info.mRestitution, 0.f, 0.6f);
         construction.m_linearDamping = std::clamp(info.mLinearDamping, 0.05f, 0.9f);
@@ -1022,7 +1039,7 @@ namespace MWPhysics
         clutter.mBody->forceActivationState(ISLAND_SLEEPING);
         clutter.mFresh = true;
         clutter.mPlaced = true;
-        clutter.mHome = clutter.mWritten;
+        clutter.mHome = start;
         Log(Debug::Verbose) << "Clutter body for " << ptr.getCellRef().getRefId() << ": " << info.mMass << " kg"
                             << (info.mWind ? ", in the wind" : "");
         mClutter.emplace(source, std::move(clutter));
@@ -1041,14 +1058,35 @@ namespace MWPhysics
     {
         // A single shove adds at most this much speed (units/s), so a shot does not send a bottle into orbit
         constexpr float sClutterMaxKick = 900.f;
+        // A blast lifts a light body at most this fast (units/s): bar items thrown to the ceiling came down hard
+        constexpr float sClutterMaxBlastKick = 400.f;
+        // Bullet's default collision margin (0.04) is for metres; thin Havok shapes (a bottle's hull is under a
+        // unit thick) need a few game units of skin to be caught by the floor they land on
+        constexpr float sClutterMargin = 2.f;
 
-        btVector3 capKick(const btRigidBody& body, const btVector3& impulse)
+        btVector3 capKick(const btRigidBody& body, const btVector3& impulse, float maxKick = sClutterMaxKick)
         {
             const float invMass = static_cast<float>(body.getInvMass());
             const float speed = static_cast<float>(impulse.length()) * invMass;
-            if (invMass <= 0.f || speed <= sClutterMaxKick)
+            if (invMass <= 0.f || speed <= maxKick)
                 return impulse;
-            return impulse * (sClutterMaxKick / speed);
+            return impulse * (maxKick / speed);
+        }
+
+        // A thicker skin for boxes, hulls and cylinders; a sphere's or capsule's margin is its radius, left alone
+        void thickenMargin(btCollisionShape* shape)
+        {
+            if (shape->isCompound())
+            {
+                auto* compound = static_cast<btCompoundShape*>(shape);
+                for (int i = 0; i < compound->getNumChildShapes(); ++i)
+                    thickenMargin(compound->getChildShape(i));
+                return;
+            }
+            const int type = shape->getShapeType();
+            if (type == BOX_SHAPE_PROXYTYPE || type == CONVEX_HULL_SHAPE_PROXYTYPE || type == CYLINDER_SHAPE_PROXYTYPE)
+                if (shape->getMargin() < sClutterMargin)
+                    shape->setMargin(sClutterMargin);
         }
     }
 
@@ -1096,7 +1134,7 @@ namespace MWPhysics
             clutter.mPlaced = false;
             clutter.mWindHoldUntil = mTime + sWindHoldAfterShove;
             body.activate(true);
-            body.applyCentralImpulse(capKick(body, away * impulse * falloff));
+            body.applyCentralImpulse(capKick(body, away * impulse * falloff, sClutterMaxBlastKick));
         }
     }
 
@@ -1271,12 +1309,13 @@ namespace MWPhysics
         if ((now.getOrigin() - clutter.mWritten.getOrigin()).length() < 1.f
             && now.getRotation().angle(clutter.mWritten.getRotation()) < 0.02f)
             return;
-        clutter.mBody->setWorldTransform(now);
-        clutter.mBody->getMotionState()->setWorldTransform(now);
+        const btTransform bodyNow = now * clutter.mOffset;
+        clutter.mBody->setWorldTransform(bodyNow);
+        clutter.mBody->getMotionState()->setWorldTransform(bodyNow);
         clutter.mBody->setLinearVelocity(btVector3(0, 0, 0));
         clutter.mBody->setAngularVelocity(btVector3(0, 0, 0));
         clutter.mWritten = now;
-        clutter.mHome = now;
+        clutter.mHome = bodyNow;
         clutter.mFresh = true;
     }
 
@@ -1292,7 +1331,8 @@ namespace MWPhysics
             if (!awake)
                 clutter.mHome = body.getWorldTransform();
             clutter.mWasAwake = awake;
-            const btTransform& now = body.getWorldTransform();
+            // The reference sits at the body less the shape's offset
+            const btTransform now = body.getWorldTransform() * clutter.mOffset.inverse();
             const btTransform& was = clutter.mWritten;
             const bool moved
                 = (now.getOrigin() - was.getOrigin()).length2() > sWriteBackDistance * sWriteBackDistance
