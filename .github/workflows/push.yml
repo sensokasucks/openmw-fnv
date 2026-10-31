@@ -1,8 +1,18 @@
 name: Build and test
 
+# OpenNV fork: build only the integration branch, master and pull requests (work branches get checked
+# through their PR), and drop a superseded run on the same branch instead of queueing every push.
 on:
-- push
-- pull_request
+  push:
+    branches:
+    - master
+    - claude/project-thread-mvzwbm
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   BUILD_TYPE: RelWithDebInfo
@@ -66,16 +76,8 @@ jobs:
     #     path: ./build_artifact.7z
     #     name: build_artifact.7z
 
-  MacOS:
-    strategy:
-      fail-fast: true
-      matrix:
-        args:
-          - image: macos-15
-          - image: macos-15-intel
-    uses: ./.github/workflows/macos.yml
-    with:
-      image: ${{ matrix.args.image }}
+  # The upstream macOS jobs are left out: nobody plays OpenNV on a Mac, and the fork's macOS runners
+  # queued for a day and then got cancelled, which mailed a failure for every push.
 
   Windows:
     strategy:
